@@ -153,6 +153,8 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
 
 ### Who proves identity, and how
 
+The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
+
 | Party | Proves identity with | Where the private key lives | Who vouches |
 |---|---|---|---|
 | Patient (Sam) | Passkey (WebAuthn) | The phone's secure hardware; never leaves it | Our server verifies the passkey |
