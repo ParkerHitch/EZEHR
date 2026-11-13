@@ -1,0 +1,10 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+# Project exclude paths
+/wwwroot/lib/bootstrap/dist/
+/wwwroot/lib/jquery/dist/
+/wwwroot/lib/jquery-validation/dist/
+/wwwroot/lib/jquery-validation-unobtrusive/dist/
