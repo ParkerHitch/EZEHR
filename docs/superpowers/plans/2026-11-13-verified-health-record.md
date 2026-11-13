@@ -1,735 +1,634 @@
-# Verified Health Record Implementation Plan
-
-> **OUTDATED:** this plan predates the spec revision (C# / Razor Pages stack, certificates for organizations with sessions for people, and the Kidney Check example app). A C# rewrite is in progress; follow the spec for now.
+# EZEHR Implementation Plan (C# / ASP.NET Core)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Hackathon rule:** this plan was written the night before the event. It contains decisions, interfaces, and test cases, but **no implementation code**: most hackathons ban code written before the clock starts. Tests are given as named cases with exact inputs and expected results, to be written as Vitest tests during the event.
+**Goal:** in the remaining hours of the event (2 PM Nov 13 → 2 PM Nov 14), build a central, patient-controlled health record.
+- Nobody can read it by default.
+- Verified clinicians, and apps the patient approves, read it only under a live grant.
+- Every access attempt is shown to the patient.
 
-**Goal:** a 24-hour build of a central, patient-controlled health record. Nobody can read it by default; verified clinicians read it with the patient's live permission; every access attempt is shown to the patient; and a cross-provider kidney-trend check produces the early-detection moment.
+**Architecture:** one ASP.NET Core Razor Pages site (Parker's existing `EZEHR.csproj` at the repo root) with three surfaces:
+- **Patient pages** (phone): passkey sign-in, cookie session.
+- **Clinician pages** (laptop): Entra ID sign-in via OpenID Connect with a physical security key, and a 10-hour cookie session.
+- **A network API** (`/api/network/*`): organizations and apps authenticate with **EZCA client certificates over mutual TLS**.
 
-**Architecture:** one TypeScript repo. An Express API serves a Vite/React web app with three areas: `/patient` (phone), `/clinician` (laptop) and `/broker` (the Particle moment).
-- **Clinicians** sign in with Entra ID. They trade the token for an **EZCA-issued** X.509 certificate bound to a non-extractable WebCrypto key. The server limits that certificate to a 10-hour shift. Clinicians then sign every request with a DPoP-style proof carrying the certificate.
-- **Source providers and the kidney-trend service** also hold EZCA certificates, so every certificate in the demo comes from EZCA.
-- **Patients** use passkeys.
-- **Records** are FHIR R4 resources, stored as signed JWS and encrypted per patient (AES-256-GCM). The per-patient key is wrapped by an Azure Key Vault key, and every read passes one access check that logs every attempt.
+Every read or write goes through **one access check** that writes one audit event. Records are FHIR R4 resources stored as JWS signed by their author's EZCA certificate, and encrypted per patient with AES-256-GCM. The per-patient key is wrapped by a Key Vault key.
 
 **Tech Stack:**
-- **Runtime and web:** Node 24 LTS (22 LTS is acceptable), TypeScript, Express 5, Vite + React, Vitest + supertest. SQLite via built-in `node:sqlite` (`DatabaseSync`), which avoids native module builds on App Service.
-- **Libraries:** `@simplewebauthn/server` + `@simplewebauthn/browser`, `@azure/msal-browser`, `jose`, `@peculiar/x509`, `canonicalize` (RFC 8785 JSON canonicalization), `@azure/keyvault-keys` + `@azure/identity`, `qrcode`, `@zxing/browser`, `recharts`, `tsx`.
-- **Azure:** App Service (Linux, B1), Key Vault (RBAC mode), one Entra ID tenant.
-- **Keytos:** EZCA free trial (Basic plan, a root CA and an issuing CA), approved by Keytos, the host. The API is called with App Service's managed identity.
+- **Language and framework:** C#, ASP.NET Core Razor Pages, xUnit + `Microsoft.AspNetCore.Mvc.Testing`.
+  - `TargetFramework`: keep `net11.0` only if App Service offers .NET 11; otherwise `net10.0` (LTS).
+- **Packages:**
+  - `Microsoft.Identity.Web` (clinician sign-in)
+  - `Fido2.AspNet` 4.3.x (patient passkeys)
+  - `Microsoft.Data.Sqlite` + `Dapper`
+  - `Azure.Identity` + `Azure.Security.KeyVault.Keys`
+  - `EZCAClient` 1.0.x (Keytos's EZCA SDK)
+  - `QRCoder`
+  - `Microsoft.AspNetCore.Authentication.Certificate` (certificate forwarding)
+- **Browser:** htmx (pinned, from a CDN) for polling. The only custom JavaScript is `wwwroot/js/passkey.js`.
+- **Azure:** App Service (Linux, B1, managed identity), Key Vault (RBAC), one Entra ID tenant. **Keytos:** EZCA free trial (approved by Keytos, the host).
 
 **Spec:** `docs/superpowers/specs/2026-11-13-hackathon-design.md`
 
 ## Global Constraints
 
 - No password anywhere on screen, including admin and seed accounts shown in the demo.
-- Every security check happens on the server and is real. No hard-coded "verified" flags; standard algorithms and libraries only (WebCrypto, WebAuthn, X.509, AES-GCM, ECDSA P-256 / ES256; RSA 2048 / RS256 only if the EZCA probe requires it).
-- Copy never says "our servers can't read your data," never says that expiry erases what a clinician saw, never claims HIPAA compliance, and the kidney flag never diagnoses.
+- Every security check happens on the server and is real. There are no hard-coded "verified" flags. Use .NET's built-in cryptography and standard protocols only: X.509, mutual TLS, OpenID Connect, WebAuthn, JWS (RFC 7515), AES-GCM.
+- Copy never says "our servers can't read your data," never says that expiry erases what a clinician saw, never claims HIPAA compliance, and the Kidney Check note never diagnoses.
 - Records are FHIR R4 JSON; export is a FHIR Bundle.
-- Nothing reads a patient's record by default. The kidney-trend check is opt-in at enrollment.
-- Every access attempt, granted or denied, is written to the audit log and shown to the patient.
-- The QR code contains only an opaque, single-use share-offer code: no data, no keys.
-- The patient confirms the named clinician before a grant becomes active.
-- **Every certificate in the demo is issued by EZCA** (`CA_MODE=ezca`). `LocalCA` is used only in automated tests and as the fallback.
-- Clinician certificates are issued for **1 day**, EZCA's minimum. The server enforces a **10-hour policy window** per certificate (`issued_certs.policy_not_after`), so access lasts one shift. Certificate verification tolerates **2 minutes** of clock skew on `notBefore`.
-- Grant durations offered to the patient: **5 minutes (demo), 1 hour, 4 hours, end of day**.
-- Cast: patient **Sam Taylor**; clinician **Dr. Rivera** at **Riverside Primary Care**; source providers **Lakeside Urgent Care**, **Northwind Workplace Health**, **Maple Street Family Medicine**.
-- Exact copy, defined once in `src/shared/copy.ts`:
-  - signed badge: `Signed by ${orgName} ✓`
-  - approval prompt: `Give ${displayName} at ${orgName} access until ${time}?`
-  - broker denial log line: `Blocked: unverified requester claimed ${purpose}`
-  - opt-in grant line: `You turned this on ${date} · Revoke`
-  - pitch line: `Epic says it blocks data to protect patients. We make blocking unnecessary.`
-- Video is about 5 minutes. **Feature freeze at hour 17.**
-- **Checkpoint at hour 7**, with two independent fallbacks:
-  - If the deployed clinician page can't get a Clinician-role Entra token that the server accepts, switch to Task 4b (the approach C fallback) immediately.
-  - If EZCA issuance isn't working, set `CA_MODE=local` and continue (Task 3b).
+- Nothing reads a patient's record by default. The Kidney Check app's grant is off unless the patient turns it on at enrollment.
+- Every access attempt, granted or denied, writes exactly one audit event and is shown to the patient.
+- The share code is opaque and single-use (8 characters, shown as `XXXX-XXXX`). It expires 10 minutes after creation and contains no data or keys.
+- The patient approves the named clinician before a grant becomes active.
+- **Clinician shift:** a session lasts **10 hours** from sign-in, absolute, never sliding. This is enforced by both the cookie and the access check.
+- Grant durations offered: **5 minutes (demo), 1 hour, 4 hours, end of day** (23:59:59 in `America/Indiana/Indianapolis`).
+- **EZCA issues every organization and app certificate.** The broker's certificate is deliberately self-made. `LocalCa` is only for tests and the fallback.
+- Cast:
+  - patient **Sam Taylor**
+  - clinician **Dr. Rivera** at **Riverside Primary Care**
+  - providers **Lakeside Urgent Care**, **Northwind Workplace Health**, **Maple Street Family Medicine**
+  - app **Kidney Check**
+- Exact copy lives in `Domain/Copy.cs`:
+
+  | Name | Text |
+  |---|---|
+  | `SignedBy(org)` | `Signed by {org} ✓` |
+  | `WrittenBy(name, org)` | `Written by {name}, {org} · signed by EZEHR ✓` |
+  | `ApprovePrompt(name, org, time)` | `Give {name} at {org} access until {time}?` |
+  | `BrokerBlocked(purpose)` | `Blocked: unverified requester claimed {purpose}` |
+  | `AppGrantLine(app, what, date)` | `{app} · {what} · you allowed this {date} · Revoke` |
+  | `KidneyOptIn` | `Allow the Kidney Check app to read your lab results. It looks for slow changes no single clinic would see. You can turn it off any time.` |
+  | `KidneyNote(percent, providers)` | `Kidney function (eGFR) dropped {percent}% across {providers} providers. No single result was flagged. Consider asking a doctor to review it.` |
+  | `AccessEnded` | `Your access to this record has ended. Ask the patient to share again.` |
+  | `NotAClinician` | `Your organization hasn't approved this account as a clinician.` |
+  | `UntrustedOrg` | `This organization isn't connected to EZEHR yet.` |
+  | `Pitch` | `Epic says it blocks data to protect patients. We make blocking unnecessary.` |
+
+- **Feature freeze at 8:00 AM. Submit by 1:00 PM.**
+- **Checkpoint at 11:00 PM**, with two independent fallbacks:
+  - Entra sign-in isn't working on the deployed site → Task 8b, clinician passkeys in our own directory.
+  - EZCA issuance isn't working → `CertificateAuthority:Mode=Local`.
 
 ## Review Focus
 
-1. **Clock skew between devices and the server.** A request made right after a certificate is issued, from a laptop whose clock is up to 2 minutes off, must succeed. *Tests:* Task 3 (2-minute tolerance on `notBefore`) and Task 5 (`iat` window).
-2. **The same QR code redeemed twice** (a photo of the screen, or a double scan). The second redemption is rejected, and the patient sees exactly one pending request. *Test:* Task 7.
-3. **The grant expires or is revoked while the clinician has the record open.** The next request is denied with `grant_expired` or `grant_revoked`, and the clinician sees the "access ended" screen, not a blank page. *Tests:* Task 7 (server) and Task 13 (acceptance).
-4. **The provider simulator runs twice** (a demo reset). No duplicate entries or duplicate kidney flags. *Tests:* Tasks 9 and 10.
-5. **A valid Entra user without the Clinician role, or from an untrusted tenant.** No certificate is issued, and the page shows a clear message. *Test:* Task 4.
+1. **Clock skew.** A certificate used within 2 minutes of its `notBefore` must still verify. *Test:* Task 2.
+2. **The same share code entered twice** (a photo of the screen, or a double submit). The second redemption is rejected, and the patient sees exactly one pending request. *Test:* Task 6.
+3. **The grant ends while the clinician has the record open.** The next page load shows `AccessEnded`, not an error page. *Tests:* Task 6 (server) and Task 12 (page).
+4. **Re-running the provider push or the Kidney Check app** (a demo reset). No duplicate entries, and no duplicate notes. *Tests:* Tasks 5 and 10.
+5. **A valid Entra user without the Clinician role, or from an untrusted tenant.** No access, and the page shows `NotAClinician` or `UntrustedOrg`. *Test:* Task 8.
 
 ---
 
-## Team, timeline, and ownership
+## Team, timeline, ownership
 
-The two people work in parallel tracks:
-- **Identity lead:** the teammate who built the EZCA CLI.
-- **App lead:** the other teammate.
+The **Identity lead** is the teammate who built the EZCA CLI; the **App lead** is Parker. Times are local. Fit sleep in staggered blocks so someone is always working.
 
-Hours are counted from the start of the event. If you sleep, stagger it after hour 17 so one person is always awake for the video.
-
-| Hours | Identity lead | App lead |
+| Time | Identity lead | App lead |
 |---|---|---|
-| 0–1.5 | Task 2a (Entra and EZCA setup) | Task 1 (scaffold and contracts) |
-| 1.5–3 | Task 2a | Task 2b (hosting and Key Vault), then Task 6 (encryption and record store) |
-| 3–4.5 | Task 3 (PKI core) | Task 6, then Task 8 (patient passkeys and enrollment) |
-| 4.5–5.5 | Task 3b (EZCA adapter, organization certificates) | Task 8 |
-| 5.5–7 | Task 4 (Entra and certificate endpoint), then the **hour-7 checkpoint** | Task 8, then Task 9 (provider API, simulator, seed data) |
-| 7–9 | Task 5 (signed requests) | Task 9, then Task 10 (kidney trend check) |
-| 9–11.5 | Task 7 (grants, access check, audit) | Task 10, then Task 12 (patient UI) |
-| 11.5–15 | Task 13 (clinician UI) | Task 12 |
-| 15–17 | Task 14 (broker), then Task 11 (share flow, together) | Task 15 (export), then Task 11 |
-| 17–24 | Task 16 (freeze, deploy, rehearse, record, submit) | Task 16 |
+| 6:00–7:30 PM | Task 0a (Entra, EZCA) | Task 1 (foundations), then Task 0b (Key Vault, App Service) |
+| 7:30–9:00 PM | Task 2 (PKI core) | Task 4 (encryption, record store) |
+| 9:00–10:00 PM | Task 3 (EZCA adapter, organization certificates) | Task 7 (patient passkeys) |
+| 10:00–11:00 PM | Task 8 (clinician sign-in), then the **11 PM checkpoint** | Task 7 |
+| 11:00 PM–1:00 AM | Task 5 (network API, client certificates) | Task 9 (provider simulator, seed data) |
+| 1:00–3:00 AM | Task 6 (grants, access check, audit) | Task 10 (Kidney Check app), then Task 11 (patient UI) |
+| 3:00–6:00 AM | Task 12 (clinician UI, share flow), Task 13 (broker) | Task 11, Task 14 (export) |
+| 6:00–8:00 AM | Integrate, then the end-to-end share-flow test (together) | Same |
+| 8:00 AM | **Feature freeze** | |
+| 8:00 AM–1:00 PM | Task 15 (deploy, rehearse, record, submit) | Task 15 |
 
-Stretch tasks S1–S4 are taken only if the team is ahead at hour 15.
+Stretch goals S1–S4 are taken only if the team is ahead at 6:00 AM.
 
-## File structure
+## Solution layout
+
+`EZEHR.csproj` stays at the repo root. Its default file globbing would also compile the other projects' files, so Task 1 adds `<Compile Remove="EZEHR.Tests/**;EZEHR.Tools/**" />`, with matching `Content`/`None` removes.
 
 ```
-package.json  tsconfig.json  vite.config.ts  vitest.config.ts  .env.example
-src/shared/types.ts        contracts shared by server and web (all types named in this plan)
-src/shared/copy.ts         every user-facing string listed in Global Constraints and tasks
-src/shared/entryJws.ts     signEntry (used by browser, simulator CLI, server)
-src/shared/proof.ts        createProof (used by browser signedFetch and simulator CLI)
-src/server/index.ts        Express wiring, static hosting of the built web app
-src/server/config.ts       environment config (see Task 1)
-src/server/db.ts           node:sqlite connection and schema migration
-src/server/pki/ca.ts       CertificateAuthority interface and LocalCA
-src/server/pki/ezca.ts     EzcaCA adapter (Task 3b)
-src/server/pki/verify.ts   certificate chain and validity verification
-src/server/pki/entryJws.ts verifyEntry (record entries as JWS)
-src/server/auth/entra.ts   Entra access-token verification
-src/server/auth/localClinician.ts  approach C fallback (Task 4b only)
-src/server/auth/proof.ts   certificate-bound proof verification, replay cache
-src/server/auth/patient.ts patient WebAuthn ceremonies, invites, sessions
-src/server/crypto/keyWrapper.ts   KeyWrapper, KeyVaultWrapper, LocalWrapper
-src/server/crypto/recordCipher.ts per-patient AES-256-GCM
-src/server/records/store.ts      encrypted entry storage
-src/server/access/grants.ts      share offers and grants
-src/server/access/gate.ts        the one access check
-src/server/audit/log.ts          audit events
-src/server/checks/kidneyTrend.ts trend rule (pure) and runner
-src/server/routes/{patient,clinician,provider}.ts
-src/web/main.tsx  src/web/App.tsx (routes /patient/*, /clinician/*, /broker)
-src/web/patient/*      Enroll, SignIn, Home, Share, Activity pages
-src/web/clinician/*    SignIn, Redeem, Record pages
-src/web/broker/BrokerPage.tsx
-src/web/lib/clinicianKey.ts  key generation, CSR, IndexedDB persistence
-src/web/lib/signedFetch.ts   attaches proofs to clinician requests
-tools/issue-org-certs.ts  issues the provider and service certificates (EZCA or local)
-docs/ezca-probe.md      what the EZCA probe (Task 2a) showed
-tools/provider-sim.ts   CLI: create invites, push signed seed records
-tools/seed/*.json       FHIR seed data per provider
-tests/server/**         mirrors src/server
+EZEHR.csproj  Program.cs  appsettings.json        web app (existing)
+Domain/        Party.cs, Grant.cs, ShareOffer.cs, AuditEvent.cs, Entry.cs, Copy.cs, Enums.cs
+Data/          Db.cs (SQLite connection + schema), *Repository.cs
+Security/Pki/  ICertificateAuthority.cs, LocalCa.cs, EzcaCa.cs, CertificateValidator.cs,
+               OrgDirectory.cs, RecordSigner.cs, RecordVerifier.cs
+Security/Crypto/ IKeyWrapper.cs, KeyVaultKeyWrapper.cs, LocalKeyWrapper.cs, RecordCipher.cs
+Records/       RecordStore.cs
+Access/        GrantService.cs, AccessGate.cs, AuditLog.cs
+Auth/          PatientPasskeys.cs, ClinicianAuth.cs, ClientCertificateSource.cs, CallerResolver.cs
+Api/           NetworkApi.cs (minimal API endpoints), PatientPasskeyApi.cs
+Pages/Patient/ Enroll, SignIn, Home, Share, Activity, Grants   (+ _ActivityPartial for htmx)
+Pages/Clinician/ Index (sign in), Redeem, Wait, Record, AccessEnded
+wwwroot/js/passkey.js
+EZEHR.Tests/   xUnit, references EZEHR.csproj
+EZEHR.Tools/   console app, references EZEHR.csproj; commands: certs, provider, kidney-check, broker
+EZEHR.Tools/seed/*.json   FHIR seed data per provider
+docs/ezca-notes.md        what the EZCA probe showed
+.pki/          (git-ignored) keys and certificates
 ```
 
-## Shared contracts (`src/shared/types.ts`, written in Task 1)
+## Shared contracts (`Domain/`, written in Task 1; every task uses these names)
 
-Every task uses these names exactly.
-
-- `type OrgKind = 'clinician' | 'provider' | 'service'`
-- `type FhirResource = { resourceType: string; id: string; [k: string]: unknown }`
-- `type CertIdentity = { kind: OrgKind; subjectUri: string; displayName: string; orgName: string; serial: string; notBefore: Date; notAfter: Date }`. `subjectUri` comes from the server's issuance record (clinicians) or the `knownOrgs` config (providers and the service), never from the CSR. See `resolveIdentity` in Task 3:
-  - `urn:entra:<tenantId>:<objectId>` for Entra clinicians
-  - `urn:local:<clinicianId>` for the approach C fallback
-  - `urn:provider:<providerId>` for source providers
-  - `urn:service:kidney-trend` for the trend check
-- `type ClinicianIdentity = { subjectUri: string; displayName: string; orgName: string }`
-- `type ClinicianCredential = { keyPair: CryptoKeyPair; certPem: string; chainPem: string[]; notAfter: Date }`
-- `type GranteeRef = { kind: 'clinician'; subjectUri: string; displayName: string; orgName: string } | { kind: 'service'; subjectUri: 'urn:service:kidney-trend'; displayName: 'Kidney trend check' }`. Grants always match on `subjectUri`.
-- `type GrantStatus = 'pending' | 'active' | 'denied' | 'revoked' | 'expired'`
-- `type Grant = { id: string; patientId: string; grantee: GranteeRef; scope: 'read_append' | 'read_labs'; purpose: 'treatment' | 'health_check'; status: GrantStatus; durationMinutes: number | null; createdAt: Date; approvedAt: Date | null; expiresAt: Date | null; revokedAt: Date | null }`. A `null` `expiresAt` means ongoing; only service grants are ongoing.
-- `type ShareOffer = { id: string; patientId: string; code: string; durationMinutes: 5 | 60 | 240 | 'end_of_day'; offerExpiresAt: Date; redeemedGrantId: string | null }`. `code` is 8 characters from an unambiguous alphabet, displayed as `XXXX-XXXX`. The offer itself expires 10 minutes after creation.
-- `type DenyReason = 'no_certificate' | 'untrusted_certificate' | 'certificate_expired' | 'bad_proof' | 'stale_proof' | 'replayed_proof' | 'no_grant' | 'grant_pending' | 'grant_expired' | 'grant_revoked' | 'scope_denied'`
-- `type AuditActor = { kind: 'clinician' | 'provider' | 'service'; displayName: string; orgName: string; serial?: string } | { kind: 'unverified' }`
-- `type AuditEvent = { id: number; patientId: string; at: Date; actor: AuditActor; action: 'read_record' | 'append_entry' | 'redeem_offer' | 'kidney_check' | 'ingest'; claimedPurpose: string | null; outcome: 'granted' | 'denied'; reason: DenyReason | null }`
-- `type StoredEntry = { id: string; patientId: string; sourceKey: string; createdAt: Date }`, the plaintext columns only. `sourceKey` = `<signer subjectUri>|<resourceType>/<resource.id>` and is unique per patient, which makes ingestion idempotent.
-- `type VerifiedEntry = { id: string; resource: FhirResource; signer: { displayName: string; orgName: string; serial: string }; signedAt: Date }`
-- `type TrendResult = { flagged: boolean; reason: 'category_drop_25pct' | 'rapid_decline' | null; baseline: EgfrPoint | null; latest: EgfrPoint | null; percentDrop: number; slopePerYear: number; sourceCount: number }`
-- `type EgfrPoint = { date: Date; value: number; source: string }`
-
----
-
-### Task 1: Scaffold, contracts, schema (App lead, hours 0–1.5)
-
-**Files:**
-- Create: `package.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `.env.example`, `src/shared/types.ts`, `src/shared/copy.ts`, `src/server/config.ts`, `src/server/db.ts`, `src/server/index.ts`, `src/web/main.tsx`, `src/web/App.tsx`
-- Test: `tests/server/db.test.ts`, `tests/shared/copy.test.ts`
-
-**Interfaces:**
-- Produces:
-  - `loadConfig(): Config`. Fields:
-    - `origin`, `rpId` (the hostname of `origin`)
-    - `trustedTenants: Record<tenantId, { orgName: string; certSubject: string }>`, `entraClientId`
-    - `clinicianAuth: 'entra' | 'local'`
-    - `caMode: 'local' | 'ezca'`
-    - `keyWrapper: 'keyvault' | 'local'`, `keyVaultKeyId`, `localKekB64`
-    - `ezca: { baseUrl, caId, templateId }` (`baseUrl` defaults to `https://portal.ezca.io`), `trustAnchorsPem: string[]`
-    - `localCaCertPem`, `localCaKeyPem` (tests and fallback only), `serviceCertPem`, `serviceKeyPem`
-    - `knownOrgs: Record<cn, KnownOrg>` (values in Task 3), `clinicianKeyAlg: 'ES256' | 'RS256'` (default `ES256`)
-    - `timeZone` (default `America/Indiana/Indianapolis`)
-    - `dbPath`
-  - `openDb(path: string): DatabaseSync`. Runs migrations.
-  - The shared types above.
-  - `copy`, the object of exact strings.
-- Tables:
+- `enum PartyKind { Clinician, Provider, App, Platform }`
+- `record Party(PartyKind Kind, string SubjectUri, string DisplayName, string OrgName)`. Values of `SubjectUri`:
+  - `urn:entra:{tid}:{oid}` for clinicians
+  - `urn:provider:{slug}` for providers
+  - `urn:app:kidney-check` for the app
+  - `urn:platform:ezehr` for the platform
+- `enum GrantScope { Full, LabsAndNotes }`. `Full` covers clinicians reading everything and writing notes. `LabsAndNotes` covers apps reading lab Observations and writing notes.
+- `enum GrantStatus { Pending, Active, Denied, Revoked, Expired }`
+- `record Grant(Guid Id, Guid PatientId, Party Grantee, GrantScope Scope, string Purpose, GrantStatus Status, int? DurationMinutes, DateTimeOffset CreatedAt, DateTimeOffset? ApprovedAt, DateTimeOffset? ExpiresAt, DateTimeOffset? RevokedAt)`. A `null` `ExpiresAt` means ongoing; only app grants are ongoing.
+- `enum ShareDuration { FiveMinutes, OneHour, FourHours, EndOfDay }` and `record ShareOffer(Guid Id, Guid PatientId, string Code, ShareDuration Duration, DateTimeOffset OfferExpiresAt, Guid? RedeemedGrantId)`
+- `enum DenyReason { NoCertificate, UntrustedCertificate, CertificateExpired, NotSignedIn, ShiftEnded, NoGrant, GrantPending, GrantExpired, GrantRevoked, ScopeDenied }`
+- `enum AccessAction { ReadRecord, ReadLabs, WriteNote }`
+- `abstract record Caller` with two cases:
+  - `sealed record VerifiedCaller(Party Party, DateTimeOffset? SessionStartedAt) : Caller`
+  - `sealed record UnverifiedCaller(DenyReason Reason) : Caller`
+- `record AuditEvent(long Id, Guid PatientId, DateTimeOffset At, Party? Actor /* null = unverified */, string Action, string? ClaimedPurpose, bool Granted, DenyReason? Reason)`
+- `record VerifiedEntry(Guid Id, string ResourceType, JsonElement Resource, Party Signer, DateTimeOffset SignedAt, string? WrittenBy)`
+- **Tables:**
   - `patients(id, display_name, wrapped_dek, created_at)`
-  - `patient_credentials(id, patient_id, public_key, counter, transports)`
-  - `sessions(token_hash, patient_id, expires_at)`
+  - `patient_credentials(credential_id, patient_id, public_key, sign_count, user_handle)`
   - `invites(code, provider_uri, provider_patient_id, expires_at, redeemed_at)`
   - `provider_links(patient_id, provider_uri, provider_patient_id)`, unique on (`provider_uri`, `provider_patient_id`)
-  - `entries(id, patient_id, source_key, iv, ciphertext, created_at)`, unique on (`patient_id`, `source_key`)
-  - `share_offers(...)` and `grants(...)`, matching the types
-  - `audit_events(...)`, matching the type
-  - `clinicians(...)`, used by Task 4b only
-  - `issued_certs(serial PRIMARY KEY, subject_uri, display_name, org_name, kind, issued_at, policy_not_after)`
+  - `entries(id, patient_id, source_key, resource_type, iv, ciphertext, created_at)`, unique on (`patient_id`, `source_key`). `source_key` = `{signerUri}|{resourceType}/{resource.id}`.
+  - `share_offers`, `grants` and `audit_events`, matching the records
+  - `local_clinicians`, used by Task 8b only
 
-- [ ] **Step 1: Write the failing tests.**
-  - `db.test.ts › migrates an empty file`: after `openDb(':memory:')`, every table above exists.
-  - `db.test.ts › entries are unique per patient and source_key`: inserting the same (`patient_id`, `source_key`) twice throws a constraint error.
-  - `copy.test.ts › exact spec strings`: `copy.signedBy('Lakeside Urgent Care')` returns `"Signed by Lakeside Urgent Care ✓"`. `copy.approvePrompt('Dr. Rivera','Riverside Primary Care','5:00 PM')` returns `"Give Dr. Rivera at Riverside Primary Care access until 5:00 PM?"`. `copy.brokerBlocked('treatment')` returns `"Blocked: unverified requester claimed treatment"`.
-- [ ] **Step 2:** Run `npx vitest run tests/server/db.test.ts tests/shared/copy.test.ts`. Expected: FAIL (modules missing).
-- [ ] **Step 3:** Implement `openDb`, `loadConfig`, `copy` and the types. The Express app serves `dist/web` and, in development, `/` through the Vite dev server proxy. Scripts:
-  - `dev` runs server and Vite together
-  - `build` runs `vite build`
-  - `start` runs `tsx src/server/index.ts`
-  - `test` runs `vitest run`
-- [ ] **Step 4:** Run the same tests. Expected: PASS. Also run `npm run build && npm start` and confirm `http://localhost:3000/patient` renders a placeholder page.
-- [ ] **Step 5:** `git init`; commit `feat: scaffold, shared contracts, schema`. Push to GitHub so both people share it.
+---
 
-### Task 2a: Identity and EZCA setup (Identity lead, hours 0–3; portal work, no app code)
+### Task 0a: Entra and EZCA setup (Identity lead, 6:00–7:30 PM; portal work)
 
 **Produces:**
-- Values for `.env` and App Service settings: `ORIGIN`, `ENTRA_CLIENT_ID`, `TRUSTED_TENANTS`, `EZCA_CA_ID`, `EZCA_TEMPLATE_ID`.
+- Configuration: `AzureAd:TenantId`, `AzureAd:ClientId`, `TrustedTenants`, `Ezca:CaId`, `Ezca:TemplateId`.
 - `.pki/ezca-root.pem` and `.pki/ezca-issuing.pem`.
-- A demo doctor who signs in with a passkey only.
-- `docs/ezca-probe.md`, recording what EZCA accepts.
+- Dr. Rivera signing in with a security key.
+- `docs/ezca-notes.md`.
 
-- [ ] **Step 1: Azure account.** Sign up for Azure for Students with a **personal Microsoft account**, verifying student status with the Purdue email. Do not use the Purdue Entra account: its subscription would live in Purdue's tenant, where you can't create users or assign roles. If Azure for Students refuses the personal account, use the standard Azure free account instead.
-  - Then invite the App lead (Entra admin center → Users → Invite external user) and give them Contributor on the subscription, so Task 2b can run in parallel.
-- [ ] **Step 2: Tenant and demo user.**
-  - In the tenant's Default Directory, create the user **Dr. Rivera**, with UPN `rivera@<tenant>.onmicrosoft.com` and display name `Dr. Rivera`.
+- [ ] **Azure account:** Azure for Students with a **personal Microsoft account**, verified with the Purdue email. Don't use the Purdue account itself, because its tenant belongs to Purdue. Invite the App lead (Entra → Users → Invite external user) as Contributor on the subscription.
+- [ ] **Dr. Rivera:**
+  - Create the user, with display name `Dr. Rivera`.
   - Under Authentication methods → Policies, enable **Passkey (FIDO2)** and **Temporary Access Pass**.
-  - Issue a TAP for Dr. Rivera. Sign in at `https://mysignins.microsoft.com/security-info` with the TAP and register a passkey: Microsoft Authenticator on a phone, or a YubiKey if you have one.
-  - If TAP isn't available on the Free tier, sign in once with the initial password, **off camera**, only to register the passkey.
-  - Verify: in a fresh private window, sign in as Dr. Rivera choosing "Sign-in options → Face, fingerprint, PIN or security key." There should be no password prompt.
-  - **If passkey sign-in fails on the Free tier** (reported online as AADSTS135016), activate the **Entra ID P2 30-day free trial** (Entra admin center → Billing → Licenses → All products → Try/Buy), assign it to Dr. Rivera, and retry.
-  - Timebox: if it still fails at **hour 4.5**, tell the App lead you're going to Task 4b at the hour-7 checkpoint.
-- [ ] **Step 3: App registration** "Verified Health Record":
-  - SPA redirect URIs: `http://localhost:5173/clinician` and `https://<app>.azurewebsites.net/clinician`.
-  - Expose an API with Application ID URI `api://<clientId>` and scope `Records.Access`.
-  - Add an app role `Clinician` (allowed member type: Users).
-  - In the manifest, set access token version 2 (`requestedAccessTokenVersion: 2`).
-  - In Enterprise applications → Users and groups, assign Dr. Rivera to `Clinician`. Assign the user directly; group assignment needs P1.
-  - Record the tenant ID and client ID. Set `TRUSTED_TENANTS={"<tenantId>":{"orgName":"Riverside Primary Care","certSubject":"riverside.clinicians.ezehr"}}`.
-- [ ] **Step 4: EZCA free trial** (approved by Keytos, the host).
-  - As the tenant's Global Administrator (the Step 1 account), open the "Register Keytos Applications" admin-consent link from EZCA's docs (Getting Started → Register the EZCA App in your Azure Tenant) and accept.
-  - At `https://portal.ezca.io`, register a subscription named `EZEHR` on the Basic plan, and choose **Skip for now** on payment. That starts the 1-month free trial.
-  - Create a Root CA, then a Subordinate/Issuing SSL CA chained to it. On the issuing CA:
-    - In the EKU advanced settings, include **Client Authentication**. EKUs can't be changed after the CA is created.
-    - Set the maximum certificate lifetime to at least 400 days, because provider certificates last 365.
-    - Leave CRL on and the cryptography at its defaults.
-  - Register these subject names ("domains") on the issuing CA:
-    - `riverside.clinicians.ezehr`
+  - Issue a TAP, then at `https://mysignins.microsoft.com/security-info` register the **physical security key**. If TAP isn't available, use the initial password once, off camera.
+  - Verify: in a private window, "Sign-in options → Face, fingerprint, PIN or security key" gets in with a tap and a PIN.
+  - If this fails on the Free tier, activate the **Entra ID P2 30-day trial** and retry.
+- [ ] **App registration** "EZEHR":
+  - Single tenant, platform **Web**.
+  - Redirect URIs: `https://localhost:{port}/signin-oidc` (from `Properties/launchSettings.json`) and `https://{app}.azurewebsites.net/signin-oidc`.
+  - Under Authentication, enable **ID tokens**. Sign-in only, so no client secret.
+  - App role `Clinician` (allowed member type Users). Under Enterprise applications → Users and groups, assign Dr. Rivera to it.
+  - Set `TrustedTenants = { "{tenantId}": "Riverside Primary Care" }`.
+- [ ] **EZCA:**
+  - As Global Admin, open EZCA's "Register Keytos Applications" admin-consent link and accept.
+  - At `https://portal.ezca.io`, register subscription `EZEHR` on the Basic plan, choosing **Skip for now** on payment.
+  - Create a Root CA, then a Subordinate/Issuing SSL CA. On the issuing CA, under the advanced EKU settings, include **Client Authentication** (it can't be changed later), and set the maximum lifetime to at least 400 days.
+  - Register these subject names:
     - `lakeside.providers.ezehr`
     - `northwind.providers.ezehr`
     - `maple.providers.ezehr`
-    - `kidney-trend.services.ezehr`
-  - Download the root and issuing CA certificates as PEM to `.pki/ezca-root.pem` and `.pki/ezca-issuing.pem`.
-  - Get the IDs: run `az login`, then `curl -s -H "Authorization: Bearer $(az account get-access-token --query accessToken -o tsv)" https://portal.ezca.io/api/CA/GetAvailableSSLCAs`. Copy `CAID` and `TemplateID`.
-  - When Task 2b reports the App Service managed identity, give it a **domain certificate requester** role on `riverside.clinicians.ezehr`, in EZCA's domain management. Managed identities can't be PKI admins, and don't need to be.
-- [ ] **Step 5: EZCA probe** (20 minutes, from a terminal with your az token). Send `POST https://portal.ezca.io/api/CA/RequestSSLCertificateV2` with:
-  - `CSR`: an ECDSA P-256 CSR made with `openssl`
-  - `SubjectName`: `riverside.clinicians.ezehr`
-  - `CAID` and `TemplateID` from Step 4
-  - `ValidityInDays`: `1`
-  - `EKUs`: `["1.3.6.1.5.5.7.3.2"]`
-  - `SubjectAltNames`: `[{"ValueSTR":"urn:entra:probe:probe","SubjectAltType":6}]`. Type 6 is the X.509 URI type; if it's rejected, check the Swagger page at `https://portal.ezca.io/swagger/index.html`.
+    - `kidney-check.apps.ezehr`
+    - `platform.ezehr`
+  - Download the root and issuing CA certificates to `.pki/`.
+  - Get `CAID` and `TemplateID` with `az login`, then `curl -H "Authorization: Bearer $(az account get-access-token --query accessToken -o tsv)" https://portal.ezca.io/api/CA/GetAvailableSSLCAs`.
+  - All certificates, including the platform's, are issued from a laptop with Task 3's tool. The server never calls EZCA at runtime, so the managed identity needs no EZCA role.
+- [ ] **EZCA probe (20 min):** with the `EZCAClient` SDK (or curl), request a 1-day certificate for `lakeside.providers.ezehr` from an ECDSA P-256 CSR, with EKU `1.3.6.1.5.5.7.3.2`. Record in `docs/ezca-notes.md`:
+  - whether EC was accepted (if not, use RSA 2048 everywhere)
+  - the response fields
+  - the subject EZCA produced
 
-  Record in `docs/ezca-probe.md`:
-  1. whether EC P-256 was accepted
-  2. the exact response JSON, and which fields hold the leaf and the chain (EZCA's docs show `CertificatePEM`, `IssuingCACertificate`, `RootCertificate` for this endpoint)
-  3. whether the URI SAN appears in the issued certificate (`openssl x509 -noout -text`)
-  4. the subject format EZCA produced
+  Check it with `openssl verify -CAfile .pki/ezca-root.pem -untrusted .pki/ezca-issuing.pem probe.crt`, which should print `OK`.
 
-  **Decision:** if EC is rejected, set `CLINICIAN_KEY_ALG=RS256` (RSA 2048); Tasks 3–5 support both. Nothing depends on item 3, because clinician identity comes from the server's issuance record.
-- [ ] **Step 6: Verify.**
-  - Dr. Rivera's passwordless sign-in works.
-  - `openssl verify -CAfile .pki/ezca-root.pem -untrusted .pki/ezca-issuing.pem probe.crt` prints `OK`.
+### Task 0b: Hosting and Key Vault (App lead, after Task 1)
 
-### Task 2b: Hosting and Key Vault (App lead, hours 1.5–2.5, after Task 1)
+**Produces:** `KeyVault:KeyId`, the site URL, and the managed identity's object ID (send it to the Identity lead).
 
-**Produces:** `KEY_VAULT_KEY_ID`, the deployed site's URL, and the App Service managed identity's object ID. Send the object ID to the Identity lead for Task 2a Step 4.
+- [ ] **Key Vault** (RBAC): create RSA 3072 key `records-kek` with wrap and unwrap permitted. Give yourself Key Vault Crypto Officer.
+- [ ] **App Service** (Linux, **B1**; client certificates don't work on F1):
+  - Runtime: .NET 11 if offered, otherwise .NET 10 (and set `TargetFramework` to `net10.0`).
+  - Turn on the system-assigned managed identity and grant it **Key Vault Crypto User**.
+  - Set `DB_PATH=/home/data/ezehr.db`.
+  - Deploy with Rider's publish, or `dotnet publish -c Release` plus `az webapp deploy`.
+- [ ] **Client certificates:** Configuration → General settings → Incoming client certificates = **Optional Interactive User**, so browsers aren't prompted and programs can send certificates.
+  - This mode uses TLS renegotiation, so set **HTTP version 1.1** (HTTP/2 off).
+  - Requests over 100 KB fail under renegotiation. The tools send `Expect: 100-continue` and keep each push small.
+- [ ] **Verify:** `https://{app}.azurewebsites.net` loads, and `az keyvault key show --id {KeyVault:KeyId}` succeeds.
 
-- [ ] **Step 1: Key Vault** (RBAC permission model). Create an RSA 3072 key `records-kek` with wrapKey and unwrapKey permitted. Give yourself "Key Vault Crypto Officer" for setup.
-- [ ] **Step 2: App Service.** Linux, B1. B1 rather than F1, because the free tier's daily CPU quota will run out during development.
-  - Runtime: Node 24 LTS, or 22 LTS if 24 isn't offered.
-  - Turn on the system-assigned managed identity and grant it **Key Vault Crypto User** on the vault. No client secrets anywhere.
-  - Set the startup command to `npm start`, plus app settings for the `.env` values.
-  - Set `DB_PATH=/home/data/app.db`, since `/home` persists across restarts.
-  - Deploy Task 1's placeholder with `az webapp up` or zip deploy.
-- [ ] **Step 3: Verify.**
-  - `https://<app>.azurewebsites.net/patient` loads over HTTPS. WebAuthn needs HTTPS, and `rpId` is this hostname.
-  - `az keyvault key show --id <KEY_VAULT_KEY_ID>` succeeds.
+### Task 1: Foundations (App lead, 6:00–7:00 PM)
 
-### Task 3: PKI core (Identity lead, hours 3–4.5)
-
-**Files:** Create `src/server/pki/ca.ts`, `src/server/pki/verify.ts`, `src/server/pki/entryJws.ts`, `src/shared/entryJws.ts`, `tools/issue-org-certs.ts`. Test: `tests/server/pki/*.test.ts`.
+**Files:**
+- Modify `EZEHR.csproj` (packages, `Compile Remove`), `.gitignore`, `Program.cs`, `Pages/Shared/_Layout.cshtml` (add htmx).
+- Create `Domain/*`, `Data/Db.cs`, the `EZEHR.Tests` and `EZEHR.Tools` projects, and add both to `EZEHR.slnx`.
+- Test: `EZEHR.Tests/Data/DbTests.cs`, `EZEHR.Tests/Domain/CopyTests.cs`.
 
 **Interfaces:**
 - Produces:
-  - `interface CertificateAuthority { issue(req: { csrPem: string; subjectName: string; validityDays: number }): Promise<{ certPem: string; chainPem: string[] }>; trustAnchorsPem(): string[] }`.
-    - Every certificate carries the Client Authentication EKU.
-    - `subjectName` is a registered subject name such as `riverside.clinicians.ezehr`. **The CSR's own subject is ignored**; the CSR only proves possession of the key.
-  - `class LocalCA implements CertificateAuthority`. Mirrors EZCA so there is one code path:
-    - CN = `subjectName`
-    - validity in whole days
-    - `notBefore` = now − 5 min
-    - ECDSA P-256 root
+  - `sealed class AppOptions`, bound from configuration, with:
+    - `Origin`, `DbPath`
+    - `TrustedTenants: Dictionary<string,string>`, `AzureAd`
+    - `CertificateAuthority.Mode: "Ezca" | "Local"`, `Ezca { CaId, TemplateId }`
+    - `TrustAnchorsPemPath`, `IntermediatesPemPath`. These are public CA certificates, committed under `Security/Trust/`.
+    - `PlatformCertPfxBase64`. On App Service it's a Key Vault secret reference, never committed.
+    - `KeyWrapper.Mode: "KeyVault" | "Local"`, `KeyVault.KeyId`, `LocalKekBase64`
+    - `TimeZone`
+  - `Db.Open(string path): SqliteConnection`, which creates the tables above if they're missing.
+  - The `Domain` types above, and `static class Copy`.
+  - `TimeProvider` is registered in DI, and every time-dependent class takes it, so tests can control the clock.
 
-    Used by tests and as the fallback (`CA_MODE=local`).
-  - `type ChainResult = { cn: string; serial: string; notBefore: Date; notAfter: Date; publicKey: CryptoKey }` and `verifyCertificateChain(x5c: string[] /* base64 DER, leaf first */, at: Date, anchors: string[]): ChainResult`.
-    - Accepts `at` up to 2 minutes before `notBefore`, for clock skew.
-    - Throws `PkiError` with `reason: 'untrusted_certificate' | 'certificate_expired'`.
-  - `type IssuedCert = { serial: string; subjectUri: string; displayName: string; orgName: string; kind: 'clinician'; issuedAt: Date; policyNotAfter: Date }` (a row of `issued_certs`) and `type KnownOrg = { kind: 'provider' | 'service'; subjectUri: string; displayName: string; orgName: string }`.
-  - `resolveIdentity(chain: ChainResult, at: Date, deps: { findIssuedCert(serial: string): IssuedCert | null; knownOrgs: Record<string /* cn */, KnownOrg> }): CertIdentity`:
-    1. If the serial is in `issued_certs`, return that clinician identity, but throw `certificate_expired` if `at` is after `policyNotAfter` (the 10-hour shift).
-    2. Otherwise, if the CN is in `knownOrgs`, return that organization's identity.
-    3. Otherwise, throw `untrusted_certificate`.
-  - `signEntry(resource: FhirResource, key: CryptoKey, x5c: string[], iat: Date): Promise<string>`, in `src/shared/entryJws.ts`.
-    - Produces a compact JWS with protected header `{ alg, x5c, iat }` and payload `canonicalize(resource)`.
-    - `alg` is ES256, or RS256 when `CLINICIAN_KEY_ALG=RS256`.
-  - `verifyEntry(jws: string, deps: { anchors: string[]; findIssuedCert; knownOrgs }): VerifiedEntry`. Checks the signature, then the chain and identity **at the header `iat`**, so old entries stay valid after their author's certificate or shift ends.
-- `knownOrgs`, in config:
+- [ ] Fix `.gitignore`: remove the four `/wwwroot/lib/*/dist/` lines; add `.pki/` and `*.db`.
+- [ ] **Write failing tests:**
+  - `DbTests.Open_creates_all_tables`: every table above exists after `Db.Open(":memory:")`.
+  - `DbTests.Entries_unique_per_patient_and_source_key`: a second insert throws `SqliteException`.
+  - `CopyTests.Exact_spec_strings`:
+    - `Copy.SignedBy("Lakeside Urgent Care")` is `"Signed by Lakeside Urgent Care ✓"`
+    - `Copy.ApprovePrompt("Dr. Rivera","Riverside Primary Care","5:00 PM")` is `"Give Dr. Rivera at Riverside Primary Care access until 5:00 PM?"`
+    - `Copy.BrokerBlocked("treatment")` is `"Blocked: unverified requester claimed treatment"`
+- [ ] Run `dotnet test`. Expected: FAIL (types missing).
+- [ ] Implement, then run `dotnet test`. Expected: PASS. `dotnet run` serves the template home page.
+- [ ] Commit `feat: foundations, domain contracts, schema`.
 
-  | CN | kind | subjectUri | Name |
-  |---|---|---|---|
-  | `lakeside.providers.ezehr` | provider | `urn:provider:lakeside` | Lakeside Urgent Care |
-  | `northwind.providers.ezehr` | provider | `urn:provider:northwind` | Northwind Workplace Health |
-  | `maple.providers.ezehr` | provider | `urn:provider:maple` | Maple Street Family Medicine |
-  | `kidney-trend.services.ezehr` | service | `urn:service:kidney-trend` | Kidney trend check |
+### Task 2: PKI core (Identity lead, 7:30–9:00 PM)
 
-- `tools/issue-org-certs.ts --ca ezca|local`:
-  - For each known organization, it generates a P-256 key, builds a CSR, and requests a 365-day certificate through the chosen CA.
-  - `ezca` uses your `az account get-access-token` token. `local` first mints `.pki/local-root.{crt,key}.pem`.
-  - It writes `.pki/<slug>.{crt,key}.pem` and `.pki/anchors.pem`.
-  - In deployment, the service key is loaded from an App Service setting that references a Key Vault secret.
-
-- [ ] **Step 1: Write the failing tests.**
-  - `LocalCA sets CN to subjectName, ignoring the CSR`: a CSR with subject `CN=Mallory` and `subjectName:'riverside.clinicians.ezehr'` yields a certificate with CN `riverside.clinicians.ezehr`, whose extended key usage includes clientAuth.
-  - `rejects CSR with invalid self-signature`: flipped signature bytes throw.
-  - `LocalCA validity`: `validityDays:1` gives `notAfter − notBefore` = 24h 5m.
-  - `chain verifies against anchor`: leaf plus local root returns a `ChainResult` with the matching serial and CN.
-  - `untrusted root` throws `untrusted_certificate`; `expired` (`at` = `notAfter` + 1s) throws `certificate_expired`.
-  - **(Review Focus 1)** `skew tolerance`: `at` = `notBefore` − 2 min verifies; `notBefore` − 3 min throws `certificate_expired`.
-  - `resolveIdentity clinician`: an issued row for the serial returns `{kind:'clinician', subjectUri:'urn:entra:T:O', displayName:'Dr. Rivera', orgName:'Riverside Primary Care'}`; `at` = `policyNotAfter` + 1s throws `certificate_expired`.
-  - `resolveIdentity provider`: CN `lakeside.providers.ezehr` returns `kind:'provider'`, `displayName:'Lakeside Urgent Care'`.
-  - `unknown subject`: CN `mallory.clinicians.ezehr` with no issued row throws `untrusted_certificate`.
-  - `entry JWS verifies after the shift ends`: sign with `iat` inside the policy window, then verify one day later. It passes, and `signedAt` equals `iat`.
-  - `tampered entry`: changing one character of the JWS payload throws.
-  - `RS256 path`: an entry signed and verified with an RSA 2048 key passes.
-- [ ] **Step 2:** `npx vitest run tests/server/pki`. Expected: FAIL.
-- [ ] **Step 3:** Implement with `@peculiar/x509` (`Pkcs10CertificateRequest`, `X509CertificateGenerator`, `X509Certificate.verify`) and `jose` (`CompactSign`, `compactVerify`), then implement `tools/issue-org-certs.ts`.
-- [ ] **Step 4:** Run the tests again. Expected: PASS. Then run `npx tsx tools/issue-org-certs.ts --ca local`. Expected: `.pki/` holds the local root pair, four organization certificate and key pairs, and `anchors.pem`. Add `.pki/` to `.gitignore`.
-- [ ] **Step 5:** Commit `feat: CA interface, local CA, identity resolution, signed entries`.
-
-### Task 3b: EZCA adapter and organization certificates (Identity lead, hours 4.5–5.5)
-
-**Files:** Create `src/server/pki/ezca.ts`. Test: `tests/server/pki/ezca.test.ts`.
-
-**Interfaces:**
-- Consumes: `CertificateAuthority` (Task 3); the probe results in `docs/ezca-probe.md` (Task 2a).
-- Produces: `class EzcaCA implements CertificateAuthority`, constructed with `{ baseUrl: string /* https://portal.ezca.io */; caId: string; templateId: string; anchorsPem: string[]; getToken(): Promise<string> }`.
-  - Production `getToken`: `DefaultAzureCredential.getToken('https://management.core.windows.net/.default')`. On App Service this is the managed identity; locally it's your `az login`. Tokens for `https://management.azure.com` are **not** accepted.
-  - `issue` calls `POST {baseUrl}/api/CA/RequestSSLCertificateV2` with `{ SubjectName, SubjectAltNames: [], CAID, TemplateID, CSR, ValidityInDays, EKUs: ['1.3.6.1.5.5.7.3.2'] }`. It maps the response to `{ certPem, chainPem }` using the field names recorded in the probe.
-  - An error response throws `CaError` carrying EZCA's message.
-
-- [ ] **Step 1: Write the failing tests** (with `fetch` stubbed).
-  - `sends bearer token and request body`: the stub sees `Authorization: Bearer <token>`, the CA and template IDs, `ValidityInDays:1`, and the client-auth EKU.
-  - `maps the probe's response shape`: with the recorded probe response as the fixture, `issue` returns a leaf PEM and a chain of length 1 or more.
-  - `EZCA error`: an error response, in the shape the probe showed (for example `{ Success:false, Message:'Domain not registered' }`), throws `CaError('Domain not registered')`.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement. Then run `npx tsx tools/issue-org-certs.ts --ca ezca`, and check each certificate with `openssl verify -CAfile .pki/ezca-root.pem -untrusted .pki/ezca-issuing.pem .pki/lakeside.crt.pem`. Expected: prints `OK`.
-- [ ] **Step 4:** Run the tests again. Expected: PASS.
-- [ ] **Step 5:** Commit `feat: EZCA certificate authority`.
-- [ ] **If EZCA still fails at the hour-7 checkpoint:** set `CA_MODE=local`, re-run `issue-org-certs --ca local`, and keep going. Retry EZCA after hour 15 only if the demo is otherwise done. Without EZCA, the pitch says "built for EZCA; shown with a local CA."
-
-### Task 4: Entra token verification and the certificate endpoint (Identity lead, hours 5.5–7, then the hour-7 checkpoint)
-
-**Files:** Create `src/server/auth/entra.ts`; modify `src/server/routes/clinician.ts`; create `src/web/lib/clinicianKey.ts` and the `src/web/clinician/SignIn.tsx` page. Test: `tests/server/auth/entra.test.ts`, `tests/server/routes/certificate.test.ts`.
-
-**Interfaces:**
-- Consumes: `CertificateAuthority` (Tasks 3 and 3b); `loadConfig().trustedTenants` and `entraClientId`.
-- Produces:
-  - `verifyEntraToken(token: string, deps: { getKey: JWTVerifyGetKey; trustedTenants: Config['trustedTenants']; audience: string }): Promise<ClinicianIdentity & { certSubject: string }>`.
-    - Checks: `iss` = `https://login.microsoftonline.com/<tid>/v2.0`, with `tid` in `trustedTenants`; `aud` = `audience`; not expired; `roles` includes `Clinician`.
-    - `subjectUri` = `urn:entra:<tid>:<oid>`, `displayName` = the `name` claim, `orgName` and `certSubject` from `trustedTenants[tid]`.
-    - Throws `AuthError('untrusted_tenant' | 'missing_role' | 'invalid_token')`.
-    - Production `getKey`: `createRemoteJWKSet` on `https://login.microsoftonline.com/<tid>/discovery/v2.0/keys`.
-  - `POST /api/clinician/certificate`, with `Authorization: Bearer <access token>` and body `{ csrPem }`.
-    - Calls `ca.issue({ csrPem, subjectName: certSubject, validityDays: 1 })`.
-    - Writes an `issued_certs` row: the serial, the identity from the token, `kind:'clinician'`, `issuedAt` = now, `policyNotAfter` = now + 10h.
-    - Returns `200 { certPem, chainPem, notAfter }`, where `notAfter` is the **policy** end, the end of the shift.
-    - A bad token returns `401 { error }`; a missing role returns `403 { error: 'missing_role' }`.
-  - Web:
-    - `getClinicianCredential(): Promise<ClinicianCredential | null>`. Reads from IndexedDB and returns `null` when the certificate has expired.
-    - `obtainCertificate(accessToken: string): Promise<ClinicianCredential>`. Generates a key pair with `extractable: false`: ECDSA P-256, or RSA 2048 if `clinicianKeyAlg` is `RS256`. Builds a CSR, POSTs it, and stores the key pair, certificate and chain in IndexedDB.
-- MSAL: scope `api://<clientId>/Records.Access`, `loginRedirect`, `acquireTokenSilent`.
-- Copy:
-  - `copy.notAClinician`: `"Your organization hasn't approved this account as a clinician."`
-  - `copy.untrustedOrg`: `"This organization isn't connected yet."`
-
-- [ ] **Step 1: Write the failing tests.** Use a local `jose` key pair and a fake `getKey`.
-  - `valid token`: returns `{subjectUri:'urn:entra:T:O', displayName:'Dr. Rivera', orgName:'Riverside Primary Care'}`.
-  - **(Review Focus 5)** `missing Clinician role` throws `missing_role`, and the route returns 403 without calling `ca.issue` (spy).
-  - **(Review Focus 5)** `untrusted tenant` throws `untrusted_tenant`, and the route returns 401.
-  - `wrong audience` and `expired token` both throw `invalid_token`.
-  - `subject comes from tenant config, not the CSR`: a CSR with subject `CN=Mallory` makes the route call `ca.issue` with `subjectName:'riverside.clinicians.ezehr'` (spy on a `LocalCA`).
-  - `records the shift`: after issuance, `issued_certs` holds the serial with `subjectUri:'urn:entra:T:O'`, and `policyNotAfter − issuedAt` = 10h. The response's `notAfter` equals `policyNotAfter`.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement `verifyEntraToken`, the route, `clinicianKey.ts`, and the sign-in page. The page shows the user's name and organization and the certificate expiry (`"Signed in until 7:42 PM"`), and never shows a key or certificate dialog.
-- [ ] **Step 4:** Run the tests again. Expected: PASS. Deploy, then sign in on the deployed `/clinician` page as Dr. Rivera with the passkey. Expected: a certificate is stored, and the page shows the expiry.
-- [ ] **Step 5:** Commit `feat: Entra sign-in to short-lived clinician certificate`.
-- [ ] **Step 6: HOUR-7 CHECKPOINT.** If Step 4 doesn't pass on the deployed site, do Task 4b now. Don't keep debugging Entra. Check EZCA separately: if the deployed certificate endpoint can't get an EZCA certificate, set `CA_MODE=local` (see Task 3b).
-
-### Task 4b (only on checkpoint failure): Approach C fallback
-
-**Files:** Create `src/server/auth/localClinician.ts` and a `clinicians` seed row (Dr. Rivera, Riverside Primary Care, `urn:local:rivera`). Test: `tests/server/auth/localClinician.test.ts`.
-
-**Produces:** `authenticateClinician(req): Promise<ClinicianIdentity & { certSubject: string }>`, chosen by `config.clinicianAuth`. The local clinician row carries `certSubject` `riverside.clinicians.ezehr`, so EZCA still issues the certificate. The local mode accepts a clinician session from a WebAuthn sign-in, reusing Task 8's ceremonies with the `clinicians` tables. The certificate endpoint and everything downstream stay unchanged.
-
-- [ ] Test `local session yields identity urn:local:rivera`; test that a missing session returns 401. Run (FAIL), implement, run (PASS), commit `feat: local clinician passkeys (fallback)`. Then update the pitch: "plugs into Entra ID; shown here with our own directory."
-
-### Task 5: Certificate-bound request proofs (Identity lead, hours 7–9)
-
-**Files:** Create `src/server/auth/proof.ts`, `src/shared/proof.ts` and `src/web/lib/signedFetch.ts`. Test: `tests/server/auth/proof.test.ts`.
-
-**Interfaces:**
-- Consumes: `verifyCertificateChain` and `resolveIdentity` (Task 3). Identity always comes from `resolveIdentity`, which also enforces the clinician's 10-hour shift.
-- Proof format. This is DPoP-style (RFC 9449), but bound to a certificate instead of a bare key. Tell judges exactly that.
-  - Header `X-Proof: <compact JWS>`.
-  - Protected header: `{ typ: 'cpop+jwt', alg: 'ES256' | 'RS256', x5c: [leafB64, ...intermediates] }`.
-  - Payload:
-    - `htm`: the request method
-    - `htu`: the origin plus path, without the query string
-    - `iat`: seconds since epoch
-    - `jti`: a random UUID
-    - `bdh`: base64url SHA-256 of the raw body, omitted when there is no body
-    - `pur`: the claimed purpose, e.g. `'treatment'`
-- Produces:
-  - `createProof(req: { method: string; url: string; body: Uint8Array | null; purpose: string }, key: CryptoKey, x5c: string[], now?: Date): Promise<string>`, in `src/shared/proof.ts`. Used by `signedFetch` and the provider simulator; tests use it to build proofs.
-  - `verifyProof(input: { method: string; url: string; rawBody: Buffer | null; proofHeader: string | undefined; now: Date }, deps: { anchors: string[]; replay: ReplayCache }): { ok: true; identity: CertIdentity; claimedPurpose: string } | { ok: false; reason: DenyReason; claimedPurpose: string | null }`
-  - `class ReplayCache { seen(jti: string, now: Date): boolean }`. In memory, with a 10-minute TTL.
-  - Express middleware `requireProof`: sets `req.actor` and `req.claimedPurpose`. On failure it does **not** respond itself; it sets `req.proofFailure`, so the gate (Task 7) can log the denial against the patient.
-  - Web: `signedFetch(input: string, init?: RequestInit & { purpose?: string }): Promise<Response>`. Uses the stored key pair and certificate (Task 4).
-- Freshness window: `iat` within [now − 120s, now + 60s].
-
-- [ ] **Step 1: Write the failing tests.**
-  - `valid proof` returns `ok` with `identity.subjectUri` and `claimedPurpose:'treatment'`.
-  - A missing header returns `no_certificate`; a missing header with request header `X-Purpose: treatment` still reports `claimedPurpose:'treatment'` (the broker case).
-  - A certificate from an untrusted root returns `untrusted_certificate`; an expired certificate returns `certificate_expired`.
-  - A clinician certificate that is still valid, but past its `policyNotAfter` (10 hours and 1 second after issuance), returns `certificate_expired`.
-  - Wrong `htm`, wrong `htu`, a body changed after signing, and a bad signature all return `bad_proof`.
-  - **(Review Focus 1)** `iat` = now − 119s returns `ok`; `iat` = now − 121s returns `stale_proof`; `iat` = now + 61s returns `stale_proof`.
-  - Using the same `jti` twice returns `replayed_proof` the second time.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement with `jose.compactVerify`, using the leaf certificate's public key imported from `x5c[0]`. Capture the raw body with `express.raw` on clinician and provider routes.
-- [ ] **Step 4:** Run the tests again. Expected: PASS.
-- [ ] **Step 5:** Commit `feat: certificate-bound request proofs`.
-
-### Task 6: Encryption at rest and the record store (App lead, hours 2.5–3.5)
-
-**Files:** Create `src/server/crypto/keyWrapper.ts`, `src/server/crypto/recordCipher.ts`, `src/server/records/store.ts`. Test: `tests/server/crypto/*.test.ts`, `tests/server/records/store.test.ts`.
+**Files:** Create `Security/Pki/ICertificateAuthority.cs`, `LocalCa.cs`, `CertificateValidator.cs`, `OrgDirectory.cs`, `RecordSigner.cs`, `RecordVerifier.cs`. Test: `EZEHR.Tests/Pki/*`.
 
 **Interfaces:**
 - Produces:
-  - `interface KeyWrapper { wrap(dek: Uint8Array): Promise<string>; unwrap(wrapped: string): Promise<Uint8Array> }`
-    - `KeyVaultWrapper(keyId: string)`: `CryptographyClient` with `DefaultAzureCredential` and `RSA-OAEP-256`.
-    - `LocalWrapper(kekB64: string)`: AES-KW. For development and tests only.
-  - `encryptEntry(dek: Uint8Array, aad: string, plaintext: string): { iv: Uint8Array; ciphertext: Uint8Array }` and `decryptEntry(dek, aad, iv, ciphertext): string`. AES-256-GCM with a 12-byte random IV; `aad` = `<patientId>:<entryId>`.
-  - `createPatientKey(wrapper: KeyWrapper): Promise<string /* wrapped */>`
-  - `putEntry(db, wrapper, args: { patientId: string; sourceKey: string; jws: string }): Promise<{ inserted: boolean; id: string }>`. Idempotent on (`patientId`, `sourceKey`): it returns `inserted: false` without writing.
-  - `readEntries(db, wrapper, patientId: string): Promise<{ id: string; jws: string; createdAt: Date }[]>`. Unwraps the patient key **on every call** (no cache), so every read is a Key Vault operation visible in Key Vault's logs. **This function is never called except from the gate (Task 7) or the patient's own session.**
+  - `interface ICertificateAuthority { Task<IssuedCertificate> IssueAsync(string csrPem, string subjectName, int validityDays, CancellationToken ct); }` with `record IssuedCertificate(X509Certificate2 Leaf, IReadOnlyList<X509Certificate2> Chain)`.
+    - Every certificate carries the clientAuth EKU (`1.3.6.1.5.5.7.3.2`).
+    - The CSR's own subject is ignored; `subjectName` is used.
+  - `sealed class LocalCa : ICertificateAuthority`. ECDSA P-256 root; CN = `subjectName`; `notBefore` = now − 5 min. Built with `CertificateRequest.LoadSigningRequestPem` and `CertificateRequest.Create`.
+  - `sealed class CertificateValidator(IEnumerable<X509Certificate2> roots, IEnumerable<X509Certificate2> intermediates, TimeProvider time)` with `CertCheck Validate(X509Certificate2 leaf, IEnumerable<X509Certificate2>? extra, DateTimeOffset at)`.
+    - `CertCheck` is `(bool Ok, DenyReason? Reason)`.
+    - Uses `X509Chain` with `ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust`, revocation mode `NoCheck`, and `VerificationTime = at + 2 min` so 2 minutes of skew are tolerated.
+    - Requires the clientAuth EKU.
+    - An unknown root is `UntrustedCertificate`; outside validity is `CertificateExpired`.
+  - `sealed class OrgDirectory`, mapping certificate CN to `Party`:
 
-- [ ] **Step 1: Write the failing tests.**
-  - `round trip`: encrypting and then decrypting gives back the plaintext.
-  - `wrong AAD fails`: decrypting with `aad` of another entry ID throws.
-  - `tamper fails`: flipping one ciphertext byte makes decryption throw.
-  - `LocalWrapper round trip`: unwrapping a wrapped key gives back the same 32 bytes.
-  - `putEntry idempotent`: a second call with the same `sourceKey` returns `inserted:false`, and the row count stays 1.
-  - `ciphertext at rest`: the raw `entries.ciphertext` doesn't contain the substring `"resourceType"`.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement. Then, once Task 2b Step 1 is done, run one manual smoke test against the real vault: `npx tsx -e` with a wrap and unwrap through `KeyVaultWrapper`.
-- [ ] **Step 4:** Run the tests again. Expected: PASS.
-- [ ] **Step 5:** Commit `feat: per-patient envelope encryption`.
+    | CN | Party |
+    |---|---|
+    | `lakeside.providers.ezehr` | Provider `urn:provider:lakeside` "Lakeside Urgent Care" |
+    | `northwind.providers.ezehr` | Provider `urn:provider:northwind` "Northwind Workplace Health" |
+    | `maple.providers.ezehr` | Provider `urn:provider:maple` "Maple Street Family Medicine" |
+    | `kidney-check.apps.ezehr` | App `urn:app:kidney-check` "Kidney Check" |
+    | `platform.ezehr` | Platform `urn:platform:ezehr` "EZEHR" |
 
-### Task 7: Grants, the access check, the audit log (Identity lead, hours 9–11.5)
+    `Party? Resolve(X509Certificate2 leaf)` returns `null` for an unknown CN.
+  - `static class RecordSigner`, with `string Sign(JsonElement resource, X509Certificate2 certWithKey, IReadOnlyList<X509Certificate2> chain, DateTimeOffset iat)`.
+    - Produces a compact JWS (RFC 7515) with protected header `{ "alg": "ES256" | "RS256", "x5c": [...], "iat": unix }`.
+    - The payload is the UTF-8 JSON of the resource.
+    - ES256 signatures use `DSASignatureFormat.IeeeP1363FixedFieldConcatenation`.
+  - `sealed class RecordVerifier(CertificateValidator, OrgDirectory)`, with `VerifiedEntry Verify(Guid entryId, string jws)`.
+    - Verifies the signature with the `x5c` leaf, then checks the chain **at the header `iat`**, then resolves the signer.
+    - Throws `RecordSignatureException` on any failure.
+    - `WrittenBy` = `sender.display` when the resource is a platform-signed `Communication`.
 
-**Files:** Create `src/server/access/grants.ts`, `src/server/access/gate.ts`, `src/server/audit/log.ts`; modify `src/server/routes/clinician.ts` and `src/server/routes/patient.ts`. Test: `tests/server/access/*.test.ts`.
+- [ ] **Write failing tests:**
+  - `LocalCa_uses_subjectName_not_csr_subject`: CSR `CN=Mallory` with subject name `lakeside.providers.ezehr` gives a leaf with CN `lakeside.providers.ezehr` and the clientAuth EKU.
+  - `LocalCa_rejects_tampered_csr`: throws.
+  - `Validator_ok_for_local_chain`, `Validator_untrusted_root`, `Validator_expired` (at = `notAfter` + 1 s gives `CertificateExpired`).
+  - **(Review Focus 1)** `Validator_tolerates_2min_skew`: at = `notBefore` − 2 min gives Ok; − 3 min gives `CertificateExpired`.
+  - `OrgDirectory_resolves_known_and_rejects_unknown`: `mallory.providers.ezehr` gives `null`.
+  - `Signer_verifier_roundtrip_es256` and `_rs256`.
+  - `Verifier_valid_after_cert_expiry_when_signed_inside_validity`.
+  - `Verifier_rejects_tampered_payload`, and `Verifier_rejects_unknown_signer` (a known root but an unknown CN).
+- [ ] Run `dotnet test --filter Pki`. Expected: FAIL. Implement, then run again. Expected: PASS.
+- [ ] Commit `feat: PKI core (local CA, chain validation, signed records)`.
 
-**Interfaces:**
-- Consumes: the `requireProof` results (Task 5); `readEntries` and `putEntry` (Task 6); `verifyEntry` (Task 3).
-- Produces:
-  - `appendAudit(db, e: Omit<AuditEvent,'id'|'at'>, now: Date): AuditEvent` and `listAudit(db, patientId: string, afterId?: number): AuditEvent[]`
-  - `createOffer(db, patientId, durationMinutes, now): ShareOffer`
-  - `redeemOffer(db, code, clinician: CertIdentity, now): Grant`. Creates a grant with status `pending` and records a `redeem_offer` audit event. Throws `GrantError('offer_used' | 'offer_expired' | 'offer_unknown')`.
-  - `decideGrant(db, patientId, grantId, decision: 'approve' | 'deny', now): Grant`. Approving sets `approvedAt` and `expiresAt` (now + duration; `end_of_day` means 23:59:59 local time in the configured zone, default America/Indiana/Indianapolis).
-  - `revokeGrant(db, patientId, grantId, now): Grant`
-  - `createServiceGrant(db, patientId, now): Grant`, for the kidney trend check: `scope:'read_labs'`, `purpose:'health_check'`, `expiresAt:null`, `status:'active'`.
-  - `authorize(db, ctx: { patientId: string; action: 'read' | 'append'; actor: { verified: true; identity: CertIdentity } | { verified: false; reason: DenyReason }; claimedPurpose: string | null; now: Date }): { allowed: true; grant: Grant } | { allowed: false; reason: DenyReason }`. Writes **exactly one** audit event either way. Order of checks:
-    1. Unverified: deny with the proof's reason.
-    2. Find the grant whose grantee `subjectUri` matches; if there is none, `no_grant`.
-    3. `pending`: `grant_pending`.
-    4. `revoked`: `grant_revoked`.
-    5. Now past `expiresAt`: mark it `expired` and deny with `grant_expired`.
-    6. `append` with a `read_labs` scope: `scope_denied`.
-    7. Otherwise, allow.
-  - Routes, each behind `requireProof` and then `authorize`:
-    - `POST /api/clinician/share-offers/redeem { code }` returns `201 { grantId, status:'pending' }`.
-    - `GET /api/clinician/grants/:id` returns `{ status, patientId, expiresAt }`. Clinicians may only see their own grants.
-    - `GET /api/clinician/patients/:patientId/record` returns `{ entries: VerifiedEntry[], trend: TrendResult }`.
-    - `POST /api/clinician/patients/:patientId/entries { jws }`: the entry signer's `subjectUri` must equal the proof's `subjectUri`, or it's `bad_proof`.
-    - Denials return 401 (no, untrusted, or expired certificate; bad, stale, or replayed proof) or 403 (grant reasons), with `{ error: DenyReason }`.
-    - Patient (session): `POST /api/patient/share-offers`, `POST /api/patient/grants/:id/approve|deny|revoke`.
+### Task 3: EZCA adapter and organization certificates (Identity lead, 9:00–10:00 PM)
 
-- [ ] **Step 1: Write the failing tests** (unit tests on `authorize` and the grant functions, using a fixed `now`).
-  - `no grant` returns `no_grant`, with one audit event (`outcome:'denied'`).
-  - `pending` returns `grant_pending`.
-  - `active` is allowed, with one audit event (`outcome:'granted'`, actor display "Dr. Rivera").
-  - A grant bound to `urn:entra:T:other` returns `no_grant` for `urn:entra:T:O`.
-  - **(Review Focus 3)** now = `expiresAt` + 1s returns `grant_expired`, and the grant's status becomes `expired`; after `revokeGrant`, the result is `grant_revoked`.
-  - **(Review Focus 2)** `redeemOffer` twice with the same code: the second call throws `offer_used`, and `listAudit` plus the grants table show exactly one pending grant.
-  - An offer redeemed 10m01s after creation throws `offer_expired`.
-  - An unverified actor with `claimedPurpose:'treatment'` returns `no_certificate`. The audit event has `actor.kind:'unverified'` and `claimedPurpose:'treatment'`, and `copy.brokerBlocked` renders `"Blocked: unverified requester claimed treatment"`.
-  - A service grant with `append` returns `scope_denied`.
-  - `end_of_day` approval at 14:00 local time gives `expiresAt` 23:59:59 local time.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement the grant functions, `authorize`, the audit log, and the routes. The record route decrypts only after `allowed: true`.
-- [ ] **Step 4:** Run the tests again. Expected: PASS.
-- [ ] **Step 5:** Commit `feat: grants, single access check, audit log`.
-
-### Task 8: Patient passkeys, invites, sessions (App lead, hours 3.5–6)
-
-**Files:** Create `src/server/auth/patient.ts`; modify `src/server/routes/patient.ts`; create the `src/web/patient/Enroll.tsx` and `src/web/patient/SignIn.tsx` pages. Test: `tests/server/auth/patient.test.ts`.
+**Files:** Create `Security/Pki/EzcaCa.cs` and `EZEHR.Tools/Commands/CertsCommand.cs`. Test: `EZEHR.Tests/Pki/EzcaCaTests.cs`.
 
 **Interfaces:**
-- Consumes: `createPatientKey` (Task 6); `createServiceGrant` (Task 7; write a stub against its signature if Task 7 isn't merged yet).
+- Consumes: `ICertificateAuthority` (Task 2), `docs/ezca-notes.md` (Task 0a).
 - Produces:
-  - `POST /api/patient/enroll/options { inviteCode }` returns WebAuthn registration options. `rpID` = `config.rpId`, `residentKey:'required'`, `userVerification:'required'`, `attestationType:'none'`. An unknown, used, or expired invite returns 400 `{ error:'invite_invalid' }`.
-  - `POST /api/patient/enroll/verify { inviteCode, response, kidneyCheckOptIn: boolean }`. On success:
-    - creates the patient (with its wrapped key), the credential, and the `provider_links` row
-    - marks the invite redeemed
-    - creates the service grant **only if** `kidneyCheckOptIn`
-    - sets the session cookie `sid` (httpOnly, Secure, SameSite=Lax, 12h; only a hash is stored)
-  - `POST /api/patient/invites/redeem { code }` (session required): adds a `provider_links` row to the current patient.
-  - `POST /api/patient/signin/options` (usernameless) and `POST /api/patient/signin/verify { response }`: set the session.
-  - `requirePatient` middleware: sets `req.patientId`.
-- Copy: `copy.kidneyOptIn`: `"Turn on the kidney trend check. It reads your lab results to spot slow changes no single clinic would see. You can turn it off any time."`
+  - `sealed class EzcaCa(IEZCAClient client, AvailableCAModel ca) : ICertificateAuthority`. It calls `RequestCertificateWithChainV2Async(ca, csr, subjectName, validityDays, subjectAltNames)`, and maps the leaf and chain from `CertificatePEM`, `IssuingCACertificate` and `RootCertificate`.
+  - The SDK authenticates with `DefaultAzureCredential`: the managed identity on App Service, `az login` on a laptop.
+  - `CertsCommand`: `ezehr-tools certs issue --ca ezca|local`.
+    - For each CN in `OrgDirectory`, it generates a P-256 key (or RSA 2048, per the probe) and requests a **365-day** certificate.
+    - It writes `.pki/{slug}.pfx`, `.pki/anchors.pem` and `.pki/intermediates.pem`.
+    - With `local`, it first creates `.pki/local-root.pfx`.
+  - `certs broker` writes `.pki/broker.pfx`, a self-signed certificate (CN `exchange.broker.example`), on purpose.
 
-- [ ] **Step 1: Write the failing tests.** Inject the SimpleWebAuthn verify functions as dependencies so tests can stub them.
-  - `invite is single-use`: a second `enroll/verify` with the same code returns 400 `invite_invalid`.
-  - `expired invite`: returns 400 `invite_invalid`.
-  - `opt-in creates service grant`: with `kidneyCheckOptIn:true`, one active grant has `grantee.subjectUri:'urn:service:kidney-trend'`; with `false`, there are zero grants.
-  - `enroll creates wrapped DEK and link`: the patient row has a non-empty `wrapped_dek`, and `provider_links` has one row.
-  - `redeem while signed in adds a link`: two invites give two links on the same patient.
-  - `session expiry`: a session older than 12h makes `requirePatient` return 401.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement the server side, then the Enroll page (invite code from `?invite=`, opt-in checkbox, "Create passkey" button) and the SignIn page (a single "Sign in with passkey" button).
-- [ ] **Step 4:** Run the tests again. Expected: PASS. On the deployed site, on a phone, enroll with an invite and sign in again. Expected: no password field is ever shown.
-- [ ] **Step 5:** Commit `feat: patient passkeys, invites, sessions`.
+- [ ] **Write failing tests** against a fake `IEZCAClient`:
+  - `Ezca_passes_subject_validity_and_csr`.
+  - `Ezca_maps_chain`: returns a leaf plus 2 chain certificates.
+  - `Ezca_error_throws_with_message`.
+- [ ] Run (FAIL), implement, run (PASS).
+- [ ] Run `certs issue --ca ezca`, then check each organization certificate with `openssl verify`. Expected: `OK`.
+- [ ] Copy `anchors.pem` and `intermediates.pem` to `Security/Trust/`. They're public, so commit them.
+- [ ] Store `platform.pfx`, base64-encoded, as Key Vault secret `platform-cert`. Point the App Service setting `PlatformCertPfxBase64` at it with a Key Vault reference, and grant the managed identity **Key Vault Secrets User**.
+- [ ] Commit `feat: EZCA certificate authority and org certificate tool`.
 
-### Task 9: Provider API, simulator, seed data (App lead, hours 6–8.5)
+### Task 4: Encryption at rest and the record store (App lead, 7:30–9:00 PM)
 
-**Files:** Create `src/server/routes/provider.ts`, `tools/provider-sim.ts`, `tools/seed/lakeside.json`, `tools/seed/northwind.json`, `tools/seed/maple.json`. Test: `tests/server/routes/provider.test.ts`.
+**Files:** Create `Security/Crypto/IKeyWrapper.cs`, `KeyVaultKeyWrapper.cs`, `LocalKeyWrapper.cs`, `RecordCipher.cs`, `Records/RecordStore.cs`. Test: `EZEHR.Tests/Crypto/*`, `EZEHR.Tests/Records/RecordStoreTests.cs`.
 
 **Interfaces:**
-- Consumes: `requireProof` and `createProof` (Task 5); `verifyEntry`, `signEntry` (Task 3); `putEntry` (Task 6); `runKidneyCheck` (Task 10; call it when present).
-  - Task 5 lands at hour 9, so code against its Interfaces block and stub `requireProof` in tests until it merges.
-  - Provider routes reject any proof whose `identity.kind` isn't `'provider'` with 403.
 - Produces:
-  - `POST /api/provider/invites { providerPatientId }` (proof by a provider certificate) returns `{ code, url }`, where `url` = `<origin>/patient/enroll?invite=<code>`. Invites expire in 7 days.
-  - `POST /api/provider/records { providerPatientId, entries: string[] /* JWS */ }` returns `{ inserted: number, skipped: number }`.
-    - If no `provider_links` row exists, it returns 409 `{ error:'patient_not_linked' }`.
-    - Each JWS must verify, and its signer `subjectUri` must equal the proof's; otherwise the whole request returns 400.
-    - It records one `ingest` audit event per request, then calls `runKidneyCheck(patientId)`.
-  - The CLI `tools/provider-sim.ts`:
-    - `invite <lakeside|northwind|maple> <providerPatientId>` prints the URL.
-    - `push <provider> <providerPatientId>` signs each resource in `tools/seed/<provider>.json` with that provider's key, with `iat` = the resource's clinical date at 12:00 UTC, and POSTs it with a proof.
+  - `interface IKeyWrapper { Task<byte[]> WrapAsync(byte[] dek); Task<byte[]> UnwrapAsync(byte[] wrapped); }`
+    - `KeyVaultKeyWrapper`: `CryptographyClient`, `KeyWrapAlgorithm.RsaOaep256`, `DefaultAzureCredential`.
+    - `LocalKeyWrapper`: AES-256-GCM with a key-encryption key from configuration. Development and tests only.
+  - `static class RecordCipher`, with `(byte[] Iv, byte[] Ciphertext) Encrypt(byte[] dek, string aad, string plaintext)` and `string Decrypt(byte[] dek, string aad, byte[] iv, byte[] ciphertext)`.
+    - `AesGcm`, a 12-byte random IV, and a 16-byte tag appended to the ciphertext.
+    - `aad` = `{patientId}:{entryId}`.
+  - `sealed class RecordStore(SqliteConnection, IKeyWrapper)`:
+    - `Task<byte[]> CreatePatientKeyAsync()`: returns the wrapped key.
+    - `Task<(bool Inserted, Guid Id)> PutAsync(Guid patientId, string sourceKey, string resourceType, string jws)`: idempotent on `sourceKey`.
+    - `Task<IReadOnlyList<(Guid Id, string ResourceType, string Jws)>> ReadAsync(Guid patientId, Func<string,bool>? resourceTypeFilter)`: unwraps the patient key **on every call**, so every read is a Key Vault operation. Only `AccessGate`-guarded code and the patient's own pages call it.
+
+- [ ] **Write failing tests:**
+  - `Cipher_roundtrip`, `Cipher_wrong_aad_throws`, `Cipher_tamper_throws`.
+  - `LocalWrapper_roundtrip`.
+  - **(Review Focus 4)** `Put_is_idempotent`: a second identical put returns `Inserted=false`, with 1 row.
+  - `Ciphertext_has_no_plaintext`: the raw column doesn't contain `"resourceType"`.
+  - `Read_filters_by_type`.
+- [ ] Run (FAIL), implement, run (PASS). Smoke-test `KeyVaultKeyWrapper` once against the real vault, from a scratch console command.
+- [ ] Commit `feat: per-patient envelope encryption and record store`.
+
+### Task 5: Network API and client certificates (Identity lead, 11:00 PM–1:00 AM)
+
+**Files:** Create `Auth/ClientCertificateSource.cs`, `Auth/CallerResolver.cs`, `Api/NetworkApi.cs`; modify `Program.cs`. Test: `EZEHR.Tests/Api/NetworkIngestTests.cs` (WebApplicationFactory).
+
+**Interfaces:**
+- Consumes: `CertificateValidator`, `OrgDirectory`, `RecordVerifier` (Task 2); `RecordStore` (Task 4).
+- Produces:
+  - `interface IClientCertificateSource { Task<X509Certificate2?> GetAsync(HttpContext ctx); }`
+    - Production uses `AddCertificateForwarding(o => o.CertificateHeader = "X-ARR-ClientCert")` plus `UseCertificateForwarding()`, then `ctx.Connection.GetClientCertificateAsync()`.
+    - Tests register a source that reads a test-only header. That source is never registered outside tests.
+  - `sealed class CallerResolver(CertificateValidator, OrgDirectory, TimeProvider)`, with `Caller Resolve(X509Certificate2? cert)`:
+    - no certificate → `UnverifiedCaller(NoCertificate)`
+    - validation failure → `UnverifiedCaller(reason)`
+    - a valid chain but an unknown CN → `UnverifiedCaller(UntrustedCertificate)`
+    - otherwise → `VerifiedCaller(party, null)`
+  - Endpoints (minimal API group `/api/network`):
+    - `POST /invites { providerPatientId }` returns `201 { code, url }`. Providers only (403 otherwise). Invites expire in 7 days.
+    - `POST /records { providerPatientId, entries: string[] }` returns `{ inserted, skipped }`. Providers only.
+      - No `provider_links` row returns 409.
+      - Every JWS must verify (Task 2), and its signer must equal the caller; otherwise the request returns 400 and nothing is stored.
+      - It writes one `Ingest` audit event for the patient.
+    - Unverified callers get **401 `{ error }`**, and **nothing is logged** for ingest, because there is no target patient yet. Patient-targeted endpoints log through the gate (Task 6).
+
+- [ ] **Write failing tests:**
+  - `Ingest_stores_signed_entries`: 2 entries give `inserted=2`.
+  - **(Review Focus 4)** `Ingest_twice_is_idempotent`: `{inserted:0, skipped:2}`.
+  - `Ingest_rejects_entry_signed_by_other_provider`: 400, nothing stored.
+  - `Ingest_unlinked_patient_409`.
+  - `No_certificate_401` and `Self_signed_certificate_401` (`broker.pfx`).
+  - `App_certificate_cannot_ingest_403`.
+- [ ] Run (FAIL), implement, run (PASS).
+- [ ] Deploy, then confirm on the real site: a provider push from Task 9 over mutual TLS succeeds, and the same request with no certificate returns 401.
+- [ ] Commit `feat: network API with EZCA client certificates`.
+
+### Task 6: Grants, the access check, the audit log (Identity lead, 1:00–3:00 AM)
+
+**Files:** Create `Access/GrantService.cs`, `Access/AccessGate.cs`, `Access/AuditLog.cs`; modify `Api/NetworkApi.cs`. Test: `EZEHR.Tests/Access/*`.
+
+**Interfaces:**
+- Consumes: `Caller` (Domain), `RecordStore`, `RecordVerifier`.
+- Produces:
+  - `AuditLog`: `AuditEvent Append(Guid patientId, Party? actor, string action, string? claimedPurpose, bool granted, DenyReason? reason)` and `IReadOnlyList<AuditEvent> List(Guid patientId, long afterId = 0)`.
+  - `GrantService`:
+    - `ShareOffer CreateOffer(Guid patientId, ShareDuration d)`: an 8-character code, valid 10 minutes.
+    - `Grant Redeem(string code, Party clinician)`: creates a `Pending` grant and appends a `RedeemOffer` event. Throws `GrantException("offer_used" | "offer_expired" | "offer_unknown")`.
+    - `Grant Decide(Guid patientId, Guid grantId, bool approve)`: approval sets `ApprovedAt` and `ExpiresAt` from the duration; `EndOfDay` is 23:59:59 in `AppOptions.TimeZone`.
+    - `Grant Revoke(Guid patientId, Guid grantId)`.
+    - `Grant CreateAppGrant(Guid patientId, Party app)`: `LabsAndNotes`, ongoing, `Active`.
+    - `IReadOnlyList<Grant> ForPatient(Guid patientId)` and `Grant? Find(Guid grantId)`.
+  - `AccessGate`: `AccessDecision Authorize(Guid patientId, AccessAction action, Caller caller, string? claimedPurpose)`, where `AccessDecision` is `(bool Allowed, Grant? Grant, DenyReason? Reason)`.
+    - It writes **exactly one** audit event, either way.
+    - Check order:
+      1. Unverified → that reason.
+      2. A clinician whose `SessionStartedAt` is more than 10 h ago → `ShiftEnded`.
+      3. No grant with this `Grantee.SubjectUri` for the patient → `NoGrant`.
+      4. `Pending` → `GrantPending`.
+      5. `Revoked` → `GrantRevoked`.
+      6. Past `ExpiresAt` → mark `Expired`, then `GrantExpired`.
+      7. `LabsAndNotes` used for `ReadRecord` → `ScopeDenied`.
+      8. Otherwise, allowed.
+  - Network endpoints added here, all through the gate:
+    - `GET /patients/{patientId}/labs`, for apps (`ReadLabs`). Returns the verified eGFR Observations, LOINC `98979-8`.
+    - `POST /patients/{patientId}/notes { jws }` (`WriteNote`). The signer must equal the caller. Idempotent by `sourceKey`.
+    - `GET /patients/{patientId}/record?purpose=...` (`ReadRecord`), the broker's target.
+    - Denials return 401 for certificate reasons, 403 for grant reasons.
+
+- [ ] **Write failing tests** (with a fake `TimeProvider`):
+  - `No_grant_denied_and_logged_once`.
+  - `Pending_denied`.
+  - `Active_allowed_and_logged`.
+  - `Grant_for_other_clinician_is_NoGrant`.
+  - **(Review Focus 3)** `Expired_marks_and_denies` and `Revoked_denies`.
+  - **(Review Focus 2)** `Redeem_twice_second_throws_offer_used`: exactly 1 pending grant.
+  - `Offer_expired_after_10_minutes`.
+  - `Unverified_logged_with_claimed_purpose`: `Actor == null`, `ClaimedPurpose == "treatment"`.
+  - `App_scope_cannot_read_record`.
+  - `Clinician_shift_over_10h_denied`.
+  - `EndOfDay_is_local_midnight_minus_1s`.
+  - Integration: `Broker_no_cert_on_record_endpoint_logs_blocked_event`.
+- [ ] Run (FAIL), implement, run (PASS).
+- [ ] Commit `feat: grants, single access check, audit log`.
+
+### Task 7: Patient passkeys, invites, sessions (App lead, 9:00–11:00 PM)
+
+**Files:** Create `Auth/PatientPasskeys.cs`, `Api/PatientPasskeyApi.cs`, `wwwroot/js/passkey.js`, `Pages/Patient/Enroll.cshtml(.cs)`, `Pages/Patient/SignIn.cshtml(.cs)`; modify `Program.cs`. Test: `EZEHR.Tests/Auth/PatientPasskeyTests.cs`.
+
+**Interfaces:**
+- Consumes: `RecordStore.CreatePatientKeyAsync` (Task 4); `GrantService.CreateAppGrant` (Task 6; stub its signature until it merges).
+- Produces:
+  - Cookie scheme `"Patient"`: 12 h, HttpOnly, Secure, SameSite=Lax, and the claim `patient_id`. Policy `"Patient"`. `AuthorizeFolder("/Patient", "Patient")`, with Enroll and SignIn anonymous.
+  - JSON endpoints (Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`.
+    - `POST /api/patient/passkey/register/options { inviteCode }`. Discoverable credential, `UserVerification = Required`, attestation `none`. An invalid or used invite returns 400.
+    - `POST /api/patient/passkey/register/verify { inviteCode, attestation, kidneyCheckOptIn }`. It creates the patient (with the wrapped key), the credential and the provider link, redeems the invite, creates the Kidney Check grant **only if** opted in, and signs the patient in.
+    - `POST /api/patient/passkey/signin/options` (usernameless) and `/signin/verify`.
+    - `POST /api/patient/invites/redeem { code }` (signed in): adds another provider link.
+  - `passkey.js`: about 40 lines. It uses `PublicKeyCredential.parseCreationOptionsFromJSON`, `parseRequestOptionsFromJSON` and `credential.toJSON()`, with base64url helpers as a fallback for older browsers.
+- The Enroll page shows `Copy.KidneyOptIn` with a checkbox, plus one "Create passkey" button. The SignIn page has one "Sign in with passkey" button.
+
+- [ ] **Write failing tests** (Fido2 verification behind an interface, stubbed):
+  - `Invite_single_use`, `Invite_expired`.
+  - `OptIn_creates_app_grant` and `No_optin_no_grant`.
+  - `Enroll_creates_wrapped_dek_and_link`.
+  - `Redeem_second_invite_adds_link`.
+- [ ] Run (FAIL), implement, run (PASS).
+- [ ] On the deployed site, on a phone: enroll from an invite, then sign in again. Expected: no password field ever appears.
+- [ ] Commit `feat: patient passkeys, invites, sessions`.
+
+### Task 8: Clinician sign-in (Identity lead, 10:00–11:00 PM, then the 11 PM checkpoint)
+
+**Files:** Create `Auth/ClinicianAuth.cs`, `Pages/Clinician/Index.cshtml(.cs)`; modify `Program.cs` and `appsettings.json` (the `AzureAd` section). Test: `EZEHR.Tests/Auth/ClinicianAuthTests.cs`.
+
+**Interfaces:**
+- Produces:
+  - `AddMicrosoftIdentityWebApp(Configuration.GetSection("AzureAd"), openIdConnectScheme: "ClinicianOidc", cookieScheme: "Clinician")`. Sign-in only, ID token, no secret; if the library insists on a secret, set `ResponseType = "id_token"`.
+  - On `OnTokenValidated`, add the claim `session_started_at`. The cookie is set to `ExpireTimeSpan = 10h`, `SlidingExpiration = false`, and the OIDC `UseTokenLifetime = false`.
+  - `static ClinicianCheck ClinicianAuth.Evaluate(ClaimsPrincipal user, IReadOnlyDictionary<string,string> trustedTenants)`, returning `(bool Ok, Party? Party, DateTimeOffset? SessionStartedAt, string? ErrorCopy)`:
+    - `tid` (`http://schemas.microsoft.com/identity/claims/tenantid`) not trusted → `Copy.UntrustedOrg`
+    - no `Clinician` role (claim type `roles`) → `Copy.NotAClinician`
+    - otherwise a `Party` with `urn:entra:{tid}:{oid}`, display name from `name`, and the organization from `trustedTenants`
+  - Policy `"Clinician"` uses scheme `"Clinician"`. `AuthorizeFolder("/Clinician", "Clinician")`, except `Index` and `AccessEnded`.
+  - `Caller ClinicianAuth.ToCaller(ClaimsPrincipal)` builds the `VerifiedCaller` for the gate.
+
+- [ ] **Write failing tests** on `Evaluate`, with hand-built `ClaimsPrincipal`s:
+  - `Valid_clinician`.
+  - **(Review Focus 5)** `Missing_role_returns_NotAClinician` and `Untrusted_tenant_returns_UntrustedOrg`.
+  - `Session_started_at_parsed`.
+- [ ] Run (FAIL), implement, run (PASS). Deploy, then sign in as Dr. Rivera **with the security key**. Expected: the page shows "Dr. Rivera · Riverside Primary Care · signed in until {time}".
+- [ ] Commit `feat: clinician Entra sign-in with 10-hour shift`.
+- [ ] **11 PM CHECKPOINT:**
+  - If deployed sign-in doesn't work, do Task 8b now.
+  - If EZCA issuance doesn't work, set `CertificateAuthority:Mode=Local`, run `certs issue --ca local`, and keep going.
+
+### Task 8b (only on checkpoint failure): Clinician passkeys in our own directory
+
+- [ ] Reuse Task 7's passkey flow with the `local_clinicians` table, seeded with Dr. Rivera, Riverside Primary Care, `urn:local:rivera`. Register the security key as Dr. Rivera's passkey.
+- [ ] `ClinicianAuth.Evaluate` reads the local cookie instead. Everything downstream is unchanged.
+- [ ] Test `Local_clinician_yields_party`. Commit `feat: local clinician passkeys (fallback)`. The pitch then says "plugs into Entra ID; shown with our own directory."
+
+### Task 9: Provider simulator and seed data (App lead, 11:00 PM–1:00 AM)
+
+**Files:** Create `EZEHR.Tools/Commands/ProviderCommand.cs`, `EZEHR.Tools/Net/NetworkClient.cs`, `EZEHR.Tools/seed/{lakeside,northwind,maple}.json`.
+
+**Interfaces:**
+- Consumes: `RecordSigner` (Task 2); the network endpoints (Task 5). Build against the Interfaces block until Task 5 merges.
+- Produces:
+  - `NetworkClient.Create(string baseUrl, string pfxPath)`: an `HttpClient` with the client certificate, `SslProtocols = Tls12` (TLS renegotiation needs 1.2), HTTP/1.1, and `Expect100Continue = true`.
+  - `ezehr-tools provider invite <lakeside|northwind|maple> <providerPatientId>` prints the enrollment URL.
+  - `ezehr-tools provider push <provider> <providerPatientId>` signs each resource in `seed/<provider>.json` with `iat` = the resource's clinical date at 12:00 UTC. It POSTs one request per encounter date, so each request stays well under 100 KB.
 - **Seed data** (FHIR R4). Patient Sam Taylor, born 1984-05-17. Provider patient IDs: `LUC-20417`, `NWH-88213`, `MSF-0932`.
 
-| Provider | Date | Resources |
-|---|---|---|
-| Maple Street Family Medicine | 2024-09-12 | Encounter (annual physical); Condition "Essential hypertension"; MedicationStatement "amlodipine 5 mg daily"; Observation eGFR **96** |
-| Northwind Workplace Health | 2025-03-04 | Observation blood pressure 138/88; Observation eGFR **88** |
-| Lakeside Urgent Care | 2025-08-21 | Encounter (low back pain); MedicationStatement "ibuprofen 600 mg three times daily as needed"; Observation eGFR **81** |
-| Northwind Workplace Health | 2026-03-10 | Observation blood pressure 146/92; Observation eGFR **72** |
-| Lakeside Urgent Care | 2026-09-15 | Encounter (back pain follow-up); Observation eGFR **63** |
+  | Provider | Date | Resources |
+  |---|---|---|
+  | Maple Street Family Medicine | 2024-09-12 | Encounter (annual physical); Condition "Essential hypertension"; MedicationStatement "amlodipine 5 mg daily"; Observation eGFR **96** |
+  | Northwind Workplace Health | 2025-03-04 | Observation blood pressure 138/88; Observation eGFR **88** |
+  | Lakeside Urgent Care | 2025-08-21 | Encounter (low back pain); MedicationStatement "ibuprofen 600 mg three times daily as needed"; Observation eGFR **81** |
+  | Northwind Workplace Health | 2026-03-10 | Observation blood pressure 146/92; Observation eGFR **72** |
+  | Lakeside Urgent Care | 2026-09-15 | Encounter (back pain follow-up); Observation eGFR **63** |
 
-  - eGFR Observations use LOINC `98979-8` (CKD-EPI 2021), unit `mL/min/1.73m2`, and a reference range with low = 60.
-  - No result falls below 60, so no lab would flag any single one. Combined, they show a 34% drop and a fall from category G1 to G2.
-  - The ibuprofen gives Dr. Rivera something concrete to act on.
+  - eGFR uses LOINC `98979-8`, unit `mL/min/1.73m2`, with a reference range whose low is 60. That's 13 resources in total.
 
-- [ ] **Step 1: Write the failing tests.**
-  - `ingest stores encrypted entries`: pushing 2 JWS gives `inserted:2`, and `readEntries` returns 2.
-  - **(Review Focus 4)** `re-push is idempotent`: the same push again gives `{ inserted:0, skipped:2 }`, and the entry count stays 2.
-  - `entry signed by another provider`: a request proven as Lakeside, carrying a JWS signed by Northwind, returns 400, and nothing is stored.
-  - `tampered JWS`: returns 400.
-  - `unlinked patient`: returns 409 `patient_not_linked`.
-  - `clinician certificate on provider route`: returns 403.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement the routes, the CLI, and the three seed files.
-- [ ] **Step 4:** Run the tests again. Expected: PASS. Then on the deployed site:
-  1. `invite` three times.
-  2. Enroll on the phone with the first invite, then redeem the other two.
-  3. `push` all three providers.
+- [ ] Manual check on the deployed site:
+  1. Create three invites.
+  2. Enroll on the phone with the first invite (opt in to Kidney Check), then redeem the other two.
+  3. Push all three providers.
 
-  Expected: the patient's record holds the 13 seed entries, plus the kidney Flag if Sam opted in.
-- [ ] **Step 5:** Commit `feat: provider ingestion, simulator, seed data`.
+  Expected: Sam's record holds 13 entries. **(Review Focus 4)** Pushing again gives `inserted:0`.
+- [ ] Commit `feat: provider simulator and seed data`.
 
-### Task 10: Kidney trend check (App lead, hours 8.5–10)
+### Task 10: Kidney Check example app (App lead, 1:00–2:00 AM)
 
-**Files:** Create `src/server/checks/kidneyTrend.ts`. Test: `tests/server/checks/kidneyTrend.test.ts`.
+**Files:** Create `EZEHR.Tools/Commands/KidneyCheckCommand.cs` and `Domain/KidneyRule.cs`. Test: `EZEHR.Tests/Domain/KidneyRuleTests.cs`.
 
 **Interfaces:**
-- Consumes: `authorize` with the service identity (Task 7), which is built from `config.serviceCertPem` via `verifyCertificateChain` and `resolveIdentity`; `readEntries`, `putEntry` (Task 6); `signEntry` (Task 3), using the service key. The service certificate comes from Task 3's `issue-org-certs.ts`, issued by EZCA.
+- Consumes: `NetworkClient` (Task 9); `GET /labs` and `POST /notes` (Task 6); `RecordSigner`.
 - Produces:
-  - `evaluateKidneyTrend(points: EgfrPoint[]): TrendResult`. Pure.
-  - `runKidneyCheck(db, wrapper, patientId: string, now: Date): Promise<TrendResult | null>`. Returns `null` when there is no active service grant. Otherwise it reads only Observations with LOINC `98979-8`, records a `kidney_check` audit event, and, when flagged, upserts one FHIR `Flag` entry with `sourceKey` `urn:service:kidney-trend|Flag/kidney-trend`.
-- The rule (KDIGO 2012 definitions):
-  - **Eligibility:** at least 3 points, spanning at least 365 days, from at least 2 distinct sources. Otherwise `flagged:false`.
-  - **Baseline:** the earliest point; **latest:** the most recent.
-  - **Categories:** G1 ≥ 90, G2 60–89, G3a 45–59, G3b 30–44, G4 15–29, G5 < 15.
-  - **`category_drop_25pct`:** the latest category is lower than the baseline category, and `percentDrop` ≥ 25.
-  - **`rapid_decline`:** otherwise, the least-squares slope is ≤ −5 per year.
-  - `percentDrop` is rounded to the nearest integer.
-- Flag copy (`copy.kidneyFlag(percent, years, sources)`): `"Your kidney function (eGFR) dropped ${percent}% over ${years} years across ${sources} providers. No single result was flagged. Consider asking a doctor to review it."`
+  - `static KidneyResult KidneyRule.Evaluate(IReadOnlyList<(DateOnly Date, double Egfr, string Source)> points)`, returning `(bool Flag, int PercentDrop, int ProviderCount)`.
+    - It flags when there are at least 2 points from at least 2 sources and the drop from the earliest to the latest point is more than 25%.
+    - `PercentDrop` is rounded.
+    - **That's the whole rule. No clinical guidelines.**
+  - `ezehr-tools kidney-check run <patientId>` connects with `kidney-check.pfx` and GETs the labs.
+    - When the rule flags, it POSTs a FHIR `Flag`: `code.text` = `Copy.KidneyNote(...)`, `id` = `kidney-check`, signed with the app's certificate.
+    - On 403, it prints that access was revoked.
 
-- [ ] **Step 1: Write the failing tests.**
-  - `seed series flags`: the 5 seed values give `flagged:true`, `reason:'category_drop_25pct'`, `percentDrop:34`, `sourceCount:3`, and `slopePerYear` < −5.
-  - `two points` give `flagged:false`.
-  - A 300-day span gives `flagged:false`.
-  - `single source` (all points from Lakeside) gives `flagged:false`.
-  - `stable` 95, 93, 96, 94 over 2 years gives `flagged:false`.
-  - `rapid without category change` (88, 80, 72, 64 over 2 years, all G2) gives `flagged:true`, `reason:'rapid_decline'`.
-  - `runner without grant` returns `null`, with no audit event and no Flag entry.
-  - **(Review Focus 4)** `runner twice`: exactly one Flag entry, and two `kidney_check` audit events.
-- [ ] **Step 2:** Run the tests. Expected: FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run the tests again. Expected: PASS.
-- [ ] **Step 5:** Commit `feat: kidney trend check`.
+- [ ] **Write failing tests:**
+  - `Seed_series_flags_34_percent_3_providers`.
+  - `Single_source_no_flag`.
+  - `Drop_25_exactly_no_flag`.
+  - `One_point_no_flag`.
+- [ ] Run (FAIL), implement, run (PASS).
+- [ ] Manual check: run it twice; there is exactly 1 note **(Review Focus 4)**. Revoke the grant in Sam's app and run again; the result is 403, and Sam's activity shows the denial.
+- [ ] Commit `feat: Kidney Check example app`.
 
-### Task 11: Share flow end to end (both people, hours 15–17)
+### Task 11: Patient UI (App lead, 2:00–6:00 AM)
 
-**Files:** Modify `src/web/patient/Share.tsx`, `src/web/patient/Activity.tsx`, `src/web/clinician/Redeem.tsx`. Test: `tests/server/routes/shareFlow.test.ts` (supertest integration).
+**Files:** Create `Pages/Patient/Home`, `Share`, `Activity`, `Grants`, `_ActivityPartial`.
 
-**Interfaces:**
-- Consumes: the Task 7 routes; `GET /api/patient/activity?after=<auditId>`, which returns `{ events: AuditEvent[], pendingRequests: Grant[], grants: Grant[] }`. Add this route in this task.
-- Polling: the patient app polls activity every 2 seconds. The clinician app polls `GET /api/clinician/grants/:id` every 2 seconds while the grant is `pending`.
-- **Patient side:**
-  - Share page: pick a duration (5 min, 1 h, 4 h, end of day), then show the QR code (`qrcode`) encoding `<origin>/clinician/redeem?code=XXXX-XXXX`, with the code printed underneath.
-  - When a pending request arrives, a full-screen prompt shows `copy.approvePrompt(...)` with Approve and Deny buttons.
-- **Clinician side:** the Redeem page scans with the webcam (`@zxing/browser`) or accepts a typed code. It shows "Waiting for Sam to approve…" until the grant is active, then routes to the record.
+These are checked manually on a phone. The UI isn't unit-tested, by choice; testing time goes to the access check and the crypto.
+- [ ] **Home:** the combined timeline grouped by date.
+  - Each entry shows `Copy.SignedBy(org)`, or `Copy.WrittenBy(...)` for clinician notes.
+  - The Kidney Check Flag shows as a card at the top.
+  - An "Export my record" button (Task 14).
+- [ ] **Share:**
+  - Pick a duration (5 min, 1 h, 4 h, end of day). The page shows the code as `XXXX-XXXX` in large type, with a QRCoder PNG of the code.
+  - The page polls `_ActivityPartial` every 2 s with htmx (`hx-get`, `hx-trigger="every 2s"`).
+  - A pending request shows a full-screen `Copy.ApprovePrompt(...)` with Approve and Deny buttons, which post to `GrantService.Decide`.
+- [ ] **Activity:** a live list, in plain language:
+  - `"Dr. Rivera, Riverside Primary Care, viewed your record · 2:14 PM"`
+  - `"Kidney Check read your lab results"`
+  - `Copy.BrokerBlocked(purpose)`, in red
+- [ ] **Grants:** each grant has a Revoke button. The app grant shows `Copy.AppGrantLine("Kidney Check", "lab results only", date)`. Clinician grants show "until 5:00 PM".
+- [ ] **Layout:** works at 390 px width, with tap targets of at least 44 px.
+- [ ] Commit `feat: patient home, share, activity, grants`.
 
-- [ ] **Step 1: Write the failing integration test** `full flow`:
-  1. Enroll and seed a patient (helpers from Tasks 8 and 9).
-  2. The patient creates an offer (5 min).
-  3. The clinician redeems it (proof): 201, pending.
-  4. A clinician record read returns 403 `grant_pending`.
-  5. The patient approves.
-  6. A clinician read returns 200, with 13 or more entries and a flagged trend.
-  7. Activity contains a granted `read_record` by "Dr. Rivera".
-  8. The patient revokes.
-  9. A clinician read returns 403 `grant_revoked`.
-  10. Activity contains that denial.
-- [ ] **Step 2:** Run the test. Expected: FAIL (the activity route is missing).
-- [ ] **Step 3:** Implement the activity route and the three pages.
-- [ ] **Step 4:** Run the test again. Expected: PASS. Then run the whole flow on the deployed site with the phone and the laptop.
-- [ ] **Step 5:** Commit `feat: QR share with patient approval`.
+### Task 12: Clinician UI and the share flow (Identity lead, 3:00–5:00 AM)
 
-### Task 12: Patient UI (App lead, hours 10–15)
+**Files:** Create `Pages/Clinician/Redeem`, `Wait`, `Record`, `AccessEnded`. Test: `EZEHR.Tests/Flows/ShareFlowTests.cs` (WebApplicationFactory with test authentication handlers for both schemes).
 
-**Files:** Create `src/web/patient/Home.tsx` and `src/web/patient/Activity.tsx`, plus components `Timeline`, `TrendChart`, `FlagCard`, `GrantList`. Add `GET /api/patient/record`, the patient's own read (session; not logged as a third-party access). It returns `{ entries: VerifiedEntry[], trend: TrendResult }`, with `trend` from `evaluateKidneyTrend` (Task 10) over the patient's own eGFR points.
+- [ ] **Write the failing integration test** `Full_share_flow`:
+  1. The patient creates an offer (5 min).
+  2. The clinician redeems it: pending.
+  3. Loading the record page redirects to Wait (`GrantPending`).
+  4. The patient approves.
+  5. The record page returns 200, with 13 or more entries and the Kidney Check note.
+  6. Activity contains Dr. Rivera's read.
+  7. The patient revokes.
+  8. The record page redirects to AccessEnded **(Review Focus 3)**.
+  9. Activity contains the denial.
+- [ ] Run (FAIL), implement, run (PASS).
+- [ ] **Redeem:** a code field. On submit it calls `GrantService.Redeem` with the clinician `Party` and goes to Wait.
+- [ ] **Wait:** polls the grant status with htmx every 2 s, showing "Waiting for Sam to approve…", then goes to Record.
+- [ ] **Record:**
+  - Every load calls `AccessGate.Authorize(ReadRecord)`.
+  - Header: "Sam Taylor · access until 5:00 PM".
+  - The combined timeline with badges, and the Kidney Check note at the top.
+  - A **note form** whose default text is "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed." It saves a FHIR `Communication` (`sender.display` = "Dr. Rivera, Riverside Primary Care", `sender.identifier` = the clinician's `SubjectUri`), signed with the **platform** certificate, through `AccessGate.Authorize(WriteNote)`.
+  - Any `GrantExpired`, `GrantRevoked`, `NoGrant` or `ShiftEnded` result redirects to AccessEnded.
+- [ ] **AccessEnded:** shows `Copy.AccessEnded`. A `ShiftEnded` result also shows a "Sign in again" link.
+- [ ] Commit `feat: clinician pages and share flow`.
 
-The acceptance checks are manual on a phone. The UI isn't unit-tested, by choice: time goes to the server tests that protect the security claims.
-- [ ] **Home:**
-  - The timeline is grouped by date. Each entry shows `copy.signedBy(orgName)`.
-  - `TrendChart` (recharts) plots the 5 eGFR points with a dashed line at 60, colored by source.
-  - `FlagCard` shows `copy.kidneyFlag(...)` and a "Share with a doctor" button that opens the Share page.
-- [ ] **Activity:**
-  - A live list of audit events in plain language: `"Dr. Rivera, Riverside Primary Care, viewed your record · 2:14 PM"`, `copy.brokerBlocked(purpose)`, `"Kidney trend check read your lab results"`.
-  - Denied events are shown in red.
-- [ ] **Active grants:** each has a Revoke button. The service grant shows `copy.optInLine(date)`. Clinician grants show `"until 5:00 PM"`.
-- [ ] **Layout:** works at 390px width; no horizontal scroll; tap targets at least 44px.
-- [ ] Commit `feat: patient home, trend, activity`.
+### Task 13: Data broker, the Particle moment (Identity lead, 5:00–6:00 AM)
 
-### Task 13: Clinician UI (Identity lead, hours 11.5–15)
+**Files:** Create `EZEHR.Tools/Commands/BrokerCommand.cs`.
 
-**Files:** Create `src/web/clinician/Record.tsx`, plus a "write plan" form component.
+- [ ] `ezehr-tools broker request <patientId> --cert none|self` calls `GET /api/network/patients/{id}/record?purpose=treatment`. With `self` it uses `.pki/broker.pfx`. It prints the status code and body verbatim, in large console text for the video.
+- [ ] Manual check: run both modes. Expected: two 401s, and two red `Copy.BrokerBlocked("treatment")` lines appear live on Sam's phone. The integration test from Task 6 covers the server side.
+- [ ] Commit `feat: unverified broker demo`.
 
-- [ ] **Record page:** the combined timeline with `copy.signedBy` badges, the same `TrendChart`, and the `Flag` at the top. Header: `"Sam Taylor · access until 5:00 PM"`.
-- [ ] **Write plan:** a form that creates a FHIR `ServiceRequest`. Default text: code text "Repeat kidney function panel and urine albumin-to-creatinine ratio"; note "Stop regular ibuprofen. Refer to nephrology if decline is confirmed." The browser signs it with `signEntry` and the clinician's key, then POSTs it via `signedFetch`. After saving, it shows up in Sam's timeline as `"Signed by Riverside Primary Care ✓"`.
-- [ ] **(Review Focus 3) Access-ended screen:** any 403 with `grant_expired`, `grant_revoked` or `no_grant` replaces the record with `copy.accessEnded`: `"Sam's access for you has ended. Ask Sam to share again."` Manual check: revoke from the phone while the record is open. The next refresh (or the next 10-second background poll on this page) shows the screen, with no blank page and no console error.
-- [ ] **Certificate expired** (Task 4's `getClinicianCredential` returns `null`): redirect to sign-in.
-- [ ] Commit `feat: clinician record view and signed plan`.
+### Task 14: Export my whole record (App lead, 5:00–6:00 AM)
 
-### Task 14: Data broker page, the Particle moment (Identity lead, hours 15–16)
+**Files:** Modify `Pages/Patient/Home` (an export handler). Test: `EZEHR.Tests/Flows/ExportTests.cs`.
 
-**Files:** Create `src/web/broker/BrokerPage.tsx`. Test: `tests/server/routes/broker.test.ts`.
+**Produces:** a FHIR R4 `Bundle` with `type: "collection"`, plus one `Provenance` per entry:
+- `target` → the resource
+- `recorded` = `SignedAt`
+- `agent[0].who.display` = `"{DisplayName}, {OrgName}"`
+- `signature[0]`: `sigFormat` `"application/jose"`, `data` = base64 of the JWS, `type` = the ASTM origin-signature code `1.2.840.10065.1.12.1.1`
 
-- [ ] **Step 1: Write the failing tests.**
-  - `no certificate`: GET of the record with `X-Purpose: treatment` and no proof returns 401 `no_certificate`. The patient activity contains `copy.brokerBlocked('treatment')`.
-  - `self-signed certificate`: a proof signed by a certificate from a broker-minted root returns 401 `untrusted_certificate`, and is logged the same way.
-- [ ] **Step 2:** Run the tests. Expected: PASS, because Task 7 already logs proof failures. These tests pin the demo path. If either fails, the bug is in how Task 7's routes pass `req.proofFailure` to `authorize`; fix it there.
-- [ ] **Step 3:** Build the page.
-  - It's styled as a generic "HealthData Exchange API console": a patient ID field prefilled from `?patient=`, and purpose "treatment."
-  - Two buttons, "Request record" and "Request with our own certificate." The second mints a throwaway root and leaf in the browser.
-  - It shows the server's JSON response verbatim.
-- [ ] **Step 4:** Run the tests again. Expected: PASS. Manual: press both buttons and watch two red lines appear on Sam's phone.
-- [ ] **Step 5:** Commit `feat: unverified requester demo`.
+The download is named `sam-taylor-record.json`.
 
-### Task 15: Export my whole record (App lead, hours 15–16)
+- [ ] Test `Export_bundle_has_provenance_per_entry_and_signatures_verify`: Provenance count = resource count, and every `signature.data` decodes to a JWS that `RecordVerifier` accepts. Run (FAIL), implement, run (PASS).
+- [ ] Commit `feat: FHIR export with signed provenance`.
 
-**Files:** Modify `src/server/routes/patient.ts` to add `GET /api/patient/export`. Test: `tests/server/routes/export.test.ts`.
+### Task 15: Freeze, deploy, rehearse, record, submit (both, 8:00 AM–1:00 PM)
 
-**Produces:** a FHIR R4 `Bundle`:
-- `type:'collection'`, with each verified resource as an entry
-- plus one `Provenance` per entry:
-  - `target` → the resource
-  - `recorded` = `signedAt`
-  - `agent[0].who.display` = `"<displayName>, <orgName>"`
-  - `signature[0].sigFormat` = `'application/jose'`, `signature[0].data` = base64 of the JWS, `signature[0].type` = the ASTM origin signature code `1.2.840.10065.1.12.1.1`
-- served as a download named `sam-taylor-record.json`
+- [ ] **8:00 AM feature freeze.** `dotnet test` must be all green, then deploy. Have a fresh Claude Code session review the whole branch, focused on the access check, certificate handling and the copy rules. Fix only real defects.
+- [ ] **Demo reset script** (`EZEHR.Tools`, command `demo reset`):
+  1. Delete the database on the server (a protected admin endpoint, or the Kudu console).
+  2. Create 3 invites and print the URLs.
+  3. After phone enrollment, push all 3 providers and run Kidney Check.
 
-- [ ] Test `export bundle`: the bundle has 13 or more resources, an equal number of Provenance entries, and every `Provenance.signature[0].data` decodes to a JWS that `verifyEntry` accepts. Run (FAIL), implement, run (PASS). Add an "Export my record" button on Home. Commit `feat: FHIR export with signed provenance`.
-
-### Task 16: Freeze, deploy, rehearse, record, submit (both, hours 17–24)
-
-- [ ] **Hour 17: feature freeze.** Run `npm test`; everything must pass. Deploy. Ask a fresh Claude Code session for a whole-branch review focused on the access check, proofs, and copy rules. Fix only real defects.
-- [ ] **Demo reset script** `tools/demo-reset.ts`:
-  1. Back up and clear `app.db`.
-  2. Create three invites.
-  3. Print the enrollment URLs.
-  4. After phone enrollment, push the three seed files.
-
-  Rehearse the reset twice. It must take under 5 minutes.
+  Rehearse it twice. It must take under 5 minutes.
 - [ ] **Video plan (about 5:00):**
 
   | Time | Scene |
   |---|---|
-  | 0:00–0:35 | Problem: records scattered, so slow problems are missed. Epic blocked "treatment" requests it couldn't trust (Particle, 2024). Pitch line. |
-  | 0:35–1:20 | Sam's phone: passkey sign-in; timeline with "Signed by" badges; the trend chart and flag ("no single result was flagged"). |
-  | 1:20–2:30 | Share: Sam's QR code; Dr. Rivera's passkey Entra sign-in; scan; Sam approves; combined record; Dr. Rivera writes a signed plan (stop ibuprofen, repeat labs). |
-  | 2:30–3:10 | The broker page: both attempts blocked; the red lines appear live on Sam's phone. |
-  | 3:10–3:40 | Sam revokes; the doctor's screen shows "access ended"; export shows signed provenance. |
-  | 3:40–4:40 | Architecture slide: "EZSSH for health records." Entra sign-in → EZCA-issued certificate, limited to a 10-hour shift → certificate-bound proofs → one access check → Key Vault envelope encryption; no standing access, every read logged. **Every certificate in the demo was issued by EZCA.** |
+  | 0:00–0:35 | The problem: records are scattered, so slow problems are missed, and Epic blocked "treatment" requests it couldn't trust (Particle, 2024). Pitch line. |
+  | 0:35–1:20 | Sam's phone: passkey sign-in; the combined timeline with "Signed by" badges; the Kidney Check note and its revocable grant ("apps on an open platform"). |
+  | 1:20–2:30 | Share: Sam's code; Dr. Rivera signs in to Entra by **tapping the security key**; enters the code; Sam approves; the combined record; Dr. Rivera writes a note. |
+  | 2:30–3:10 | The broker: no certificate, then a self-made certificate; both blocked; red lines appear live on Sam's phone. |
+  | 3:10–3:40 | Sam revokes; the doctor's page shows "access ended"; the export shows signed provenance. |
+  | 3:40–4:40 | Architecture slide: people use passkeys and security keys; organizations and apps use **EZCA certificates** over mutual TLS; one access check; Key Vault envelope encryption; no standing access, every attempt logged. |
   | 4:40–5:00 | Close: pitch line; what's next (break-glass, Verified ID recovery, more hospitals as trusted tenants). |
-- [ ] **Q&A prep.** Rehearse answers to the "Honest limits" in the spec's section 10. Add one more: "Why no revocation checks? Clinician access is cut off after a 10-hour shift by our server policy, and the certificate itself expires after a day. Short lifetimes are the revocation strategy, the same as EZSSH. EZCA also publishes a CRL if a relying party wants one."
-- [ ] **Submission write-up:** problem, solution, the architecture diagram, how to run it, the honest limits, and what's next. **Submit with at least 1 hour of buffer.**
 
-### Stretch goals (only if ahead at hour 15, in this order; each must fit in the video)
+- [ ] **Q&A prep:** rehearse the spec's section 10 "Honest limits."
+- [ ] **Submission write-up:** problem, solution, an architecture diagram, how to run it, the honest limits, and what's next. **Submit by 1:00 PM.**
 
-- **S1 Break-glass:**
-  - `POST /api/clinician/patients/:id/break-glass { reason }` (proof required) creates a 1-hour grant without approval. It records an audit event with `action:'read_record'`, and the patient's activity shows it marked `"Emergency access"`.
-  - Test: the grant is created without approval; the audit reason is recorded.
-- **S2 Verified ID recovery** (the spec's stretch goal 2): a lost phone is recovered via an Entra Verified ID presentation, followed by registering a new passkey.
-- **S3 Verified ID for a clinician's license** (the spec's stretch goal 3): the clinic issues a "licensed clinician" credential, and the certificate endpoint requires it.
-- **S4 Conditional Access** (added during planning; needs the P2 trial; under 30 minutes): a policy requiring the phishing-resistant MFA authentication strength for this app. Show it in one slide.
+### Stretch goals (only if ahead at 6:00 AM; in this order; each must fit in the video)
 
-(The EZCA adapter used to be stretch S2. It is now core Task 3b.)
+- **S1 Conditional Access** (needs the P2 trial; about 30 minutes): a policy requiring the "phishing-resistant MFA" authentication strength for the EZEHR app. Show it on one slide.
+- **S2 Break-glass:** an "Emergency access" button for a verified clinician creates a 1-hour grant without patient approval. It requires a reason and writes an audit event, and Sam's activity marks it "Emergency access."
+- **S3 EZCA certificate on the security key for Entra certificate-based sign-in.** Generate the key on the device with `ykman piv`, have EZCA issue the certificate, upload EZCA's CA to Entra's certificate authorities, and enable certificate-based authentication. No app code changes.
+- **S4 Verified ID recovery:** recover a lost phone with an Entra Verified ID presentation, then register a new passkey.
