@@ -1,5 +1,7 @@
 # Verified Health Record Implementation Plan
 
+> **OUTDATED:** this plan predates the spec revision (C# / Razor Pages stack, certificates for organizations with sessions for people, and the Kidney Check example app). A C# rewrite is in progress; follow the spec for now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Hackathon rule:** this plan was written the night before the event. It contains decisions, interfaces, and test cases, but **no implementation code**: most hackathons ban code written before the clock starts. Tests are given as named cases with exact inputs and expected results, to be written as Vitest tests during the event.
