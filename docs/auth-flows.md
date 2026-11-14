@@ -196,7 +196,7 @@ sequenceDiagram
   En-->>Br: ID token signed by Microsoft
   Br->>Web: POST /signin-oidc with the ID token
   Web->>Web: Microsoft.Identity.Web checks signature, issuer, audience
-  Web->>Web: ClinicianAuth checks trusted tenant and Clinician role
+  Web->>Web: CallerManager checks trusted tenant and Clinician role
   Web-->>Br: clinician cookie, 10 hours, no renewal
 ```
 
@@ -264,7 +264,7 @@ sequenceDiagram
   participant KV as Key Vault
   participant Ph as Sam's phone
   Doc->>Pg: GET record, with the clinician cookie
-  Pg->>Pg: ClinicianAuth turns the cookie into VerifiedCaller with session start time
+  Pg->>Pg: CallerManager turns the cookie into VerifiedCaller with session start time
   Pg->>G: Authorize ReadRecord for Sam
   G->>G: shift under 10 h, grant found, Active, not expired, scope Full
   G->>G: audit, Dr. Rivera viewed your record
@@ -348,23 +348,23 @@ Expiry stops **future** reads. It can't erase what someone already saw, which is
 ```mermaid
 flowchart TB
   subgraph Doors
-    CS["IClientCertificateSource<br/>reads X-ARR-ClientCert"]
-    CR["CallerResolver"]
-    PK["PatientPasskeys<br/>Fido2"]
-    CA["ClinicianAuth<br/>Entra claims"]
+    CS["IClientCertificateService<br/>reads X-ARR-ClientCert"]
+    CR["CallerManager.FromCertificate"]
+    PK["EnrollmentManager<br/>IFido2Service"]
+    CA["CallerManager.FromClinician<br/>Entra claims"]
   end
   subgraph Trust
     CV["CertificateValidator<br/>EZCA root and intermediates"]
     OD["OrgDirectory<br/>CN to Party"]
   end
   subgraph Core
-    G{{"AccessGate"}}
-    GS["GrantService"]
-    AL[("AuditLog")]
+    G{{"AccessManager"}}
+    GS["GrantManager"]
+    AL[("AuditManager")]
   end
   subgraph Data
-    RS["RecordStore"]
-    KW["IKeyWrapper<br/>Key Vault"]
+    RS["RecordManager"]
+    KW["IKeyWrapService<br/>Key Vault"]
     RV["RecordVerifier"]
     RSG["RecordSigner"]
   end
@@ -386,20 +386,20 @@ flowchart TB
 
 | Component | Called by | Takes | Gives back |
 |---|---|---|---|
-| `IClientCertificateSource` | Network API | the HTTP request | the caller's certificate, or nothing |
-| `CertificateValidator` | `CallerResolver`, `RecordVerifier` | a certificate (+ chain) and a time | OK, `UntrustedCertificate`, or `CertificateExpired` (2-minute clock-skew tolerance) |
-| `OrgDirectory` | `CallerResolver`, `RecordVerifier` | the certificate's CN | a `Party` (provider, app, or platform), or nothing |
-| `CallerResolver` | Network API | a certificate or nothing | `VerifiedCaller(party)` or `UnverifiedCaller(reason)` |
-| `PatientPasskeys` | patient pages | WebAuthn responses | a patient cookie (`patient_id`) |
-| `ClinicianAuth` | clinician pages | Entra claims from the cookie | `VerifiedCaller(clinician, sessionStartedAt)`, or the `NotAClinician` / `UntrustedOrg` message |
-| `GrantService` | patient pages, clinician pages, gate | offers, redemptions, approvals, revocations | grants |
-| **`AccessGate`** | **every read and write** | patient, action, `Caller`, claimed purpose | allowed + grant, or a `DenyReason`. **Always exactly one audit event** |
-| `AuditLog` | gate; patient activity page | events | the patient's activity list |
-| `RecordStore` | only code that the gate has allowed, plus the patient's own pages | patient ID | decrypted signed entries; unwraps the key through Key Vault on every call |
-| `IKeyWrapper` | `RecordStore` | a patient data key | the wrapped or unwrapped key (Key Vault, `RSA-OAEP-256`) |
+| `IClientCertificateService` | `NetworkController` | the HTTP request | the caller's certificate, or nothing |
+| `CertificateValidator` | `CallerManager`, `RecordVerifier` | a certificate (+ chain) and a time | OK, `UntrustedCertificate`, or `CertificateExpired` (2-minute clock-skew tolerance) |
+| `OrgDirectory` | `CallerManager`, `RecordVerifier` | the certificate's CN | a `Party` (provider, app, or platform), or nothing |
+| `CallerManager.FromCertificate` | `NetworkController` | a certificate or nothing | `VerifiedCaller(party)` or `UnverifiedCaller(reason)` |
+| `EnrollmentManager` | patient pages, `PatientPasskeyController` | WebAuthn responses | a patient cookie (`patient_id`) |
+| `CallerManager.FromClinician` | clinician pages | Entra claims from the cookie | `VerifiedCaller(clinician, sessionStartedAt)`, or the `NotAClinician` / `UntrustedOrg` message |
+| `GrantManager` | patient pages, clinician pages, gate | offers, redemptions, approvals, revocations | grants |
+| **`AccessManager`** | **every read and write** | patient, action, `Caller`, claimed purpose | allowed + grant, or a `DenyReason`. **Always exactly one audit event** |
+| `AuditManager` | gate; patient activity page | events | the patient's activity list |
+| `RecordManager` | `NetworkController`, clinician and patient pages | patient ID and `Caller` | verified signed entries, after asking the gate; unwraps the key through Key Vault on every call |
+| `IKeyWrapService` | `RecordManager` | a patient data key | the wrapped or unwrapped key (Key Vault, `RSA-OAEP-256`) |
 | `RecordSigner` | tools; the clinician note form (platform certificate) | a FHIR resource and a certificate with its key | a JWS with the certificate attached |
 | `RecordVerifier` | ingest, reads, export | a JWS | `VerifiedEntry` with the signer `Party` and the signing time |
-| `ICertificateAuthority` (`EzcaCa`, `LocalCa`) | **only the `certs` tool** (setup time) | a CSR and a subject name | a certificate and chain |
+| `ICertificateAuthorityService` (`EzcaCertificateAuthorityService`, `LocalCertificateAuthorityService`) | **only the `certs` tool** (setup time) | a CSR and a subject name | a certificate and chain |
 
 ---
 

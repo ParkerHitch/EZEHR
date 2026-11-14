@@ -2,139 +2,226 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
-using EZEHR.Access;
-using EZEHR.Domain;
-using EZEHR.Records;
-using EZEHR.Security.Pki;
+using EZEHR.Managers;
+using EZEHR.Models;
+using EZEHR.Services;
+using EZEHR.Tests.Data;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EZEHR.Tests.Api;
 
-public class NetworkAccessTests : IDisposable
+public class NetworkAccessTests : IAsyncLifetime
 {
-    private readonly EzehrFactory app = new();
-    private readonly X509Certificate2 maple;
-    private readonly X509Certificate2 kidney;
-    private readonly Guid sam;
+    private EzehrFactory _app = null!;
+    private X509Certificate2 _maple = null!;
+    private X509Certificate2 _kidney = null!;
+    private Guid _sam;
 
-    public NetworkAccessTests()
+    public async Task InitializeAsync()
     {
-        maple = app.Pki.Issue("maple.providers.ezehr");
-        kidney = app.Pki.Issue("kidney-check.apps.ezehr");
-        sam = app.With(sp =>
+        _app = new EzehrFactory(await SqlServer.CreateDatabaseAsync());
+        _maple = _app.Pki.Issue(OrgDirectory.ProviderCn("maple"));
+        _kidney = _app.Pki.Issue(OrgDirectory.KidneyCheckCn);
+        _sam = await _app.WithAsync(async services =>
         {
-            var store = sp.GetRequiredService<RecordStore>();
-            var id = store.CreatePatientAsync("Sam Taylor").GetAwaiter().GetResult();
-            store.PutAsync(id, "urn:provider:maple|Observation/egfr-1", "Observation", Sign(maple, Lab("egfr-1", "98979-8", 96))).GetAwaiter().GetResult();
-            store.PutAsync(id, "urn:provider:maple|Observation/bp-1", "Observation", Sign(maple, Lab("bp-1", "85354-9", 138))).GetAwaiter().GetResult();
-            store.PutAsync(id, "urn:provider:maple|Condition/htn", "Condition",
-                Sign(maple, JsonSerializer.SerializeToElement(new { resourceType = "Condition", id = "htn" }))).GetAwaiter().GetResult();
-            return id;
+            RecordManager records = services.GetRequiredService<RecordManager>();
+            Guid patientId = await records.CreatePatientAsync("Sam Taylor");
+            await records.PutAsync(
+                patientId,
+                "urn:provider:maple|Observation/egfr-1",
+                "Observation",
+                Sign(_maple, Lab("egfr-1", "98979-8", 96))
+            );
+            await records.PutAsync(
+                patientId,
+                "urn:provider:maple|Observation/bp-1",
+                "Observation",
+                Sign(_maple, Lab("bp-1", "85354-9", 138))
+            );
+            JsonElement condition = JsonSerializer.SerializeToElement(
+                new { resourceType = "Condition", id = "htn" }
+            );
+            await records.PutAsync(
+                patientId,
+                "urn:provider:maple|Condition/htn",
+                "Condition",
+                Sign(_maple, condition)
+            );
+            return patientId;
         });
     }
 
-    public void Dispose() => app.Dispose();
-
-    private static JsonElement Lab(string id, string loinc, int value) => JsonSerializer.SerializeToElement(new
+    public async Task DisposeAsync()
     {
-        resourceType = "Observation", id, status = "final",
-        code = new { coding = new[] { new { system = "http://loinc.org", code = loinc } } },
-        valueQuantity = new { value },
-    });
+        await _app.DisposeAsync();
+        await _app.Database.DisposeAsync();
+    }
 
-    private string Sign(X509Certificate2 cert, JsonElement resource) => RecordSigner.Sign(resource, cert, [], app.Pki.Clock.GetUtcNow());
-
-    private JsonElement Note(string id) => JsonSerializer.SerializeToElement(new
+    private static JsonElement Lab(string id, string loinc, int value)
     {
-        resourceType = "Communication", id, status = "completed",
-        sender = new { display = "Kidney Check" },
-        payload = new[] { new { contentString = Copy.KidneyNote(34, 3) } },
-    });
+        return JsonSerializer.SerializeToElement(
+            new
+            {
+                resourceType = "Observation",
+                id,
+                status = "final",
+                code = new { coding = new[] { new { system = "http://loinc.org", code = loinc } } },
+                valueQuantity = new { value },
+            }
+        );
+    }
 
-    private IReadOnlyList<AuditEvent> Events() => app.With(sp => sp.GetRequiredService<AuditLog>().List(sam));
+    private static JsonElement Note(string id)
+    {
+        return JsonSerializer.SerializeToElement(
+            new
+            {
+                resourceType = "Communication",
+                id,
+                status = "completed",
+                sender = new { display = "Kidney Check" },
+                payload = new[] { new { contentString = Copy.KidneyNote(34, 3) } },
+            }
+        );
+    }
 
-    private void GrantKidneyCheck() => app.With(sp => sp.GetRequiredService<GrantService>().CreateAppGrant(sam, OrgDirectory.Known["kidney-check.apps.ezehr"]));
+    private string Sign(X509Certificate2 certificate, JsonElement resource)
+    {
+        return RecordSigner.Sign(resource, certificate, [], _app.Pki.Clock.GetUtcNow());
+    }
+
+    private Task<IReadOnlyList<AuditEvent>> EventsAsync()
+    {
+        return _app.WithAsync(services =>
+            services.GetRequiredService<AuditManager>().ListAsync(_sam)
+        );
+    }
+
+    private Task<Grant> GrantKidneyCheckAsync()
+    {
+        return _app.WithAsync(services =>
+            services
+                .GetRequiredService<GrantManager>()
+                .CreateAppGrantAsync(_sam, OrgDirectory.Known[OrgDirectory.KidneyCheckCn])
+        );
+    }
 
     [Fact]
     public async Task Broker_no_cert_on_record_endpoint_logs_blocked_event()
     {
-        var res = await app.Client().GetAsync($"/api/network/patients/{sam}/record?purpose=treatment");
-        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
-        var e = Assert.Single(Events());
-        Assert.Null(e.Actor);
-        Assert.Equal("treatment", e.ClaimedPurpose);
-        Assert.Equal(DenyReason.NoCertificate, e.Reason);
-        Assert.Equal("ReadRecord", e.Action);
+        HttpResponseMessage response = await _app.Client()
+            .GetAsync($"/api/network/patients/{_sam}/record?purpose=treatment");
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        AuditEvent logged = Assert.Single(await EventsAsync());
+        Assert.Null(logged.Actor);
+        Assert.Equal("treatment", logged.ClaimedPurpose);
+        Assert.Equal(DenyReason.NoCertificate, logged.Reason);
+        Assert.Equal("ReadRecord", logged.Action);
 
-        var broker = TestPki.SelfSigned("exchange.broker.example", app.Pki.Clock.GetUtcNow());
-        res = await app.Client(broker).GetAsync($"/api/network/patients/{sam}/record?purpose=treatment");
-        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
-        Assert.Equal(DenyReason.UntrustedCertificate, Events()[^1].Reason);
-        Assert.Equal(Copy.BrokerBlocked("treatment"), Copy.BrokerBlocked(Events()[^1].ClaimedPurpose!));
+        X509Certificate2 broker = TestPki.SelfSigned(
+            "exchange.broker.example",
+            _app.Pki.Clock.GetUtcNow()
+        );
+        response = await _app.Client(broker)
+            .GetAsync($"/api/network/patients/{_sam}/record?purpose=treatment");
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        AuditEvent blocked = (await EventsAsync())[^1];
+        Assert.Equal(DenyReason.UntrustedCertificate, blocked.Reason);
+        Assert.Equal(Copy.BrokerBlocked("treatment"), Copy.BrokerBlocked(blocked.ClaimedPurpose!));
     }
 
     [Fact]
     public async Task App_without_grant_403_and_logged()
     {
-        var res = await app.Client(kidney).GetAsync($"/api/network/patients/{sam}/labs");
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
-        Assert.Equal("NoGrant", (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
-        var e = Assert.Single(Events());
-        Assert.Equal("urn:app:kidney-check", e.Actor!.SubjectUri);
-        Assert.Equal(DenyReason.NoGrant, e.Reason);
+        HttpResponseMessage response = await _app.Client(_kidney)
+            .GetAsync($"/api/network/patients/{_sam}/labs");
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("NoGrant", body.GetProperty("error").GetString());
+        AuditEvent logged = Assert.Single(await EventsAsync());
+        Assert.Equal("urn:app:kidney-check", logged.Actor!.SubjectUri);
+        Assert.Equal(DenyReason.NoGrant, logged.Reason);
     }
 
     [Fact]
     public async Task App_with_grant_reads_only_egfr_labs()
     {
-        GrantKidneyCheck();
-        var res = await app.Client(kidney).GetAsync($"/api/network/patients/{sam}/labs");
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
-        var entry = Assert.Single(body.GetProperty("entries").EnumerateArray());
+        await GrantKidneyCheckAsync();
+        HttpResponseMessage response = await _app.Client(_kidney)
+            .GetAsync($"/api/network/patients/{_sam}/labs");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        JsonElement entry = Assert.Single(body.GetProperty("entries").EnumerateArray());
         Assert.Equal("egfr-1", entry.GetProperty("resource").GetProperty("id").GetString());
-        Assert.Equal("urn:provider:maple", entry.GetProperty("signer").GetProperty("subjectUri").GetString());
+        Assert.Equal(
+            "urn:provider:maple",
+            entry.GetProperty("signer").GetProperty("subjectUri").GetString()
+        );
         Assert.False(string.IsNullOrEmpty(entry.GetProperty("jws").GetString()));
-        Assert.True(Assert.Single(Events()).Granted);
+        Assert.True(Assert.Single(await EventsAsync()).Granted);
 
-        var record = await app.Client(kidney).GetAsync($"/api/network/patients/{sam}/record");
+        HttpResponseMessage record = await _app.Client(_kidney)
+            .GetAsync($"/api/network/patients/{_sam}/record");
         Assert.Equal(HttpStatusCode.Forbidden, record.StatusCode);
-        Assert.Equal(DenyReason.ScopeDenied, Events()[^1].Reason);
+        Assert.Equal(DenyReason.ScopeDenied, (await EventsAsync())[^1].Reason);
     }
 
     [Fact] // Review Focus 4
     public async Task App_note_is_idempotent_and_must_be_signed_by_caller()
     {
-        GrantKidneyCheck();
-        var client = app.Client(kidney);
-        var first = await client.PostAsJsonAsync($"/api/network/patients/{sam}/notes", new { jws = Sign(kidney, Note("kidney-note-1")) });
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.True((await first.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("inserted").GetBoolean());
-        var second = await client.PostAsJsonAsync($"/api/network/patients/{sam}/notes", new { jws = Sign(kidney, Note("kidney-note-1")) });
-        Assert.False((await second.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("inserted").GetBoolean());
+        await GrantKidneyCheckAsync();
+        HttpClient client = _app.Client(_kidney);
+        string notesUrl = $"/api/network/patients/{_sam}/notes";
 
-        var forged = await client.PostAsJsonAsync($"/api/network/patients/{sam}/notes", new { jws = Sign(maple, Note("kidney-note-2")) });
+        HttpResponseMessage first = await client.PostAsJsonAsync(
+            notesUrl,
+            new { jws = Sign(_kidney, Note("kidney-note-1")) }
+        );
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        JsonElement firstBody = await first.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(firstBody.GetProperty("inserted").GetBoolean());
+
+        HttpResponseMessage second = await client.PostAsJsonAsync(
+            notesUrl,
+            new { jws = Sign(_kidney, Note("kidney-note-1")) }
+        );
+        JsonElement secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(secondBody.GetProperty("inserted").GetBoolean());
+
+        HttpResponseMessage forged = await client.PostAsJsonAsync(
+            notesUrl,
+            new { jws = Sign(_maple, Note("kidney-note-2")) }
+        );
         Assert.Equal(HttpStatusCode.BadRequest, forged.StatusCode);
 
-        var notNote = await client.PostAsJsonAsync($"/api/network/patients/{sam}/notes", new { jws = Sign(kidney, Lab("egfr-9", "98979-8", 10)) });
+        HttpResponseMessage notNote = await client.PostAsJsonAsync(
+            notesUrl,
+            new { jws = Sign(_kidney, Lab("egfr-9", "98979-8", 10)) }
+        );
         Assert.Equal(HttpStatusCode.BadRequest, notNote.StatusCode);
 
-        var notes = await app.With(sp => sp.GetRequiredService<RecordStore>().ReadAsync(sam, t => t == "Communication"));
+        IReadOnlyList<StoredEntry> notes = await _app.WithAsync(services =>
+            services
+                .GetRequiredService<RecordManager>()
+                .ReadAsync(_sam, resourceType => resourceType == "Communication")
+        );
         Assert.Single(notes);
     }
 
     [Fact]
     public async Task Provider_without_grant_cannot_read_record()
     {
-        var res = await app.Client(maple).GetAsync($"/api/network/patients/{sam}/record?purpose=treatment");
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
-        Assert.Equal(DenyReason.NoGrant, Assert.Single(Events()).Reason);
+        HttpResponseMessage response = await _app.Client(_maple)
+            .GetAsync($"/api/network/patients/{_sam}/record?purpose=treatment");
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(DenyReason.NoGrant, Assert.Single(await EventsAsync()).Reason);
     }
 
     [Fact]
     public async Task Malformed_patient_id_is_404_not_logged()
     {
-        var res = await app.Client(kidney).GetAsync("/api/network/patients/not-a-guid/labs");
-        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+        HttpResponseMessage response = await _app.Client(_kidney)
+            .GetAsync("/api/network/patients/not-a-guid/labs");
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }

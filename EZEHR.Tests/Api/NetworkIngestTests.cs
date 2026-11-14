@@ -3,60 +3,118 @@ using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Dapper;
-using EZEHR.Access;
-using EZEHR.Domain;
-using EZEHR.Records;
-using EZEHR.Security.Pki;
-using Microsoft.Data.Sqlite;
+using EZEHR.Managers;
+using EZEHR.Models;
+using EZEHR.Services;
+using EZEHR.Tests.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EZEHR.Tests.Api;
 
-public class NetworkIngestTests : IDisposable
+public class NetworkIngestTests : IAsyncLifetime
 {
-    private readonly EzehrFactory app = new();
-    private readonly X509Certificate2 maple;
-    private readonly X509Certificate2 lakeside;
-    private readonly Guid sam;
+    private EzehrFactory _app = null!;
+    private X509Certificate2 _maple = null!;
+    private X509Certificate2 _lakeside = null!;
+    private Guid _sam;
 
-    public NetworkIngestTests()
+    public async Task InitializeAsync()
     {
-        maple = app.Pki.Issue("maple.providers.ezehr");
-        lakeside = app.Pki.Issue("lakeside.providers.ezehr");
-        sam = app.With(sp => sp.GetRequiredService<RecordStore>().CreatePatientAsync("Sam Taylor").GetAwaiter().GetResult());
-        app.With(sp => sp.GetRequiredService<SqliteConnection>().Execute(
-            "INSERT INTO provider_links(patient_id, provider_uri, provider_patient_id) VALUES (@p, 'urn:provider:maple', 'MSF-0932')",
-            new { p = sam.ToString() }));
+        _app = new EzehrFactory(await SqlServer.CreateDatabaseAsync());
+        _maple = _app.Pki.Issue(OrgDirectory.ProviderCn("maple"));
+        _lakeside = _app.Pki.Issue(OrgDirectory.ProviderCn("lakeside"));
+        _sam = await _app.WithAsync(services =>
+            services.GetRequiredService<RecordManager>().CreatePatientAsync("Sam Taylor")
+        );
+        await using SqlConnection connection = await _app.Database.Db.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO provider_links(patient_id, provider_uri, provider_patient_id)
+            VALUES (@patientId, 'urn:provider:maple', 'MSF-0932')
+            """,
+            new { patientId = _sam }
+        );
     }
 
-    public void Dispose() => app.Dispose();
+    public async Task DisposeAsync()
+    {
+        await _app.DisposeAsync();
+        await _app.Database.DisposeAsync();
+    }
 
-    private string Signed(X509Certificate2 cert, string id, int egfr) => RecordSigner.Sign(
-        JsonSerializer.SerializeToElement(new
-        {
-            resourceType = "Observation", id, status = "final",
-            code = new { coding = new[] { new { system = "http://loinc.org", code = "98979-8" } } },
-            valueQuantity = new { value = egfr },
-        }),
-        cert, [], app.Pki.Clock.GetUtcNow());
+    private string Signed(X509Certificate2 certificate, string id, int egfr)
+    {
+        JsonElement lab = JsonSerializer.SerializeToElement(
+            new
+            {
+                resourceType = "Observation",
+                id,
+                status = "final",
+                code = new
+                {
+                    coding = new[] { new { system = "http://loinc.org", code = "98979-8" } },
+                },
+                valueQuantity = new { value = egfr },
+            }
+        );
+        return RecordSigner.Sign(lab, certificate, [], _app.Pki.Clock.GetUtcNow());
+    }
 
-    private Task<HttpResponseMessage> Push(X509Certificate2? cert, string patientId, params string[] entries) =>
-        app.Client(cert).PostAsJsonAsync("/api/network/records", new { providerPatientId = patientId, entries });
+    private Task<HttpResponseMessage> PushAsync(
+        X509Certificate2? certificate,
+        string providerPatientId,
+        params string[] entries
+    )
+    {
+        return _app.Client(certificate)
+            .PostAsJsonAsync("/api/network/records", new { providerPatientId, entries });
+    }
 
-    private int EntryCount() => app.With(sp => sp.GetRequiredService<SqliteConnection>().ExecuteScalar<int>("SELECT COUNT(*) FROM entries"));
+    private async Task<int> EntryCountAsync()
+    {
+        await using SqlConnection connection = await _app.Database.Db.OpenAsync();
+        return await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM entries");
+    }
+
+    private Task<IReadOnlyList<AuditEvent>> EventsAsync()
+    {
+        return _app.WithAsync(services =>
+            services.GetRequiredService<AuditManager>().ListAsync(_sam)
+        );
+    }
+
+    private Task<InviteResult> RedeemInviteAsync(string code)
+    {
+        return _app.WithAsync(services =>
+            services.GetRequiredService<InviteManager>().RedeemAsync(code, _sam)
+        );
+    }
+
+    private async Task<string> CreateInviteAsync(string providerPatientId)
+    {
+        HttpResponseMessage response = await _app.Client(_lakeside)
+            .PostAsJsonAsync("/api/network/invites", new { providerPatientId });
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("code").GetString()!;
+    }
 
     [Fact]
     public async Task Ingest_stores_signed_entries()
     {
-        var res = await Push(maple, "MSF-0932", Signed(maple, "egfr-1", 96), Signed(maple, "egfr-2", 90));
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        HttpResponseMessage response = await PushAsync(
+            _maple,
+            "MSF-0932",
+            Signed(_maple, "egfr-1", 96),
+            Signed(_maple, "egfr-2", 90)
+        );
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(2, body.GetProperty("inserted").GetInt32());
         Assert.Equal(0, body.GetProperty("skipped").GetInt32());
-        Assert.Equal(2, EntryCount());
+        Assert.Equal(2, await EntryCountAsync());
 
-        var events = app.With(sp => sp.GetRequiredService<AuditLog>().List(sam));
-        var ingest = Assert.Single(events);
+        AuditEvent ingest = Assert.Single(await EventsAsync());
         Assert.Equal("Ingest", ingest.Action);
         Assert.True(ingest.Granted);
         Assert.Equal("urn:provider:maple", ingest.Actor!.SubjectUri);
@@ -65,116 +123,216 @@ public class NetworkIngestTests : IDisposable
     [Fact] // Review Focus 4
     public async Task Ingest_twice_is_idempotent()
     {
-        var entries = new[] { Signed(maple, "egfr-1", 96), Signed(maple, "egfr-2", 90) };
-        await Push(maple, "MSF-0932", entries);
-        app.Pki.Clock.Advance(TimeSpan.FromMinutes(5));
-        var res = await Push(maple, "MSF-0932", Signed(maple, "egfr-1", 96), Signed(maple, "egfr-2", 90)); // re-signed: new iat, same ids
-        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        await PushAsync(
+            _maple,
+            "MSF-0932",
+            Signed(_maple, "egfr-1", 96),
+            Signed(_maple, "egfr-2", 90)
+        );
+        _app.Pki.Clock.Advance(TimeSpan.FromMinutes(5));
+        // Re-signed: a new iat, the same ids.
+        HttpResponseMessage response = await PushAsync(
+            _maple,
+            "MSF-0932",
+            Signed(_maple, "egfr-1", 96),
+            Signed(_maple, "egfr-2", 90)
+        );
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(0, body.GetProperty("inserted").GetInt32());
         Assert.Equal(2, body.GetProperty("skipped").GetInt32());
-        Assert.Equal(2, EntryCount());
+        Assert.Equal(2, await EntryCountAsync());
+    }
+
+    [Fact]
+    public async Task Source_keys_are_case_sensitive()
+    {
+        HttpResponseMessage response = await PushAsync(
+            _maple,
+            "MSF-0932",
+            Signed(_maple, "egfr-a", 96),
+            Signed(_maple, "egfr-A", 90)
+        );
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, body.GetProperty("inserted").GetInt32());
+        Assert.Equal(2, await EntryCountAsync());
     }
 
     [Fact]
     public async Task Ingest_rejects_entry_signed_by_other_provider()
     {
-        var res = await Push(maple, "MSF-0932", Signed(maple, "egfr-1", 96), Signed(lakeside, "egfr-x", 40));
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.Equal(0, EntryCount());
+        HttpResponseMessage response = await PushAsync(
+            _maple,
+            "MSF-0932",
+            Signed(_maple, "egfr-1", 96),
+            Signed(_lakeside, "egfr-x", 40)
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, await EntryCountAsync());
     }
 
     [Fact]
-    public async Task Ingest_rejects_bad_signature_and_missing_id()
+    public async Task Ingest_rejects_bad_signature_and_missing_or_long_id()
     {
-        var good = Signed(maple, "egfr-1", 96);
-        var res = await Push(maple, "MSF-0932", good[..^4] + "AAAA");
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        string good = Signed(_maple, "egfr-1", 96);
+        HttpResponseMessage response = await PushAsync(_maple, "MSF-0932", good[..^4] + "AAAA");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
 
-        var noId = RecordSigner.Sign(JsonDocument.Parse("""{"resourceType":"Observation","status":"final"}""").RootElement, maple, [], app.Pki.Clock.GetUtcNow());
-        res = await Push(maple, "MSF-0932", noId);
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.Equal(0, EntryCount());
+        JsonElement noIdResource = JsonDocument
+            .Parse("""{"resourceType":"Observation","status":"final"}""")
+            .RootElement;
+        string noId = RecordSigner.Sign(noIdResource, _maple, [], _app.Pki.Clock.GetUtcNow());
+        response = await PushAsync(_maple, "MSF-0932", noId);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        response = await PushAsync(_maple, "MSF-0932", Signed(_maple, new string('a', 65), 96));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, await EntryCountAsync());
     }
 
     [Fact]
     public async Task Ingest_unlinked_patient_409()
     {
-        var res = await Push(lakeside, "LUC-20417", Signed(lakeside, "egfr-1", 81));
-        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal(0, EntryCount());
+        HttpResponseMessage response = await PushAsync(
+            _lakeside,
+            "LUC-20417",
+            Signed(_lakeside, "egfr-1", 81)
+        );
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(0, await EntryCountAsync());
     }
 
     [Fact]
     public async Task No_certificate_401()
     {
-        var res = await Push(null, "MSF-0932", Signed(maple, "egfr-1", 96));
-        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        HttpResponseMessage response = await PushAsync(
+            null,
+            "MSF-0932",
+            Signed(_maple, "egfr-1", 96)
+        );
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("NoCertificate", body.GetProperty("error").GetString());
-        Assert.Equal(0, EntryCount());
-        Assert.Empty(app.With(sp => sp.GetRequiredService<AuditLog>().List(sam)));
+        Assert.Equal(0, await EntryCountAsync());
+        Assert.Empty(await EventsAsync());
     }
 
     [Fact]
     public async Task Self_signed_certificate_401()
     {
-        var broker = TestPki.SelfSigned("exchange.broker.example", app.Pki.Clock.GetUtcNow());
-        var res = await Push(broker, "MSF-0932", Signed(maple, "egfr-1", 96));
-        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        X509Certificate2 broker = TestPki.SelfSigned(
+            "exchange.broker.example",
+            _app.Pki.Clock.GetUtcNow()
+        );
+        HttpResponseMessage response = await PushAsync(
+            broker,
+            "MSF-0932",
+            Signed(_maple, "egfr-1", 96)
+        );
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("UntrustedCertificate", body.GetProperty("error").GetString());
     }
 
     [Fact]
     public async Task Unknown_org_with_trusted_chain_401()
     {
-        var mallory = app.Pki.Issue("mallory.providers.ezehr");
-        var res = await Push(mallory, "MSF-0932", Signed(mallory, "egfr-1", 96));
-        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        X509Certificate2 mallory = _app.Pki.Issue(OrgDirectory.ProviderCn("mallory"));
+        HttpResponseMessage response = await PushAsync(
+            mallory,
+            "MSF-0932",
+            Signed(mallory, "egfr-1", 96)
+        );
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task App_certificate_cannot_ingest_403()
     {
-        var kidney = app.Pki.Issue("kidney-check.apps.ezehr");
-        var res = await Push(kidney, "MSF-0932", Signed(kidney, "egfr-1", 96));
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
-        Assert.Equal(0, EntryCount());
+        X509Certificate2 kidney = _app.Pki.Issue(OrgDirectory.KidneyCheckCn);
+        HttpResponseMessage response = await PushAsync(
+            kidney,
+            "MSF-0932",
+            Signed(kidney, "egfr-1", 96)
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(0, await EntryCountAsync());
+    }
+
+    [Fact]
+    public async Task Missing_provider_patient_id_400()
+    {
+        HttpResponseMessage response = await _app.Client(_maple)
+            .PostAsJsonAsync("/api/network/records", new { entries = Array.Empty<string>() });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
     public async Task Provider_creates_invite_and_patient_redeems_it_once()
     {
-        var res = await app.Client(lakeside).PostAsJsonAsync("/api/network/invites", new { providerPatientId = "LUC-20417" });
-        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
-        var code = body.GetProperty("code").GetString()!;
+        HttpResponseMessage response = await _app.Client(_lakeside)
+            .PostAsJsonAsync("/api/network/invites", new { providerPatientId = "LUC-20417" });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        string code = body.GetProperty("code").GetString()!;
         Assert.Equal(8, code.Length);
-        Assert.Equal($"https://ezehr.test/Patient/Enroll?invite={code}", body.GetProperty("url").GetString());
+        Assert.Equal(
+            $"https://ezehr.test/Patient/Enroll?invite={code}",
+            body.GetProperty("url").GetString()
+        );
 
-        app.With(sp => { sp.GetRequiredService<InviteService>().Redeem(code, sam); return 0; });
-        var again = Assert.Throws<InviteException>(() => app.With(sp => { sp.GetRequiredService<InviteService>().Redeem(code, sam); return 0; }));
-        Assert.Equal("invite_used", again.Code);
+        InviteResult first = await RedeemInviteAsync(code);
+        Assert.Equal(new ProviderLink("urn:provider:lakeside", "LUC-20417"), first.Link);
+        InviteResult again = await RedeemInviteAsync(code);
+        Assert.Equal(new InviteResult(false, null, InviteError.InviteUsed), again);
 
-        var push = await Push(lakeside, "LUC-20417", Signed(lakeside, "egfr-3", 81));
+        HttpResponseMessage push = await PushAsync(
+            _lakeside,
+            "LUC-20417",
+            Signed(_lakeside, "egfr-3", 81)
+        );
         Assert.Equal(HttpStatusCode.OK, push.StatusCode);
+    }
+
+    [Fact]
+    public async Task Invite_for_patient_linked_elsewhere_is_refused_and_not_used()
+    {
+        string code = await CreateInviteAsync("MSF-0932");
+        await using (SqlConnection connection = await _app.Database.Db.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO provider_links(patient_id, provider_uri, provider_patient_id)
+                VALUES (@patientId, 'urn:provider:lakeside', 'MSF-0932')
+                """,
+                new { patientId = Guid.NewGuid() }
+            );
+        }
+        InviteResult refused = await RedeemInviteAsync(code);
+        Assert.Equal(InviteError.InviteLinkedElsewhere, refused.Error);
+        InviteResult peek = await _app.WithAsync(services =>
+            services.GetRequiredService<InviteManager>().PeekAsync(code)
+        );
+        Assert.True(peek.Succeeded);
     }
 
     [Fact]
     public async Task Invite_expires_after_7_days()
     {
-        var res = await app.Client(lakeside).PostAsJsonAsync("/api/network/invites", new { providerPatientId = "LUC-20417" });
-        var code = (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString()!;
-        app.Pki.Clock.Advance(TimeSpan.FromDays(7) + TimeSpan.FromSeconds(1));
-        var e = Assert.Throws<InviteException>(() => app.With(sp => { sp.GetRequiredService<InviteService>().Redeem(code, sam); return 0; }));
-        Assert.Equal("invite_expired", e.Code);
+        string code = await CreateInviteAsync("LUC-20417");
+        _app.Pki.Clock.Advance(TimeSpan.FromDays(7) + TimeSpan.FromSeconds(1));
+        InviteResult expired = await RedeemInviteAsync(code);
+        Assert.Equal(InviteError.InviteExpired, expired.Error);
+        Assert.Equal(InviteError.InviteUnknown, (await RedeemInviteAsync("ZZZZZZZZ")).Error);
     }
 
     [Fact]
     public async Task App_cannot_create_invite_403()
     {
-        var kidney = app.Pki.Issue("kidney-check.apps.ezehr");
-        var res = await app.Client(kidney).PostAsJsonAsync("/api/network/invites", new { providerPatientId = "X" });
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        X509Certificate2 kidney = _app.Pki.Issue(OrgDirectory.KidneyCheckCn);
+        HttpResponseMessage response = await _app.Client(kidney)
+            .PostAsJsonAsync("/api/network/invites", new { providerPatientId = "X" });
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("WrongPartyKind", body.GetProperty("error").GetString());
     }
 }

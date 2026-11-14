@@ -43,13 +43,13 @@ Every read or write goes through **one access check** that writes one audit even
 - The patient approves the named clinician before a grant becomes active.
 - **Clinician shift:** a session lasts **10 hours** from sign-in, absolute, never sliding. This is enforced by both the cookie and the access check.
 - Grant durations offered: **5 minutes (demo), 1 hour, 4 hours, end of day** (23:59:59 in `America/Indiana/Indianapolis`).
-- **EZCA issues every organization and app certificate.** The broker's certificate is deliberately self-made. `LocalCa` is only for tests and the fallback.
+- **EZCA issues every organization and app certificate.** The broker's certificate is deliberately self-made. `LocalCertificateAuthorityService` is only for tests and the fallback.
 - Cast:
   - patient **Sam Taylor**
   - clinician **Dr. Rivera** at **Riverside Primary Care**
   - providers **Lakeside Urgent Care**, **Northwind Workplace Health**, **Maple Street Family Medicine**
   - app **Kidney Check**
-- Exact copy lives in `Domain/Copy.cs`:
+- Exact copy lives in `Models/Copy.cs`:
 
   | Name | Text |
   |---|---|
@@ -104,18 +104,20 @@ Stretch goals S1–S4 are taken only if the team is ahead at 6:00 AM.
 `EZEHR.csproj` stays at the repo root. Its default file globbing would also compile the other projects' files, so Task 1 adds `<Compile Remove="EZEHR.Tests/**;EZEHR.Tools/**" />`, with matching `Content`/`None` removes.
 
 ```
-EZEHR.csproj  Program.cs  appsettings.json        web app (existing)
-Domain/        Party.cs, Grant.cs, ShareOffer.cs, AuditEvent.cs, Entry.cs, Copy.cs, Enums.cs
-Data/          Db.cs (Azure SQL connection factory + idempotent schema), *Repository.cs
-Security/Pki/  ICertificateAuthority.cs, LocalCa.cs, EzcaCa.cs, CertificateValidator.cs,
-               OrgDirectory.cs, RecordSigner.cs, RecordVerifier.cs
-Security/Crypto/ IKeyWrapper.cs, KeyVaultKeyWrapper.cs, LocalKeyWrapper.cs, RecordCipher.cs
-Records/       RecordStore.cs
-Access/        GrantService.cs, AccessGate.cs, AuditLog.cs
-Auth/          PatientPasskeys.cs, ClinicianAuth.cs, ClientCertificateSource.cs, CallerResolver.cs
-Api/           NetworkApi.cs (minimal API endpoints), PatientPasskeyApi.cs
+EZEHR.csproj  Program.cs  appsettings.json        web app; Program.cs only wires things up
+Controllers/   NetworkController.cs, PatientPasskeyController.cs        ([ApiController]; HTTP only)
 Pages/Patient/ Enroll, SignIn, Home, Share, Activity, Grants   (+ _ActivityPartial for htmx)
-Pages/Clinician/ Index (sign in), Redeem, Wait, Record, AccessEnded
+Pages/Clinician/ Index (sign in), Redeem, Wait, Record, AccessEnded     (PageModels follow the controller rules)
+Managers/      CallerManager, AccessManager, GrantManager, AuditManager, InviteManager,
+               RecordManager, EnrollmentManager                          (all business logic; query Db with Dapper)
+Services/      external systems behind interfaces: IKeyWrapService (KeyVault…, Local…),
+               ICertificateAuthorityService (Ezca…, Local…), IClientCertificateService, IFido2Service;
+               static pure logic: CertificateValidator, OrgDirectory, RecordSigner, RecordVerifier,
+               RecordCipher, KidneyRule
+Models/        Party.cs, Grant.cs, ShareOffer.cs, AuditEvent.cs, Entries.cs, Copy.cs, Enums.cs,
+               AppOptions.cs, Results.cs, NetworkModels.cs, Certificates.cs
+Data/          Db.cs (Azure SQL connection factory + idempotent schema)
+Security/Trust/ anchors.pem, intermediates.pem (public EZCA certificates)
 wwwroot/js/passkey.js
 EZEHR.Tests/   xUnit, references EZEHR.csproj
 EZEHR.Tools/   console app, references EZEHR.csproj; commands: certs, provider, kidney-check, broker
@@ -124,7 +126,9 @@ docs/ezca-notes.md        what the EZCA probe showed
 .pki/          (git-ignored) keys and certificates
 ```
 
-## Shared contracts (`Domain/`, written in Task 1; every task uses these names)
+The layers are described in `docs/style-guide.md` section 3. Expected failures (a used share code, a denied access) come back from managers as result records (`Models/Results.cs`), never as exceptions, so controllers and pages need no `try`/`catch`.
+
+## Shared contracts (`Models/`, written in Task 1; every task uses these names)
 
 - `enum PartyKind { Clinician, Provider, App, Platform }`
 - `record Party(PartyKind Kind, string SubjectUri, string DisplayName, string OrgName)`. Values of `SubjectUri`:
@@ -136,7 +140,7 @@ docs/ezca-notes.md        what the EZCA probe showed
 - `enum GrantStatus { Pending, Active, Denied, Revoked, Expired }`
 - `record Grant(Guid Id, Guid PatientId, Party Grantee, GrantScope Scope, string Purpose, GrantStatus Status, int? DurationMinutes, DateTimeOffset CreatedAt, DateTimeOffset? ApprovedAt, DateTimeOffset? ExpiresAt, DateTimeOffset? RevokedAt)`. A `null` `ExpiresAt` means ongoing; only app grants are ongoing.
 - `enum ShareDuration { FiveMinutes, OneHour, FourHours, EndOfDay }` and `record ShareOffer(Guid Id, Guid PatientId, string Code, ShareDuration Duration, DateTimeOffset OfferExpiresAt, Guid? RedeemedGrantId)`
-- `enum DenyReason { NoCertificate, UntrustedCertificate, CertificateExpired, NotSignedIn, ShiftEnded, NoGrant, GrantPending, GrantExpired, GrantRevoked, ScopeDenied }`
+- `enum DenyReason { NoCertificate, UntrustedCertificate, CertificateExpired, NotSignedIn, ShiftEnded, NoGrant, GrantPending, GrantExpired, GrantRevoked, ScopeDenied, WrongPartyKind }`. `WrongPartyKind` is a verified caller of the wrong kind (an app creating an invite).
 - `enum AccessAction { ReadRecord, ReadLabs, WriteNote }`
 - `abstract record Caller` with two cases:
   - `sealed record VerifiedCaller(Party Party, DateTimeOffset? SessionStartedAt) : Caller`
@@ -158,12 +162,13 @@ docs/ezca-notes.md        what the EZCA probe showed
     - keys, IVs and ciphertext: `VARBINARY(MAX)`
     - text: `NVARCHAR(n)`
     - enums: `NVARCHAR(32)` holding the enum's name. Pass `.ToString()` when writing, because Dapper writes enums as integers; on reads it parses the name back.
-  - **Identifier columns use a binary collation** (`COLLATE Latin1_General_100_BIN2`): `source_key`, every `*_uri`, and `user_handle`. SQL Server's default collation is case-insensitive, which would make `Observation/a` and `Observation/A` collide. Share and invite codes are upper-cased before they're stored and before every lookup.
+  - **Identifier columns use a binary collation** (`COLLATE Latin1_General_100_BIN2`): `source_key`, every `*_uri`, and `provider_patient_id`. `credential_id` and `user_handle` are `VARBINARY`, which already compares exactly. SQL Server's default collation is case-insensitive, which would make `Observation/a` and `Observation/A` collide. Share and invite codes are upper-cased before they're stored and before every lookup.
   - `source_key` is `NVARCHAR(400)`, so the (`patient_id`, `source_key`) unique index fits SQL Server's index key limit. Every patient-owned table has an index on `patient_id`.
   - Party columns are flattened: `grantee_kind`, `grantee_uri`, `grantee_name`, `grantee_org` on `grants`, and the same with the `actor_` prefix on `audit_events` (all `NULL` = unverified).
   - **Dapper mapping:** positional records map through their constructor, so `SELECT` with aliases that match the parameter names, in parameter order (`patient_id AS PatientId`). Rows that contain a `Party` are read into a private flat row record, then converted.
   - **Single-use operations are a conditional `UPDATE`, not a read followed by a write.** Redeeming a share offer runs `UPDATE share_offers SET redeemed_grant_id = @grantId WHERE code = @code AND redeemed_grant_id IS NULL AND offer_expires_at > @now`. It must affect exactly 1 row, in the same transaction as the grant insert. Invites work the same way. This is what makes Review Focus 2 hold under a double submit.
-  - Open one connection per operation (`await using SqlConnection connection = await db.OpenAsync()`); pooling makes this cheap. Never share a `SqlConnection` between requests.
+  - Open one connection per operation (`await using SqlConnection connection = await db.OpenAsync()`); pooling makes this cheap. Never share a `SqlConnection` between requests. An operation that must commit with its audit event passes its connection and transaction to `AuditManager.AppendAsync`.
+  - Values a caller chooses are bounded before they reach a column: FHIR resource ids over 64 characters are refused (`ResourceIdRequired`), and a claimed purpose is cut to 200 characters.
 
 ---
 
@@ -232,8 +237,8 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 **Files:**
 - Modify `EZEHR.csproj` (packages, `Compile Remove`), `.gitignore`, `Program.cs`, `Pages/Shared/_Layout.cshtml` (add htmx).
-- Create `Domain/*`, `Data/Db.cs`, the `EZEHR.Tests` and `EZEHR.Tools` projects, and add both to `EZEHR.slnx`.
-- Test: `EZEHR.Tests/Data/SqlFixture.cs`, `EZEHR.Tests/Data/DbTests.cs`, `EZEHR.Tests/Domain/CopyTests.cs`.
+- Create `Models/*`, `Data/Db.cs`, the `EZEHR.Tests` and `EZEHR.Tools` projects, and add both to `EZEHR.slnx`.
+- Test: `EZEHR.Tests/Data/SqlServer.cs`, `EZEHR.Tests/Data/DbTests.cs`, `EZEHR.Tests/Models/CopyTests.cs`.
 
 **Interfaces:**
 - Produces:
@@ -245,17 +250,17 @@ docs/ezca-notes.md        what the EZCA probe showed
     - `PlatformCertPfxBase64`. On App Service it's a Key Vault secret reference, never committed.
     - `KeyWrapper.Mode: "KeyVault" | "Local"`, `KeyVault.KeyId`, `LocalKekBase64`
     - `TimeZone`
-  - `sealed class Db(string connectionString)`, registered as a singleton:
+  - `sealed class Db(IConfiguration configuration)`, registered as a singleton; it reads `AZURE_SQL_CONNECTIONSTRING` (`AppOptions.ConnectionStringKey`):
     - `Task<SqlConnection> OpenAsync(CancellationToken ct = default)` returns an open, pooled connection; callers dispose it.
     - `Task EnsureSchemaAsync(CancellationToken ct = default)` runs an idempotent script (`IF OBJECT_ID(N'dbo.entries') IS NULL CREATE TABLE ...`) that creates the tables, constraints and indexes above if they're missing. `Program.cs` calls it once at startup. There are no migrations; when the schema changes, edit the script and the table list in this plan in the same commit.
     - `static bool IsUniqueViolation(SqlException ex)` is true for SQL errors 2627 and 2601.
-    - `Task DeleteAllDataAsync()` deletes every row, in foreign-key order. Only `demo reset` (Task 15) calls it.
-  - `SqlFixture`, an xUnit collection fixture (`[Collection("Sql")]`):
+    - `Task DeleteAllDataAsync()` deletes every row, in foreign-key order. Only `demo reset` (Task 15) calls it; add it then.
+  - `SqlServer`, a static test helper:
     - It starts one SQL Server container per test run with Testcontainers (`mcr.microsoft.com/mssql/server:2022-latest`). If `EZEHR_TEST_SQL` is set (a server connection string), it uses that server instead.
-    - `Task<TestDatabase> CreateDatabaseAsync()` creates a fresh `ezehr_test_{guid:N}` database, runs `EnsureSchemaAsync`, and returns `record TestDatabase(Db Db, string ConnectionString)`. Every test gets its own database, so tests never share state.
-    - `WebApplicationFactory` tests set `AZURE_SQL_CONNECTIONSTRING` to `TestDatabase.ConnectionString` in `ConfigureAppConfiguration`.
-    - It needs Docker or Podman (for Podman, point `DOCKER_HOST` at its socket). Tests that never touch storage (`Copy`, PKI, `RecordCipher`) don't use the fixture.
-  - The `Domain` types above, and `static class Copy`.
+    - `Task<TestDatabase> CreateDatabaseAsync()` creates a fresh `ezehr_test_{guid:N}` database and runs `EnsureSchemaAsync`. `TestDatabase` has `Db` and `ConnectionString`, and dropping it drops the database. Each test creates one in its class's `IAsyncLifetime.InitializeAsync`, so tests never share state and classes still run in parallel. A full run takes about 1.5 minutes, most of it creating databases.
+    - `WebApplicationFactory` tests (`EzehrFactory`) set `AZURE_SQL_CONNECTIONSTRING` to `TestDatabase.ConnectionString`.
+    - It needs Docker or Podman (for Podman, point `DOCKER_HOST` at its socket). Tests that never touch storage (`Copy`, PKI, `RecordCipher`) don't use it.
+  - The `Models` types above, and `static class Copy`.
   - `TimeProvider` is registered in DI, and every time-dependent class takes it, so tests can control the clock.
 
 - [ ] Fix `.gitignore`: remove the four `/wwwroot/lib/*/dist/` lines; add `.pki/`.
@@ -274,20 +279,20 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 2: PKI core (Identity lead, 7:30–9:00 PM)
 
-**Files:** Create `Security/Pki/ICertificateAuthority.cs`, `LocalCa.cs`, `CertificateValidator.cs`, `OrgDirectory.cs`, `RecordSigner.cs`, `RecordVerifier.cs`. Test: `EZEHR.Tests/Pki/*`.
+**Files:** Create `Services/ICertificateAuthorityService.cs`, `LocalCertificateAuthorityService.cs`, `CertificateValidator.cs`, `OrgDirectory.cs`, `RecordSigner.cs`, `RecordVerifier.cs`. Test: `EZEHR.Tests/Pki/*`.
 
 **Interfaces:**
 - Produces:
-  - `interface ICertificateAuthority { Task<IssuedCertificate> IssueAsync(string csrPem, string subjectName, int validityDays, CancellationToken ct); }` with `record IssuedCertificate(X509Certificate2 Leaf, IReadOnlyList<X509Certificate2> Chain)`.
+  - `interface ICertificateAuthorityService { Task<IssuedCertificate> IssueAsync(string csrPem, string subjectName, int validityDays, CancellationToken ct); }` with `record IssuedCertificate(X509Certificate2 Leaf, IReadOnlyList<X509Certificate2> Chain)`.
     - Every certificate carries the clientAuth EKU (`1.3.6.1.5.5.7.3.2`).
     - The CSR's own subject is ignored; `subjectName` is used.
-  - `sealed class LocalCa : ICertificateAuthority`. ECDSA P-256 root; CN = `subjectName`; `notBefore` = now − 5 min. Built with `CertificateRequest.LoadSigningRequestPem` and `CertificateRequest.Create`.
-  - `sealed class CertificateValidator(IEnumerable<X509Certificate2> roots, IEnumerable<X509Certificate2> intermediates, TimeProvider time)` with `CertCheck Validate(X509Certificate2 leaf, IEnumerable<X509Certificate2>? extra, DateTimeOffset at)`.
+  - `sealed class LocalCertificateAuthorityService(X509Certificate2 root, TimeProvider time) : ICertificateAuthorityService`, with `static X509Certificate2 CreateRoot(TimeProvider)`. ECDSA P-256 root; CN = `subjectName`; `notBefore` = now − 5 min. Built with `CertificateRequest.LoadSigningRequestPem` and `CertificateRequest.Create`.
+  - `static class CertificateValidator` with `CertCheck Validate(X509Certificate2 leaf, IEnumerable<X509Certificate2>? extra, DateTimeOffset at, TrustAnchors trustAnchors)` and `TrustAnchors LoadTrustAnchors(AppOptions)`. `record TrustAnchors(IReadOnlyList<X509Certificate2> Roots, IReadOnlyList<X509Certificate2> Intermediates)`; the managers that need it load it into a field from `AppOptions`.
     - `CertCheck` is `(bool Ok, DenyReason? Reason)`.
     - Uses `X509Chain` with `ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust`, revocation mode `NoCheck`, and `VerificationTime = at + 2 min` so 2 minutes of skew are tolerated.
     - Requires the clientAuth EKU.
     - An unknown root is `UntrustedCertificate`; outside validity is `CertificateExpired`.
-  - `sealed class OrgDirectory`, mapping certificate CN to `Party`:
+  - `static class OrgDirectory`, mapping certificate CN to `Party`. It is the only place that builds subject URIs (`ProviderUri`, `ClinicianUri`) and CNs (`ProviderCn`):
 
     | CN | Party |
     |---|---|
@@ -302,7 +307,7 @@ docs/ezca-notes.md        what the EZCA probe showed
     - Produces a compact JWS (RFC 7515) with protected header `{ "alg": "ES256" | "RS256", "x5c": [...], "iat": unix }`.
     - The payload is the UTF-8 JSON of the resource.
     - ES256 signatures use `DSASignatureFormat.IeeeP1363FixedFieldConcatenation`.
-  - `sealed class RecordVerifier(CertificateValidator, OrgDirectory)`, with `VerifiedEntry Verify(Guid entryId, string jws)`.
+  - `static class RecordVerifier`, with `VerifiedEntry Verify(Guid entryId, string jws, TrustAnchors trustAnchors)`.
     - Verifies the signature with the `x5c` leaf, then checks the chain **at the header `iat`**, then resolves the signer.
     - Throws `RecordSignatureException` on any failure.
     - `WrittenBy` = `sender.display` when the resource is a platform-signed `Communication`.
@@ -321,12 +326,12 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 3: EZCA adapter and organization certificates (Identity lead, 9:00–10:00 PM)
 
-**Files:** Create `Security/Pki/EzcaCa.cs` and `EZEHR.Tools/Commands/CertsCommand.cs`. Test: `EZEHR.Tests/Pki/EzcaCaTests.cs`.
+**Files:** Create `Services/EzcaCertificateAuthorityService.cs` and `EZEHR.Tools/Commands/CertsCommand.cs`. Test: `EZEHR.Tests/Pki/EzcaCertificateAuthorityServiceTests.cs`.
 
 **Interfaces:**
-- Consumes: `ICertificateAuthority` (Task 2), `docs/ezca-notes.md` (Task 0a).
+- Consumes: `ICertificateAuthorityService` (Task 2), `docs/ezca-notes.md` (Task 0a).
 - Produces:
-  - `sealed class EzcaCa(IEZCAClient client, AvailableCAModel ca) : ICertificateAuthority`. It calls `RequestCertificateWithChainV2Async(ca, csr, subjectName, validityDays, subjectAltNames)`, and maps the leaf and chain from `CertificatePEM`, `IssuingCACertificate` and `RootCertificate`.
+  - `sealed class EzcaCertificateAuthorityService(IEZCAClient client, AvailableCAModel ca) : ICertificateAuthorityService`. It calls `RequestCertificateWithChainV2Async(ca, csr, subjectName, validityDays, subjectAltNames)`, and maps the leaf and chain from `CertificatePEM`, `IssuingCACertificate` and `RootCertificate`.
   - The SDK authenticates with `DefaultAzureCredential`: the managed identity on App Service, `az login` on a laptop.
   - `CertsCommand`: `ezehr-tools certs issue --ca ezca|local`.
     - For each CN in `OrgDirectory`, it generates a P-256 key (or RSA 2048, per the probe) and requests a **365-day** certificate.
@@ -346,52 +351,52 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 4: Encryption at rest and the record store (App lead, 7:30–9:00 PM)
 
-**Files:** Create `Security/Crypto/IKeyWrapper.cs`, `KeyVaultKeyWrapper.cs`, `LocalKeyWrapper.cs`, `RecordCipher.cs`, `Records/RecordStore.cs`. Test: `EZEHR.Tests/Crypto/*`, `EZEHR.Tests/Records/RecordStoreTests.cs`.
+**Files:** Create `Services/IKeyWrapService.cs`, `KeyVaultKeyWrapService.cs`, `LocalKeyWrapService.cs`, `RecordCipher.cs`, `Managers/RecordManager.cs`. Test: `EZEHR.Tests/Crypto/*`, `EZEHR.Tests/Records/RecordManagerTests.cs`.
 
 **Interfaces:**
 - Produces:
-  - `interface IKeyWrapper { Task<byte[]> WrapAsync(byte[] dek); Task<byte[]> UnwrapAsync(byte[] wrapped); }`
-    - `KeyVaultKeyWrapper`: `CryptographyClient`, `KeyWrapAlgorithm.RsaOaep256`, `DefaultAzureCredential`.
-    - `LocalKeyWrapper`: AES-256-GCM with a key-encryption key from configuration. Development and tests only.
+  - `interface IKeyWrapService { Task<byte[]> WrapAsync(byte[] dek); Task<byte[]> UnwrapAsync(byte[] wrapped); }`
+    - `KeyVaultKeyWrapService`: `CryptographyClient`, `KeyWrapAlgorithm.RsaOaep256`, `DefaultAzureCredential`.
+    - `LocalKeyWrapService`: AES-256-GCM with a key-encryption key from configuration. Development and tests only.
   - `static class RecordCipher`, with `(byte[] Iv, byte[] Ciphertext) Encrypt(byte[] dek, string aad, string plaintext)` and `string Decrypt(byte[] dek, string aad, byte[] iv, byte[] ciphertext)`.
     - `AesGcm`, a 12-byte random IV, and a 16-byte tag appended to the ciphertext.
     - `aad` = `{patientId}:{entryId}`.
-  - `sealed class RecordStore(Db, IKeyWrapper)`:
+  - `sealed class RecordManager` (takes `Db`, `IKeyWrapService` and, from Task 6, `AccessManager`):
     - `Task<byte[]> CreatePatientKeyAsync()`: returns the wrapped key.
     - `Task<(bool Inserted, Guid Id)> PutAsync(Guid patientId, string sourceKey, string resourceType, string jws)`: idempotent on `sourceKey`. It inserts with `WHERE NOT EXISTS`, and the unique index is the backstop: a race that hits `Db.IsUniqueViolation` also returns `Inserted=false`.
-    - `Task<IReadOnlyList<(Guid Id, string ResourceType, string Jws)>> ReadAsync(Guid patientId, Func<string,bool>? resourceTypeFilter)`: unwraps the patient key **on every call**, so every read is a Key Vault operation. Only `AccessGate`-guarded code and the patient's own pages call it.
+    - `Task<IReadOnlyList<(Guid Id, string ResourceType, string Jws)>> ReadAsync(Guid patientId, Func<string,bool>? resourceTypeFilter)`: unwraps the patient key **on every call**, so every read is a Key Vault operation. Only `AccessManager`-guarded code in `RecordManager` and the patient's own pages call it.
 
-- [ ] **Write failing tests** (`RecordStoreTests` use `SqlFixture`):
+- [ ] **Write failing tests** (`RecordManagerTests` use `SqlServer`):
   - `Cipher_roundtrip`, `Cipher_wrong_aad_throws`, `Cipher_tamper_throws`.
   - `LocalWrapper_roundtrip`.
   - **(Review Focus 4)** `Put_is_idempotent`: a second identical put returns `Inserted=false`, with 1 row.
   - `Ciphertext_has_no_plaintext`: the raw column doesn't contain `"resourceType"`.
   - `Read_filters_by_type`.
-- [ ] Run (FAIL), implement, run (PASS). Smoke-test `KeyVaultKeyWrapper` once against the real vault, from a scratch console command.
+- [ ] Run (FAIL), implement, run (PASS). Smoke-test `KeyVaultKeyWrapService` once against the real vault, from a scratch console command.
 - [ ] Commit `feat: per-patient envelope encryption and record store`.
 
 ### Task 5: Network API and client certificates (Identity lead, 11:00 PM–1:00 AM)
 
-**Files:** Create `Auth/ClientCertificateSource.cs`, `Auth/CallerResolver.cs`, `Api/NetworkApi.cs`; modify `Program.cs`. Test: `EZEHR.Tests/Api/NetworkIngestTests.cs` (WebApplicationFactory).
+**Files:** Create `Services/IClientCertificateService.cs` (+ `ConnectionClientCertificateService.cs`), `Managers/CallerManager.cs`, `Controllers/NetworkController.cs`; modify `Program.cs`. Test: `EZEHR.Tests/Api/NetworkIngestTests.cs` (WebApplicationFactory).
 
 **Interfaces:**
-- Consumes: `CertificateValidator`, `OrgDirectory`, `RecordVerifier` (Task 2); `RecordStore` (Task 4).
+- Consumes: `CertificateValidator`, `OrgDirectory`, `RecordVerifier` (Task 2); `RecordManager` (Task 4).
 - Produces:
-  - `interface IClientCertificateSource { Task<X509Certificate2?> GetAsync(HttpContext ctx); }`
+  - `interface IClientCertificateService { Task<X509Certificate2?> GetAsync(HttpContext httpContext); }`
     - Production uses `AddCertificateForwarding(o => o.CertificateHeader = "X-ARR-ClientCert")` plus `UseCertificateForwarding()`, then `ctx.Connection.GetClientCertificateAsync()`.
     - Tests register a source that reads a test-only header. That source is never registered outside tests.
-  - `sealed class CallerResolver(CertificateValidator, OrgDirectory, TimeProvider)`, with `Caller Resolve(X509Certificate2? cert)`:
+  - `sealed class CallerManager(TimeProvider, IOptions<AppOptions>)`, with `Caller FromCertificate(X509Certificate2? certificate)`:
     - no certificate → `UnverifiedCaller(NoCertificate)`
     - validation failure → `UnverifiedCaller(reason)`
     - a valid chain but an unknown CN → `UnverifiedCaller(UntrustedCertificate)`
     - otherwise → `VerifiedCaller(party, null)`
-  - Endpoints (minimal API group `/api/network`):
-    - `POST /invites { providerPatientId }` returns `201 { code, url }`. Providers only (403 otherwise). Invites expire in 7 days.
+  - Endpoints (`NetworkController`, route `/api/network`). Each action gets the certificate, turns it into a `Caller`, calls one manager method (`InviteManager.CreateAsync` or `RecordManager.IngestAsync`), and maps the result:
+    - `POST /invites { providerPatientId }` returns `201 { code, url }`. Providers only (403 `WrongPartyKind` otherwise). Invites expire in 7 days.
     - `POST /records { providerPatientId, entries: string[] }` returns `{ inserted, skipped }`. Providers only.
       - No `provider_links` row returns 409.
       - Every JWS must verify (Task 2), and its signer must equal the caller; otherwise the request returns 400 and nothing is stored.
       - It writes one `Ingest` audit event for the patient.
-    - Unverified callers get **401 `{ error }`**, and **nothing is logged** for ingest, because there is no target patient yet. Patient-targeted endpoints log through the gate (Task 6).
+    - Request models carry `[Required]`, so a missing field is the automatic 400. Unverified callers get **401 `{ error }`**, and **nothing is logged** for ingest, because there is no target patient yet. Patient-targeted endpoints log through the gate (Task 6).
 
 - [ ] **Write failing tests:**
   - `Ingest_stores_signed_entries`: 2 entries give `inserted=2`.
@@ -406,20 +411,22 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 6: Grants, the access check, the audit log (Identity lead, 1:00–3:00 AM)
 
-**Files:** Create `Access/GrantService.cs`, `Access/AccessGate.cs`, `Access/AuditLog.cs`; modify `Api/NetworkApi.cs`. Test: `EZEHR.Tests/Access/*`.
+**Files:** Create `Managers/GrantManager.cs`, `Managers/AccessManager.cs`, `Managers/AuditManager.cs`; modify `Managers/RecordManager.cs` and `Controllers/NetworkController.cs`. Test: `EZEHR.Tests/Access/*`.
 
 **Interfaces:**
-- Consumes: `Caller` (Domain), `RecordStore`, `RecordVerifier`.
+- Consumes: `Caller` (Models), `RecordManager`, `RecordVerifier`.
 - Produces (all async, because each call goes to Azure SQL over the network; every class takes `Db`):
-  - `AuditLog`: `Task<AuditEvent> AppendAsync(Guid patientId, Party? actor, string action, string? claimedPurpose, bool granted, DenyReason? reason)` and `Task<IReadOnlyList<AuditEvent>> ListAsync(Guid patientId, long afterId = 0)`.
-  - `GrantService`:
+  - `AuditManager`: `Task<AuditEvent> AppendAsync(Guid patientId, Party? actor, string action, string? claimedPurpose, bool granted, DenyReason? reason)` and `Task<IReadOnlyList<AuditEvent>> ListAsync(Guid patientId, long afterId = 0)`.
+  - `GrantManager`:
     - `Task<ShareOffer> CreateOfferAsync(Guid patientId, ShareDuration d)`: an 8-character code, valid 10 minutes.
-    - `Task<Grant> RedeemAsync(string code, Party clinician)`: claims the offer with the conditional `UPDATE` (see Storage rules), creates a `Pending` grant and appends a `RedeemOffer` event, all in one transaction. Throws `GrantException("offer_used" | "offer_expired" | "offer_unknown")`.
-    - `Task<Grant> DecideAsync(Guid patientId, Guid grantId, bool approve)`: approval sets `ApprovedAt` and `ExpiresAt` from the duration; `EndOfDay` is 23:59:59 in `AppOptions.TimeZone`.
-    - `Task<Grant> RevokeAsync(Guid patientId, Guid grantId)`.
+    - `Task<GrantResult> RedeemAsync(string code, Party clinician)`: claims the offer with the conditional `UPDATE` (see Storage rules), creates a `Pending` grant and appends a `RedeemOffer` event, all in one transaction. Fails with `GrantError.OfferUsed | OfferExpired | OfferUnknown`.
+    - `Task<GrantResult> DecideAsync(Guid patientId, Guid grantId, bool approve)` (fails with `GrantUnknown` or `GrantNotPending`): approval sets `ApprovedAt` and `ExpiresAt` from the duration; `EndOfDay` is 23:59:59 in `AppOptions.TimeZone`.
+    - `Task<GrantResult> RevokeAsync(Guid patientId, Guid grantId)`.
+    - `static NewCode()`, `NormalizeCode(string)` and `FormatCode(string)` (`XXXX-XXXX`): the one place codes are made and shown. Invites use them too.
+    - `record GrantResult(bool Succeeded, Grant? Grant, GrantError? Error)`.
     - `Task<Grant> CreateAppGrantAsync(Guid patientId, Party app)`: `LabsAndNotes`, ongoing, `Active`.
     - `Task<IReadOnlyList<Grant>> ForPatientAsync(Guid patientId)` and `Task<Grant?> FindAsync(Guid grantId)`.
-  - `AccessGate`: `Task<AccessDecision> AuthorizeAsync(Guid patientId, AccessAction action, Caller caller, string? claimedPurpose)`, where `AccessDecision` is `(bool Allowed, Grant? Grant, DenyReason? Reason)`.
+  - `AccessManager`: `Task<AccessDecision> AuthorizeAsync(Guid patientId, AccessAction action, Caller caller, string? claimedPurpose)`, where `AccessDecision` is `(bool Allowed, Grant? Grant, DenyReason? Reason)`.
     - It writes **exactly one** audit event, either way.
     - Check order:
       1. Unverified → that reason.
@@ -430,19 +437,19 @@ docs/ezca-notes.md        what the EZCA probe showed
       6. Past `ExpiresAt` → mark `Expired`, then `GrantExpired`.
       7. `LabsAndNotes` used for `ReadRecord` → `ScopeDenied`.
       8. Otherwise, allowed.
-  - Network endpoints added here, all through the gate:
+  - Network endpoints added here, all through the gate (`RecordManager.ReadLabsAsync`, `ReadRecordAsync`, `WriteNoteAsync`, each returning a result record with `Allowed` and `Reason`):
     - `GET /patients/{patientId}/labs`, for apps (`ReadLabs`). Returns the verified eGFR Observations, LOINC `98979-8`.
     - `POST /patients/{patientId}/notes { jws }` (`WriteNote`). The signer must equal the caller. Idempotent by `sourceKey`.
     - `GET /patients/{patientId}/record?purpose=...` (`ReadRecord`), the broker's target.
-    - Denials return 401 for certificate reasons, 403 for grant reasons.
+    - Denials return 401 for certificate reasons, 403 for grant reasons. That mapping is one private method in `NetworkController`.
 
-- [ ] **Write failing tests** (with a fake `TimeProvider`, and `SqlFixture`):
+- [ ] **Write failing tests** (with a fake `TimeProvider`, and `SqlServer`):
   - `No_grant_denied_and_logged_once`.
   - `Pending_denied`.
   - `Active_allowed_and_logged`.
   - `Grant_for_other_clinician_is_NoGrant`.
   - **(Review Focus 3)** `Expired_marks_and_denies` and `Revoked_denies`.
-  - **(Review Focus 2)** `Redeem_twice_second_throws_offer_used`: exactly 1 pending grant.
+  - **(Review Focus 2)** `Redeem_twice_second_is_offer_used`: exactly 1 pending grant. `Concurrent_redeems_create_one_grant`: 8 parallel redeems, 1 grant.
   - `Offer_expired_after_10_minutes`.
   - `Unverified_logged_with_claimed_purpose`: `Actor == null`, `ClaimedPurpose == "treatment"`.
   - `App_scope_cannot_read_record`.
@@ -454,10 +461,10 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 7: Patient passkeys, invites, sessions (App lead, 9:00–11:00 PM)
 
-**Files:** Create `Auth/PatientPasskeys.cs`, `Api/PatientPasskeyApi.cs`, `wwwroot/js/passkey.js`, `Pages/Patient/Enroll.cshtml(.cs)`, `Pages/Patient/SignIn.cshtml(.cs)`; modify `Program.cs`. Test: `EZEHR.Tests/Auth/PatientPasskeyTests.cs`.
+**Files:** Create `Managers/EnrollmentManager.cs`, `Services/IFido2Service.cs` (+ `Fido2Service.cs`), `Controllers/PatientPasskeyController.cs`, `wwwroot/js/passkey.js`, `Pages/Patient/Enroll.cshtml(.cs)`, `Pages/Patient/SignIn.cshtml(.cs)`; modify `Program.cs`. Test: `EZEHR.Tests/Auth/PatientPasskeyTests.cs`.
 
 **Interfaces:**
-- Consumes: `RecordStore.CreatePatientKeyAsync` (Task 4); `GrantService.CreateAppGrantAsync` (Task 6; stub its signature until it merges).
+- Consumes: `RecordManager.CreatePatientKeyAsync` (Task 4); `GrantManager.CreateAppGrantAsync` (Task 6; stub its signature until it merges).
 - Produces:
   - Cookie scheme `"Patient"`: 12 h, HttpOnly, Secure, SameSite=Lax, and the claim `patient_id`. Policy `"Patient"`. `AuthorizeFolder("/Patient", "Patient")`, with Enroll and SignIn anonymous.
   - JSON endpoints (Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`.
@@ -468,7 +475,7 @@ docs/ezca-notes.md        what the EZCA probe showed
   - `passkey.js`: about 40 lines. It uses `PublicKeyCredential.parseCreationOptionsFromJSON`, `parseRequestOptionsFromJSON` and `credential.toJSON()`, with base64url helpers as a fallback for older browsers.
 - The Enroll page shows `Copy.KidneyOptIn` with a checkbox, plus one "Create passkey" button. The SignIn page has one "Sign in with passkey" button.
 
-- [ ] **Write failing tests** (Fido2 verification behind an interface, stubbed):
+- [ ] **Write failing tests** (Fido2 behind `IFido2Service`, stubbed):
   - `Invite_single_use`, `Invite_expired`.
   - `OptIn_creates_app_grant` and `No_optin_no_grant`.
   - `Enroll_creates_wrapped_dek_and_link`.
@@ -479,18 +486,18 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 8: Clinician sign-in (Identity lead, 10:00–11:00 PM, then the 11 PM checkpoint)
 
-**Files:** Create `Auth/ClinicianAuth.cs`, `Pages/Clinician/Index.cshtml(.cs)`; modify `Program.cs` and `appsettings.json` (the `AzureAd` section). Test: `EZEHR.Tests/Auth/ClinicianAuthTests.cs`.
+**Files:** Modify `Managers/CallerManager.cs`; create `Pages/Clinician/Index.cshtml(.cs)`; modify `Program.cs` and `appsettings.json` (the `AzureAd` section). Test: `EZEHR.Tests/Auth/ClinicianAuthTests.cs`.
 
 **Interfaces:**
 - Produces:
   - `AddMicrosoftIdentityWebApp(Configuration.GetSection("AzureAd"), openIdConnectScheme: "ClinicianOidc", cookieScheme: "Clinician")`. Sign-in only, ID token, no secret; if the library insists on a secret, set `ResponseType = "id_token"`.
   - On `OnTokenValidated`, add the claim `session_started_at`. The cookie is set to `ExpireTimeSpan = 10h`, `SlidingExpiration = false`, and the OIDC `UseTokenLifetime = false`.
-  - `static ClinicianCheck ClinicianAuth.Evaluate(ClaimsPrincipal user, IReadOnlyDictionary<string,string> trustedTenants)`, returning `(bool Ok, Party? Party, DateTimeOffset? SessionStartedAt, string? ErrorCopy)`:
+  - `ClinicianCheck CallerManager.EvaluateClinician(ClaimsPrincipal user)` (trusted tenants come from `AppOptions`), returning `(bool Ok, Party? Party, DateTimeOffset? SessionStartedAt, string? ErrorCopy)`:
     - `tid` (`http://schemas.microsoft.com/identity/claims/tenantid`) not trusted → `Copy.UntrustedOrg`
     - no `Clinician` role (claim type `roles`) → `Copy.NotAClinician`
-    - otherwise a `Party` with `urn:entra:{tid}:{oid}`, display name from `name`, and the organization from `trustedTenants`
+    - otherwise a `Party` with `OrgDirectory.ClinicianUri(tid, oid)` (`urn:entra:{tid}:{oid}`), display name from `name`, and the organization from `trustedTenants`
   - Policy `"Clinician"` uses scheme `"Clinician"`. `AuthorizeFolder("/Clinician", "Clinician")`, except `Index` and `AccessEnded`.
-  - `Caller ClinicianAuth.ToCaller(ClaimsPrincipal)` builds the `VerifiedCaller` for the gate.
+  - `Caller CallerManager.FromClinician(ClaimsPrincipal)` builds the `VerifiedCaller` for the gate.
 
 - [ ] **Write failing tests** on `Evaluate`, with hand-built `ClaimsPrincipal`s:
   - `Valid_clinician`.
@@ -505,7 +512,7 @@ docs/ezca-notes.md        what the EZCA probe showed
 ### Task 8b (only on checkpoint failure): Clinician passkeys in our own directory
 
 - [ ] Reuse Task 7's passkey flow with the `local_clinicians` table, seeded with Dr. Rivera, Riverside Primary Care, `urn:local:rivera`. Register the security key as Dr. Rivera's passkey.
-- [ ] `ClinicianAuth.Evaluate` reads the local cookie instead. Everything downstream is unchanged.
+- [ ] `CallerManager.EvaluateClinician` reads the local cookie instead. Everything downstream is unchanged.
 - [ ] Test `Local_clinician_yields_party`. Commit `feat: local clinician passkeys (fallback)`. The pitch then says "plugs into Entra ID; shown with our own directory."
 
 ### Task 9: Provider simulator and seed data (App lead, 11:00 PM–1:00 AM)
@@ -540,7 +547,7 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 10: Kidney Check example app (App lead, 1:00–2:00 AM)
 
-**Files:** Create `EZEHR.Tools/Commands/KidneyCheckCommand.cs` and `Domain/KidneyRule.cs`. Test: `EZEHR.Tests/Domain/KidneyRuleTests.cs`.
+**Files:** Create `EZEHR.Tools/Commands/KidneyCheckCommand.cs` and `Services/KidneyRule.cs`. Test: `EZEHR.Tests/Services/KidneyRuleTests.cs`.
 
 **Interfaces:**
 - Consumes: `NetworkClient` (Task 9); `GET /labs` and `POST /notes` (Task 6); `RecordSigner`.
@@ -574,7 +581,7 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 - [ ] **Share:**
   - Pick a duration (5 min, 1 h, 4 h, end of day). The page shows the code as `XXXX-XXXX` in large type, with a QRCoder PNG of the code.
   - The page polls `_ActivityPartial` every 2 s with htmx (`hx-get`, `hx-trigger="every 2s"`).
-  - A pending request shows a full-screen `Copy.ApprovePrompt(...)` with Approve and Deny buttons, which post to `GrantService.Decide`.
+  - A pending request shows a full-screen `Copy.ApprovePrompt(...)` with Approve and Deny buttons, which post to `GrantManager.Decide`.
 - [ ] **Activity:** a live list, in plain language:
   - `"Dr. Rivera, Riverside Primary Care, viewed your record · 2:14 PM"`
   - `"Kidney Check read your lab results"`
@@ -598,13 +605,13 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
   8. The record page redirects to AccessEnded **(Review Focus 3)**.
   9. Activity contains the denial.
 - [ ] Run (FAIL), implement, run (PASS).
-- [ ] **Redeem:** a code field. On submit it calls `GrantService.Redeem` with the clinician `Party` and goes to Wait.
+- [ ] **Redeem:** a code field. On submit it calls `GrantManager.Redeem` with the clinician `Party` and goes to Wait.
 - [ ] **Wait:** polls the grant status with htmx every 2 s, showing "Waiting for Sam to approve…", then goes to Record.
 - [ ] **Record:**
-  - Every load calls `AccessGate.AuthorizeAsync(ReadRecord)`.
+  - Every load calls `AccessManager.AuthorizeAsync(ReadRecord)`.
   - Header: "Sam Taylor · access until 5:00 PM".
   - The combined timeline with badges, and the Kidney Check note at the top.
-  - A **note form** whose default text is "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed." It saves a FHIR `Communication` (`sender.display` = "Dr. Rivera, Riverside Primary Care", `sender.identifier` = the clinician's `SubjectUri`), signed with the **platform** certificate, through `AccessGate.AuthorizeAsync(WriteNote)`.
+  - A **note form** whose default text is "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed." It saves a FHIR `Communication` (`sender.display` = "Dr. Rivera, Riverside Primary Care", `sender.identifier` = the clinician's `SubjectUri`), signed with the **platform** certificate, through `AccessManager.AuthorizeAsync(WriteNote)`.
   - Any `GrantExpired`, `GrantRevoked`, `NoGrant` or `ShiftEnded` result redirects to AccessEnded.
 - [ ] **AccessEnded:** shows `Copy.AccessEnded`. A `ShiftEnded` result also shows a "Sign in again" link.
 - [ ] Commit `feat: clinician pages and share flow`.

@@ -1,0 +1,196 @@
+using System.Data.Common;
+using Dapper;
+using EZEHR.Data;
+using EZEHR.Models;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Options;
+
+namespace EZEHR.Managers;
+
+/// <summary>
+/// Provider-issued enrollment invites, like a patient-portal activation code. Redeeming one links the provider's
+/// patient id to the EZEHR patient, which is what lets that provider push records.
+/// </summary>
+public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions> options)
+{
+    public static readonly TimeSpan Lifetime = TimeSpan.FromDays(7);
+
+    /// <summary>A provider asks for an invite for one of its patients. Only verified providers may.</summary>
+    public async Task<CreateInviteResult> CreateAsync(Caller caller, string providerPatientId)
+    {
+        if (caller is UnverifiedCaller unverified)
+        {
+            return new CreateInviteResult(false, unverified.Reason, null, null);
+        }
+        if (caller is not VerifiedCaller { Party.Kind: PartyKind.Provider } provider)
+        {
+            return new CreateInviteResult(false, DenyReason.WrongPartyKind, null, null);
+        }
+
+        string code = GrantManager.NewCode();
+        await using SqlConnection connection = await db.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO invites(code, provider_uri, provider_patient_id, expires_at)
+            VALUES (@code, @providerUri, @providerPatientId, @expiresAt)
+            """,
+            new
+            {
+                code,
+                providerUri = provider.Party.SubjectUri,
+                providerPatientId,
+                expiresAt = time.GetUtcNow() + Lifetime,
+            }
+        );
+        string url = $"{options.Value.Origin.TrimEnd('/')}/Patient/Enroll?invite={code}";
+        return new CreateInviteResult(true, null, code, url);
+    }
+
+    /// <summary>Checks an invite without using it (enrollment shows who invited the patient before the passkey is made).</summary>
+    public async Task<InviteResult> PeekAsync(string code)
+    {
+        await using SqlConnection connection = await db.OpenAsync();
+        InviteRow? invite = await FindAsync(connection, null, GrantManager.NormalizeCode(code));
+        if (Unusable(invite) is InviteError error)
+        {
+            return Failed(error);
+        }
+        return Succeeded(invite!.ToLink());
+    }
+
+    /// <summary>Links the invite's provider record to the patient and marks the invite used. Single use.</summary>
+    public async Task<InviteResult> RedeemAsync(string code, Guid patientId)
+    {
+        string normalizedCode = GrantManager.NormalizeCode(code);
+        DateTimeOffset now = time.GetUtcNow();
+        await using SqlConnection connection = await db.OpenAsync();
+        await using DbTransaction transaction = await connection.BeginTransactionAsync();
+
+        // The conditional UPDATE is the claim, so a double submit redeems once.
+        ProviderLink? link = await connection.QuerySingleOrDefaultAsync<ProviderLink>(
+            """
+            UPDATE invites SET redeemed_at = @now
+            OUTPUT inserted.provider_uri AS ProviderUri,
+                   inserted.provider_patient_id AS ProviderPatientId
+            WHERE code = @normalizedCode AND redeemed_at IS NULL AND expires_at >= @now
+            """,
+            new { normalizedCode, now },
+            transaction
+        );
+        if (link is null)
+        {
+            InviteRow? invite = await FindAsync(connection, transaction, normalizedCode);
+            return Failed(Unusable(invite) ?? InviteError.InviteUsed);
+        }
+
+        Guid? linkedTo = await LinkedPatientAsync(connection, transaction, link);
+        if (linkedTo is not null && linkedTo != patientId)
+        {
+            return Failed(InviteError.InviteLinkedElsewhere);
+        }
+        if (linkedTo is null)
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO provider_links(patient_id, provider_uri, provider_patient_id)
+                VALUES (@patientId, @ProviderUri, @ProviderPatientId)
+                """,
+                new
+                {
+                    patientId,
+                    link.ProviderUri,
+                    link.ProviderPatientId,
+                },
+                transaction
+            );
+        }
+        await transaction.CommitAsync();
+        return Succeeded(link);
+    }
+
+    /// <summary>The EZEHR patient linked to a provider's own patient id, if any.</summary>
+    public async Task<Guid?> LinkedPatientAsync(string providerUri, string providerPatientId)
+    {
+        await using SqlConnection connection = await db.OpenAsync();
+        return await LinkedPatientAsync(
+            connection,
+            null,
+            new ProviderLink(providerUri, providerPatientId)
+        );
+    }
+
+    private static async Task<Guid?> LinkedPatientAsync(
+        SqlConnection connection,
+        DbTransaction? transaction,
+        ProviderLink link
+    )
+    {
+        return await connection.QuerySingleOrDefaultAsync<Guid?>(
+            """
+            SELECT patient_id FROM provider_links
+            WHERE provider_uri = @ProviderUri AND provider_patient_id = @ProviderPatientId
+            """,
+            link,
+            transaction
+        );
+    }
+
+    private static async Task<InviteRow?> FindAsync(
+        SqlConnection connection,
+        DbTransaction? transaction,
+        string normalizedCode
+    )
+    {
+        return await connection.QuerySingleOrDefaultAsync<InviteRow>(
+            """
+            SELECT provider_uri AS ProviderUri, provider_patient_id AS ProviderPatientId,
+                   expires_at AS ExpiresAt, redeemed_at AS RedeemedAt
+            FROM invites
+            WHERE code = @normalizedCode
+            """,
+            new { normalizedCode },
+            transaction
+        );
+    }
+
+    /// <summary>Why an invite can't be used, or null when it can.</summary>
+    private InviteError? Unusable(InviteRow? invite)
+    {
+        if (invite is null)
+        {
+            return InviteError.InviteUnknown;
+        }
+        if (invite.RedeemedAt is not null)
+        {
+            return InviteError.InviteUsed;
+        }
+        if (time.GetUtcNow() > invite.ExpiresAt)
+        {
+            return InviteError.InviteExpired;
+        }
+        return null;
+    }
+
+    private static InviteResult Succeeded(ProviderLink link)
+    {
+        return new InviteResult(true, link, null);
+    }
+
+    private static InviteResult Failed(InviteError error)
+    {
+        return new InviteResult(false, null, error);
+    }
+
+    private sealed record InviteRow(
+        string ProviderUri,
+        string ProviderPatientId,
+        DateTimeOffset ExpiresAt,
+        DateTimeOffset? RedeemedAt
+    )
+    {
+        public ProviderLink ToLink()
+        {
+            return new ProviderLink(ProviderUri, ProviderPatientId);
+        }
+    }
+}

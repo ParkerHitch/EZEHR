@@ -1,5 +1,5 @@
 using System.Security.Cryptography;
-using EZEHR.Security.Crypto;
+using EZEHR.Services;
 
 namespace EZEHR.Tests.Crypto;
 
@@ -10,44 +10,52 @@ public class CryptoTests
     [Fact]
     public void Cipher_roundtrip()
     {
-        var (iv, ct) = RecordCipher.Encrypt(Dek, "p:e", "hello record");
+        (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(Dek, "p:e", "hello record");
         Assert.Equal(12, iv.Length);
-        Assert.Equal("hello record".Length + 16, ct.Length);
-        Assert.Equal("hello record", RecordCipher.Decrypt(Dek, "p:e", iv, ct));
+        Assert.Equal("hello record".Length + 16, ciphertext.Length);
+        Assert.Equal("hello record", RecordCipher.Decrypt(Dek, "p:e", iv, ciphertext));
     }
 
     [Fact]
     public void Cipher_wrong_aad_throws()
     {
-        var (iv, ct) = RecordCipher.Encrypt(Dek, "patientA:entry1", "hello record");
-        Assert.ThrowsAny<CryptographicException>(() => RecordCipher.Decrypt(Dek, "patientB:entry1", iv, ct));
+        (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(
+            Dek,
+            "patientA:entry1",
+            "hello record"
+        );
+        Assert.ThrowsAny<CryptographicException>(() =>
+            RecordCipher.Decrypt(Dek, "patientB:entry1", iv, ciphertext)
+        );
     }
 
     [Fact]
     public void Cipher_tamper_throws()
     {
-        var (iv, ct) = RecordCipher.Encrypt(Dek, "p:e", "hello record");
-        ct[0] ^= 1;
-        Assert.ThrowsAny<CryptographicException>(() => RecordCipher.Decrypt(Dek, "p:e", iv, ct));
+        (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(Dek, "p:e", "hello record");
+        ciphertext[0] ^= 1;
+        Assert.ThrowsAny<CryptographicException>(() =>
+            RecordCipher.Decrypt(Dek, "p:e", iv, ciphertext)
+        );
     }
 
     [Fact]
     public void Cipher_uses_fresh_iv()
     {
-        var a = RecordCipher.Encrypt(Dek, "p:e", "same");
-        var b = RecordCipher.Encrypt(Dek, "p:e", "same");
-        Assert.NotEqual(a.Iv, b.Iv);
+        (byte[] firstIv, byte[] _) = RecordCipher.Encrypt(Dek, "p:e", "same");
+        (byte[] secondIv, byte[] _) = RecordCipher.Encrypt(Dek, "p:e", "same");
+        Assert.NotEqual(firstIv, secondIv);
     }
 
     [Fact]
-    public async Task LocalWrapper_roundtrip()
+    public async Task LocalKeyWrap_roundtrip()
     {
-        var wrapper = new LocalKeyWrapper(RandomNumberGenerator.GetBytes(32));
-        var wrapped = await wrapper.WrapAsync(Dek);
+        LocalKeyWrapService keyWrap = TestServices.LocalKeyWrapService();
+        byte[] wrapped = await keyWrap.WrapAsync(Dek);
         Assert.NotEqual(Dek, wrapped);
-        Assert.Equal(Dek, await wrapper.UnwrapAsync(wrapped));
+        Assert.Equal(Dek, await keyWrap.UnwrapAsync(wrapped));
 
-        var otherKek = new LocalKeyWrapper(RandomNumberGenerator.GetBytes(32));
+        LocalKeyWrapService otherKek = TestServices.LocalKeyWrapService();
         await Assert.ThrowsAnyAsync<CryptographicException>(() => otherKek.UnwrapAsync(wrapped));
     }
 }

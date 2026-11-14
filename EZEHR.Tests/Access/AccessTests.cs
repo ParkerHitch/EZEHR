@@ -1,223 +1,329 @@
-using Dapper;
-using EZEHR.Access;
-using EZEHR.Data;
-using EZEHR.Domain;
-using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Options;
+using EZEHR.Managers;
+using EZEHR.Models;
+using EZEHR.Tests.Data;
 using Microsoft.Extensions.Time.Testing;
 
 namespace EZEHR.Tests.Access;
 
-public class AccessTests
+public class AccessTests : IAsyncLifetime
 {
-    private static readonly DateTimeOffset Start = new(2026, 11, 13, 20, 0, 0, TimeSpan.Zero); // 3:00 PM in Indianapolis
+    // 3:00 PM in Indianapolis.
+    private static readonly DateTimeOffset Start = new(2026, 11, 13, 20, 0, 0, TimeSpan.Zero);
 
-    private readonly FakeTimeProvider clock = new(Start);
-    private readonly SqliteConnection db = Db.Open(":memory:");
-    private readonly AuditLog audit;
-    private readonly GrantService grants;
-    private readonly AccessGate gate;
-    private readonly Guid sam = Guid.NewGuid();
+    private static readonly Party Rivera = new(
+        PartyKind.Clinician,
+        "urn:entra:tid:rivera",
+        "Dr. Rivera",
+        "Riverside Primary Care"
+    );
 
-    private static readonly Party Rivera = new(PartyKind.Clinician, "urn:entra:tid:rivera", "Dr. Rivera", "Riverside Primary Care");
-    private static readonly Party Other = new(PartyKind.Clinician, "urn:entra:tid:other", "Dr. Other", "Riverside Primary Care");
-    private static readonly Party KidneyCheck = new(PartyKind.App, "urn:app:kidney-check", "Kidney Check", "Kidney Check");
+    private static readonly Party Other = new(
+        PartyKind.Clinician,
+        "urn:entra:tid:other",
+        "Dr. Other",
+        "Riverside Primary Care"
+    );
 
-    public AccessTests()
+    private static readonly Party KidneyCheck = new(
+        PartyKind.App,
+        "urn:app:kidney-check",
+        "Kidney Check",
+        "Kidney Check"
+    );
+
+    private readonly FakeTimeProvider _clock = new(Start);
+    private readonly Guid _sam = Guid.NewGuid();
+    private TestDatabase _database = null!;
+    private TestServices _services = null!;
+
+    private AuditManager Audit
     {
-        audit = new AuditLog(db, clock);
-        grants = new GrantService(db, audit, clock, Options.Create(new AppOptions()));
-        gate = new AccessGate(grants, audit, clock);
+        get { return _services.Audit; }
     }
 
-    private VerifiedCaller Clinician(Party p) => new(p, clock.GetUtcNow());
-
-    private Grant ActiveGrant(ShareDuration d = ShareDuration.OneHour)
+    private GrantManager Grants
     {
-        var offer = grants.CreateOffer(sam, d);
-        var pending = grants.Redeem(offer.Code, Rivera);
-        return grants.Decide(sam, pending.Id, approve: true);
+        get { return _services.Grants; }
+    }
+
+    private AccessManager Gate
+    {
+        get { return _services.Access; }
+    }
+
+    public async Task InitializeAsync()
+    {
+        _database = await SqlServer.CreateDatabaseAsync();
+        _services = new TestServices(_database.Db, _clock);
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _database.DisposeAsync();
+    }
+
+    private VerifiedCaller Clinician(Party party)
+    {
+        return new VerifiedCaller(party, _clock.GetUtcNow());
+    }
+
+    private Task<AccessDecision> ReadRecordAsync(Caller caller)
+    {
+        return Gate.AuthorizeAsync(_sam, AccessAction.ReadRecord, caller, null);
+    }
+
+    private async Task<Grant> ActiveGrantAsync(ShareDuration duration = ShareDuration.OneHour)
+    {
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, duration);
+        GrantResult pending = await Grants.RedeemAsync(offer.Code, Rivera);
+        GrantResult active = await Grants.DecideAsync(_sam, pending.Grant!.Id, approve: true);
+        return active.Grant!;
     }
 
     [Fact]
-    public void No_grant_denied_and_logged_once()
+    public async Task No_grant_denied_and_logged_once()
     {
-        var d = gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null);
-        Assert.Equal(new AccessDecision(false, null, DenyReason.NoGrant), d);
-        var e = Assert.Single(audit.List(sam));
-        Assert.False(e.Granted);
-        Assert.Equal(DenyReason.NoGrant, e.Reason);
-        Assert.Equal("ReadRecord", e.Action);
-        Assert.Equal(Rivera, e.Actor);
+        AccessDecision decision = await ReadRecordAsync(Clinician(Rivera));
+        Assert.Equal(new AccessDecision(false, null, DenyReason.NoGrant), decision);
+        AuditEvent logged = Assert.Single(await Audit.ListAsync(_sam));
+        Assert.False(logged.Granted);
+        Assert.Equal(DenyReason.NoGrant, logged.Reason);
+        Assert.Equal("ReadRecord", logged.Action);
+        Assert.Equal(Rivera, logged.Actor);
     }
 
     [Fact]
-    public void Pending_denied()
+    public async Task Pending_denied()
     {
-        var offer = grants.CreateOffer(sam, ShareDuration.OneHour);
-        grants.Redeem(offer.Code, Rivera);
-        Assert.Equal(DenyReason.GrantPending, gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Reason);
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, ShareDuration.OneHour);
+        await Grants.RedeemAsync(offer.Code, Rivera);
+        Assert.Equal(DenyReason.GrantPending, (await ReadRecordAsync(Clinician(Rivera))).Reason);
     }
 
     [Fact]
-    public void Active_allowed_and_logged()
+    public async Task Active_allowed_and_logged()
     {
-        var grant = ActiveGrant();
-        var before = audit.List(sam).Count;
-        var d = gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null);
-        Assert.True(d.Allowed);
-        Assert.Equal(grant.Id, d.Grant!.Id);
-        var events = audit.List(sam);
+        Grant grant = await ActiveGrantAsync();
+        int before = (await Audit.ListAsync(_sam)).Count;
+        AccessDecision decision = await ReadRecordAsync(Clinician(Rivera));
+        Assert.True(decision.Allowed);
+        Assert.Equal(grant.Id, decision.Grant!.Id);
+        IReadOnlyList<AuditEvent> events = await Audit.ListAsync(_sam);
         Assert.Equal(before + 1, events.Count);
         Assert.True(events[^1].Granted);
         Assert.Null(events[^1].Reason);
     }
 
     [Fact]
-    public void Grant_for_other_clinician_is_NoGrant()
+    public async Task Grant_for_other_clinician_is_NoGrant()
     {
-        ActiveGrant();
-        Assert.Equal(DenyReason.NoGrant, gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Other), null).Reason);
-        Assert.Equal(DenyReason.NoGrant, gate.Authorize(Guid.NewGuid(), AccessAction.ReadRecord, Clinician(Rivera), null).Reason);
+        await ActiveGrantAsync();
+        Assert.Equal(DenyReason.NoGrant, (await ReadRecordAsync(Clinician(Other))).Reason);
+        AccessDecision otherPatient = await Gate.AuthorizeAsync(
+            Guid.NewGuid(),
+            AccessAction.ReadRecord,
+            Clinician(Rivera),
+            null
+        );
+        Assert.Equal(DenyReason.NoGrant, otherPatient.Reason);
     }
 
     [Fact] // Review Focus 3
-    public void Expired_marks_and_denies()
+    public async Task Expired_marks_and_denies()
     {
-        var grant = ActiveGrant(ShareDuration.FiveMinutes);
+        Grant grant = await ActiveGrantAsync(ShareDuration.FiveMinutes);
         Assert.Equal(Start.AddMinutes(5), grant.ExpiresAt);
-        Assert.True(gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Allowed);
-        clock.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
-        Assert.Equal(DenyReason.GrantExpired, gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Reason);
-        Assert.Equal(GrantStatus.Expired, grants.Find(grant.Id)!.Status);
-        Assert.Equal(DenyReason.GrantExpired, gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Reason);
+        Assert.True((await ReadRecordAsync(Clinician(Rivera))).Allowed);
+        _clock.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        Assert.Equal(DenyReason.GrantExpired, (await ReadRecordAsync(Clinician(Rivera))).Reason);
+        Assert.Equal(GrantStatus.Expired, (await Grants.FindAsync(grant.Id))!.Status);
+        Assert.Equal(DenyReason.GrantExpired, (await ReadRecordAsync(Clinician(Rivera))).Reason);
     }
 
     [Fact] // Review Focus 3
-    public void Revoked_denies()
+    public async Task Revoked_denies()
     {
-        var grant = ActiveGrant();
-        Assert.True(gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Allowed);
-        var revoked = grants.Revoke(sam, grant.Id);
+        Grant grant = await ActiveGrantAsync();
+        Assert.True((await ReadRecordAsync(Clinician(Rivera))).Allowed);
+        Grant revoked = (await Grants.RevokeAsync(_sam, grant.Id)).Grant!;
         Assert.Equal(GrantStatus.Revoked, revoked.Status);
         Assert.Equal(Start, revoked.RevokedAt);
-        Assert.Equal(DenyReason.GrantRevoked, gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Reason);
+        Assert.Equal(DenyReason.GrantRevoked, (await ReadRecordAsync(Clinician(Rivera))).Reason);
     }
 
     [Fact]
-    public void Denied_request_is_refused()
+    public async Task Denied_request_is_refused()
     {
-        var offer = grants.CreateOffer(sam, ShareDuration.OneHour);
-        var pending = grants.Redeem(offer.Code, Rivera);
-        Assert.Equal(GrantStatus.Denied, grants.Decide(sam, pending.Id, approve: false).Status);
-        Assert.Equal(DenyReason.GrantRevoked, gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Reason);
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, ShareDuration.OneHour);
+        GrantResult pending = await Grants.RedeemAsync(offer.Code, Rivera);
+        GrantResult denied = await Grants.DecideAsync(_sam, pending.Grant!.Id, approve: false);
+        Assert.Equal(GrantStatus.Denied, denied.Grant!.Status);
+        Assert.Equal(DenyReason.GrantRevoked, (await ReadRecordAsync(Clinician(Rivera))).Reason);
     }
 
     [Fact]
-    public void New_share_after_expiry_is_allowed()
+    public async Task New_share_after_expiry_is_allowed()
     {
-        ActiveGrant(ShareDuration.FiveMinutes);
-        clock.Advance(TimeSpan.FromMinutes(10));
-        Assert.False(gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Allowed);
-        ActiveGrant(ShareDuration.OneHour);
-        Assert.True(gate.Authorize(sam, AccessAction.ReadRecord, Clinician(Rivera), null).Allowed);
+        await ActiveGrantAsync(ShareDuration.FiveMinutes);
+        _clock.Advance(TimeSpan.FromMinutes(10));
+        Assert.False((await ReadRecordAsync(Clinician(Rivera))).Allowed);
+        await ActiveGrantAsync(ShareDuration.OneHour);
+        Assert.True((await ReadRecordAsync(Clinician(Rivera))).Allowed);
     }
 
     [Fact] // Review Focus 2
-    public void Redeem_twice_second_throws_offer_used()
+    public async Task Redeem_twice_second_is_offer_used()
     {
-        var offer = grants.CreateOffer(sam, ShareDuration.OneHour);
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, ShareDuration.OneHour);
         Assert.Equal(8, offer.Code.Length);
         Assert.Equal(Start.AddMinutes(10), offer.OfferExpiresAt);
-        grants.Redeem(offer.DisplayCode.ToLowerInvariant(), Rivera); // typed as "abcd-efgh"
-        var e = Assert.Throws<GrantException>(() => grants.Redeem(offer.Code, Rivera));
-        Assert.Equal("offer_used", e.Code);
-        Assert.Single(grants.ForPatient(sam), g => g.Status == GrantStatus.Pending);
-        Assert.Single(grants.ForPatient(sam));
+        // Typed as "abcd-efgh".
+        GrantResult first = await Grants.RedeemAsync(
+            GrantManager.FormatCode(offer.Code).ToLowerInvariant(),
+            Rivera
+        );
+        Assert.True(first.Succeeded);
+        GrantResult second = await Grants.RedeemAsync(offer.Code, Rivera);
+        Assert.Equal(new GrantResult(false, null, GrantError.OfferUsed), second);
+        IReadOnlyList<Grant> grants = await Grants.ForPatientAsync(_sam);
+        Assert.Equal(GrantStatus.Pending, Assert.Single(grants).Status);
+    }
+
+    [Fact] // Review Focus 2
+    public async Task Concurrent_redeems_create_one_grant()
+    {
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, ShareDuration.OneHour);
+        GrantResult[] results = await Task.WhenAll(
+            Enumerable.Range(0, 8).Select(_ => Grants.RedeemAsync(offer.Code, Rivera))
+        );
+        Assert.Single(results, result => result.Succeeded);
+        Assert.All(results.Where(result => !result.Succeeded), result =>
+            Assert.Equal(GrantError.OfferUsed, result.Error)
+        );
+        Assert.Single(await Grants.ForPatientAsync(_sam));
     }
 
     [Fact]
-    public void Offer_expired_after_10_minutes()
+    public async Task Offer_expired_after_10_minutes()
     {
-        var offer = grants.CreateOffer(sam, ShareDuration.OneHour);
-        clock.Advance(TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(1));
-        Assert.Equal("offer_expired", Assert.Throws<GrantException>(() => grants.Redeem(offer.Code, Rivera)).Code);
-        Assert.Equal("offer_unknown", Assert.Throws<GrantException>(() => grants.Redeem("ZZZZZZZZ", Rivera)).Code);
-        Assert.Empty(grants.ForPatient(sam));
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, ShareDuration.OneHour);
+        _clock.Advance(TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(1));
+        Assert.Equal(GrantError.OfferExpired, (await Grants.RedeemAsync(offer.Code, Rivera)).Error);
+        Assert.Equal(GrantError.OfferUnknown, (await Grants.RedeemAsync("ZZZZZZZZ", Rivera)).Error);
+        Assert.Empty(await Grants.ForPatientAsync(_sam));
     }
 
     [Fact]
-    public void Redeem_logs_one_event_naming_the_clinician()
+    public async Task Redeem_logs_one_event_naming_the_clinician()
     {
-        var offer = grants.CreateOffer(sam, ShareDuration.OneHour);
-        grants.Redeem(offer.Code, Rivera);
-        var e = Assert.Single(audit.List(sam));
-        Assert.Equal("RedeemOffer", e.Action);
-        Assert.Equal(Rivera, e.Actor);
-        Assert.True(e.Granted);
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, ShareDuration.OneHour);
+        await Grants.RedeemAsync(offer.Code, Rivera);
+        AuditEvent logged = Assert.Single(await Audit.ListAsync(_sam));
+        Assert.Equal("RedeemOffer", logged.Action);
+        Assert.Equal(Rivera, logged.Actor);
+        Assert.True(logged.Granted);
     }
 
     [Fact]
-    public void Unverified_logged_with_claimed_purpose()
+    public async Task Unverified_logged_with_claimed_purpose()
     {
-        var d = gate.Authorize(sam, AccessAction.ReadRecord, new UnverifiedCaller(DenyReason.UntrustedCertificate), "treatment");
-        Assert.Equal(DenyReason.UntrustedCertificate, d.Reason);
-        var e = Assert.Single(audit.List(sam));
-        Assert.Null(e.Actor);
-        Assert.Equal("treatment", e.ClaimedPurpose);
-        Assert.False(e.Granted);
+        AccessDecision decision = await Gate.AuthorizeAsync(
+            _sam,
+            AccessAction.ReadRecord,
+            new UnverifiedCaller(DenyReason.UntrustedCertificate),
+            "treatment"
+        );
+        Assert.Equal(DenyReason.UntrustedCertificate, decision.Reason);
+        AuditEvent logged = Assert.Single(await Audit.ListAsync(_sam));
+        Assert.Null(logged.Actor);
+        Assert.Equal("treatment", logged.ClaimedPurpose);
+        Assert.False(logged.Granted);
     }
 
     [Fact]
-    public void App_scope_cannot_read_record()
+    public async Task Long_claimed_purpose_is_cut_to_fit()
     {
-        var g = grants.CreateAppGrant(sam, KidneyCheck);
-        Assert.Equal((GrantScope.LabsAndNotes, GrantStatus.Active, (DateTimeOffset?)null), (g.Scope, g.Status, g.ExpiresAt));
-        Assert.Equal(g.Id, grants.CreateAppGrant(sam, KidneyCheck).Id); // idempotent
-        var app = new VerifiedCaller(KidneyCheck, null);
-        Assert.Equal(DenyReason.ScopeDenied, gate.Authorize(sam, AccessAction.ReadRecord, app, null).Reason);
-        Assert.True(gate.Authorize(sam, AccessAction.ReadLabs, app, null).Allowed);
-        Assert.True(gate.Authorize(sam, AccessAction.WriteNote, app, null).Allowed);
-        clock.Advance(TimeSpan.FromDays(365));
-        Assert.True(gate.Authorize(sam, AccessAction.ReadLabs, app, null).Allowed); // ongoing
-        grants.Revoke(sam, g.Id);
-        Assert.Equal(DenyReason.GrantRevoked, gate.Authorize(sam, AccessAction.ReadLabs, app, null).Reason);
+        string purpose = new('x', 5000);
+        await Gate.AuthorizeAsync(
+            _sam,
+            AccessAction.ReadRecord,
+            new UnverifiedCaller(DenyReason.NoCertificate),
+            purpose
+        );
+        AuditEvent logged = Assert.Single(await Audit.ListAsync(_sam));
+        Assert.Equal(purpose[..AuditManager.MaxPurposeLength], logged.ClaimedPurpose);
     }
 
     [Fact]
-    public void Clinician_shift_over_10h_denied()
+    public async Task App_scope_cannot_read_record()
     {
-        ActiveGrant(ShareDuration.EndOfDay);
-        var signedIn = new VerifiedCaller(Rivera, Start.AddHours(-10).AddSeconds(-1));
-        Assert.Equal(DenyReason.ShiftEnded, gate.Authorize(sam, AccessAction.ReadRecord, signedIn, null).Reason);
-        Assert.True(gate.Authorize(sam, AccessAction.ReadRecord, new VerifiedCaller(Rivera, Start.AddHours(-9)), null).Allowed);
-        Assert.Equal(DenyReason.NotSignedIn, gate.Authorize(sam, AccessAction.ReadRecord, new VerifiedCaller(Rivera, null), null).Reason);
+        Grant grant = await Grants.CreateAppGrantAsync(_sam, KidneyCheck);
+        Assert.Equal(
+            (GrantScope.LabsAndNotes, GrantStatus.Active, (DateTimeOffset?)null),
+            (grant.Scope, grant.Status, grant.ExpiresAt)
+        );
+        // Idempotent.
+        Assert.Equal(grant.Id, (await Grants.CreateAppGrantAsync(_sam, KidneyCheck)).Id);
+        VerifiedCaller app = new(KidneyCheck, null);
+        Assert.Equal(DenyReason.ScopeDenied, (await ReadRecordAsync(app)).Reason);
+        Assert.True((await Gate.AuthorizeAsync(_sam, AccessAction.ReadLabs, app, null)).Allowed);
+        Assert.True((await Gate.AuthorizeAsync(_sam, AccessAction.WriteNote, app, null)).Allowed);
+        _clock.Advance(TimeSpan.FromDays(365));
+        // Ongoing.
+        Assert.True((await Gate.AuthorizeAsync(_sam, AccessAction.ReadLabs, app, null)).Allowed);
+        await Grants.RevokeAsync(_sam, grant.Id);
+        AccessDecision revoked = await Gate.AuthorizeAsync(_sam, AccessAction.ReadLabs, app, null);
+        Assert.Equal(DenyReason.GrantRevoked, revoked.Reason);
     }
 
     [Fact]
-    public void EndOfDay_is_local_midnight_minus_1s()
+    public async Task Clinician_shift_over_10h_denied()
     {
-        var g = ActiveGrant(ShareDuration.EndOfDay);
-        // 3:00 PM EST on Nov 13 → 11:59:59 PM EST = 04:59:59 UTC on Nov 14
-        Assert.Equal(new DateTimeOffset(2026, 11, 14, 4, 59, 59, TimeSpan.Zero), g.ExpiresAt);
-        Assert.Null(g.DurationMinutes);
+        await ActiveGrantAsync(ShareDuration.EndOfDay);
+        VerifiedCaller pastShift = new(Rivera, Start.AddHours(-10).AddSeconds(-1));
+        Assert.Equal(DenyReason.ShiftEnded, (await ReadRecordAsync(pastShift)).Reason);
+        VerifiedCaller inShift = new(Rivera, Start.AddHours(-9));
+        Assert.True((await ReadRecordAsync(inShift)).Allowed);
+        VerifiedCaller notSignedIn = new(Rivera, null);
+        Assert.Equal(DenyReason.NotSignedIn, (await ReadRecordAsync(notSignedIn)).Reason);
     }
 
     [Fact]
-    public void Durations_match_offer()
+    public async Task EndOfDay_is_local_midnight_minus_1s()
     {
-        Assert.Equal(Start.AddHours(4), ActiveGrant(ShareDuration.FourHours).ExpiresAt);
-        Assert.Equal(240, grants.ForPatient(sam).Single().DurationMinutes);
+        Grant grant = await ActiveGrantAsync(ShareDuration.EndOfDay);
+        // 3:00 PM EST on Nov 13 → 11:59:59 PM EST = 04:59:59 UTC on Nov 14.
+        Assert.Equal(new DateTimeOffset(2026, 11, 14, 4, 59, 59, TimeSpan.Zero), grant.ExpiresAt);
+        Assert.Null(grant.DurationMinutes);
     }
 
     [Fact]
-    public void Decide_rejects_other_patients_and_non_pending()
+    public async Task Durations_match_offer()
     {
-        var offer = grants.CreateOffer(sam, ShareDuration.OneHour);
-        var pending = grants.Redeem(offer.Code, Rivera);
-        Assert.Equal("grant_unknown", Assert.Throws<GrantException>(() => grants.Decide(Guid.NewGuid(), pending.Id, true)).Code);
-        grants.Decide(sam, pending.Id, true);
-        Assert.Equal("grant_not_pending", Assert.Throws<GrantException>(() => grants.Decide(sam, pending.Id, true)).Code);
-        Assert.Equal("grant_unknown", Assert.Throws<GrantException>(() => grants.Revoke(Guid.NewGuid(), pending.Id)).Code);
+        Assert.Equal(
+            Start.AddHours(4),
+            (await ActiveGrantAsync(ShareDuration.FourHours)).ExpiresAt
+        );
+        Assert.Equal(240, (await Grants.ForPatientAsync(_sam)).Single().DurationMinutes);
+    }
+
+    [Fact]
+    public async Task Decide_rejects_other_patients_and_non_pending()
+    {
+        ShareOffer offer = await Grants.CreateOfferAsync(_sam, ShareDuration.OneHour);
+        Guid grantId = (await Grants.RedeemAsync(offer.Code, Rivera)).Grant!.Id;
+        Assert.Equal(
+            GrantError.GrantUnknown,
+            (await Grants.DecideAsync(Guid.NewGuid(), grantId, true)).Error
+        );
+        await Grants.DecideAsync(_sam, grantId, true);
+        Assert.Equal(
+            GrantError.GrantNotPending,
+            (await Grants.DecideAsync(_sam, grantId, true)).Error
+        );
+        Assert.Equal(
+            GrantError.GrantUnknown,
+            (await Grants.RevokeAsync(Guid.NewGuid(), grantId)).Error
+        );
     }
 }
