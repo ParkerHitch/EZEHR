@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace EZEHR.Pages.Patient;
 
 /// <summary>
-/// Who can see the record now, with a Revoke button for each, and who could before. Below that, the clinics that
+/// Who can see the record now, with a Revoke button for each, and who could before. Below that, the providers that
 /// can add records (provider links), with a Disconnect button for each. Apps: Kidney Check, on or off.
 /// </summary>
 public sealed class GrantsModel(

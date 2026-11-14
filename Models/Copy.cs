@@ -4,7 +4,7 @@ namespace EZEHR.Models;
 public static class Copy
 {
     public const string KidneyOptIn =
-        "Allow the Kidney Check app to read your lab results. It looks for slow changes no single clinic would see. You can turn it off any time.";
+        "Allow the Kidney Check app to read your lab results. It looks for slow changes no single provider would see. You can turn it off any time.";
 
     public const string SomethingWentWrong =
         "We couldn't finish that. Please go back and try again.";
@@ -61,15 +61,15 @@ public static class Copy
         "Epic says it blocks data to protect patients. We make blocking unnecessary.";
 
     public const string InviteUnusable =
-        "This invite can't be used. It may have expired or already been used. Ask your clinic for a new one.";
+        "This invite can't be used. It may have expired or already been used. Ask your provider for a new one.";
 
     public const string InviteLinkedElsewhere =
-        "This clinic's record is already linked to a different EZEHR account.";
+        "This provider's record is already linked to a different EZEHR account.";
 
     public const string PasskeyFailed = "That passkey didn't work. Please try again.";
 
     public const string PasskeyUnknown =
-        "We don't recognize that passkey. Use the link from your clinic to create one.";
+        "We don't recognize that passkey. Use the link from your provider to create one.";
 
     public static string InvitedBy(string provider)
     {
@@ -106,9 +106,9 @@ public static class Copy
     }
 
     public const string ConnectedProvidersHint =
-        "These clinics can add records to your EZEHR record. They can't see it. To reconnect one, ask it for a new invite.";
+        "These providers can add records to your EZEHR record. They can't see it. To reconnect one, ask it for a new invite.";
 
-    public const string NoConnectedProviders = "No clinics are connected.";
+    public const string NoConnectedProviders = "No providers are connected.";
 
     /// <summary>"Lakeside Urgent Care · can add records · linked Nov 14". Links made before dates were kept have none.</summary>
     public static string ConnectedProviderLine(string provider, string? date)
