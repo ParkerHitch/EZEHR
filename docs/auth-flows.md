@@ -372,6 +372,33 @@ The broker **claims** "treatment", just as the companies did in the Particle–E
 
 Expiry stops **future** reads. It can't erase what someone already saw, which is why every read is logged.
 
+### Flow 10: A provider audits its clinicians
+
+Riverside may need to review what its own clinicians did on EZEHR, the way a hospital audits chart access. Its system asks over the same network door it already uses, with its EZCA certificate.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Sys as Riverside system
+  participant Net as Network API
+  participant OA as OrganizationAuditManager
+  participant DB as audit_events
+  Sys->>Net: GET /list-organization-clinicians over mutual TLS
+  Net->>Net: certificate check, CN found in organizations, caller is urn:provider:riverside
+  Net->>OA: list clinicians for urn:provider:riverside
+  OA->>DB: clinician events where actor_org_uri is urn:provider:riverside
+  OA-->>Sys: Dr. Rivera, first and last seen, attempts and refusals
+  Sys->>Net: GET /read-organization-audit?clinicianUri=...&providerPatientId=RPC-1107
+  Net->>OA: same certificate check, then the filtered audit
+  OA->>DB: events where actor_org_uri is urn:provider:riverside, filtered, paged by id
+  OA-->>Sys: events, oldest first, with nextAfterId when more follow
+```
+
+- **What it sees:** every attempt by someone it vouches for: its clinicians' reads and share-code redemptions, granted or refused, and its own system's calls (pushes, invites). Each audit row records the actor's organization (`actor_org_uri`) when the event happens, so a clinician who later leaves stays in the history of the organization they acted for.
+- **What it never sees:** anything done by another organization, its clinicians, an app, or an unverified caller, even for the same patient.
+- **How patients appear:** by EZEHR patient id, plus the provider's own patient id when the patient is linked to it (`provider_links`). No names.
+- **Filters:** `clinicianUri`, `patientId`, `providerPatientId`, `since` (inclusive), `until` (exclusive), and paging by `afterId` with `limit` (1 to 500, default 100). `ezehr-tools provider audit <slug>` and `provider clinicians <slug>` call both endpoints.
+
 ---
 
 ## 6. How the components fit together
@@ -426,6 +453,7 @@ flowchart TB
 | `GrantManager` | patient pages, clinician pages, gate | offers, redemptions, approvals, revocations | grants |
 | **`AccessManager`** | **every read and write** | patient, action, `Caller`, claimed purpose | allowed + grant, or a `DenyReason`. **Always exactly one audit event** |
 | `AuditManager` | gate; patient activity page | events | the patient's activity list |
+| `OrganizationAuditManager` | `NetworkController` (`read-organization-audit`, `list-organization-clinicians`) | a `Caller` and a filter | the caller organization's own events or clinicians, or a `DenyReason` |
 | `RecordManager` | `NetworkController`, clinician and patient pages | patient ID and `Caller` | verified signed entries, after asking the gate; unwraps the key through Key Vault on every call |
 | `IKeyWrapService` | `RecordManager` | a patient data key | the wrapped or unwrapped key (Key Vault, `RSA-OAEP-256`) |
 | `RecordSigner` | the tools (provider simulator, Kidney Check) | a FHIR resource and a certificate with its key | a JWS with the certificate attached |
@@ -445,7 +473,7 @@ flowchart TB
 | EZCA client certificate (mutual TLS) | EZCA vouches that this connection is Lakeside's (or the app's) system | That the organization may read Sam's data; that comes from links and grants |
 | Record signature (JWS) | This exact record was written by Lakeside (or the app; or Riverside, for a note authored by Dr. Rivera), and hasn't changed since | That its medical content is correct |
 | Grant | Sam agreed: this party, this scope, until this time | Anything after it's revoked or expired |
-| Audit event | That an attempt happened, by whom, with what outcome and claimed purpose | Nothing beyond that; it's evidence, not prevention |
+| Audit event | That an attempt happened, by whom, with what outcome and claimed purpose, and which organization vouched for the actor | Nothing beyond that; it's evidence, not prevention |
 | Key Vault envelope encryption | Data at rest is unreadable without EZEHR's managed identity calling Key Vault | That EZEHR itself can't read it (it can, behind the gate; see the spec's honest limits) |
 
 ---

@@ -9,18 +9,37 @@ using EZEHR.Tools.Net;
 namespace EZEHR.Tools.Commands;
 
 /// <summary>
-/// Stands in for a provider's EHR on the network: asks for an enrollment invite for one of its patients, and
-/// pushes that patient's records from seed/{provider}.json, signed with .pki/{provider}.pfx.
+/// Stands in for a provider's EHR on the network: asks for an enrollment invite for one of its patients, pushes
+/// that patient's records from seed/{provider}.json, signed with .pki/{provider}.pfx, and reads the provider's own
+/// audit trail (what its clinicians and its system did).
 /// </summary>
 public static class ProviderCommand
 {
     public const string Usage = """
           provider invite <lakeside|northwind|maple|riverside> <providerPatientId>
           provider push <lakeside|northwind|maple|riverside> <providerPatientId>
+          provider audit <lakeside|northwind|maple|riverside> [--clinician <uri>] [--patient <providerPatientId>]
+          provider clinicians <lakeside|northwind|maple|riverside>
         """;
 
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length >= 2 && args[0] is "audit" or "clinicians" && IsProvider(args[1]))
+        {
+            using HttpClient auditClient = NetworkClient.Create(
+                NetworkClient.BaseUrl,
+                ToolPaths.Pki($"{args[1]}.pfx")
+            );
+            if (args[0] == "audit")
+            {
+                return await AuditAsync(
+                    auditClient,
+                    CommandLine.Option(args, "--clinician"),
+                    CommandLine.Option(args, "--patient")
+                );
+            }
+            return await CliniciansAsync(auditClient);
+        }
         if (args.Length != 3 || !IsProvider(args[1]))
         {
             Console.Error.WriteLine($"usage:\n{Usage}");
@@ -122,6 +141,78 @@ public static class ProviderCommand
         Console.WriteLine(
             $"{seed.Organization}: stored {stored}, already stored {alreadyStored}, replaced {replaced}"
         );
+        return 0;
+    }
+
+    /// <summary>Every page of the provider's audit, one line per attempt, oldest first.</summary>
+    private static async Task<int> AuditAsync(
+        HttpClient client,
+        string? clinicianUri,
+        string? providerPatientId
+    )
+    {
+        string filters = "";
+        if (clinicianUri is not null)
+        {
+            filters += $"&clinicianUri={Uri.EscapeDataString(clinicianUri)}";
+        }
+        if (providerPatientId is not null)
+        {
+            filters += $"&providerPatientId={Uri.EscapeDataString(providerPatientId)}";
+        }
+        long afterId = 0;
+        while (true)
+        {
+            using HttpResponseMessage response = await client.GetAsync(
+                $"api/network/read-organization-audit?afterId={afterId}{filters}"
+            );
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.Error.WriteLine(await NetworkClient.DescribeAsync(response));
+                return 1;
+            }
+            ReadOrganizationAuditResponse page = (
+                await response.Content.ReadFromJsonAsync<ReadOrganizationAuditResponse>(
+                    NetworkClient.Json
+                )
+            )!;
+            foreach (OrganizationAuditEvent auditEvent in page.Events)
+            {
+                string outcome = auditEvent.Granted ? "allowed" : $"refused {auditEvent.Reason}";
+                string patient = auditEvent.ProviderPatientId ?? auditEvent.PatientId.ToString();
+                Console.WriteLine(
+                    $"{auditEvent.At:yyyy-MM-dd HH:mm}  {auditEvent.ActorName, -20}  {auditEvent.Action, -18}  {outcome}  patient {patient}"
+                );
+            }
+            if (page.NextAfterId is not long nextAfterId)
+            {
+                return 0;
+            }
+            afterId = nextAfterId;
+        }
+    }
+
+    private static async Task<int> CliniciansAsync(HttpClient client)
+    {
+        using HttpResponseMessage response = await client.GetAsync(
+            "api/network/list-organization-clinicians"
+        );
+        if (!response.IsSuccessStatusCode)
+        {
+            Console.Error.WriteLine(await NetworkClient.DescribeAsync(response));
+            return 1;
+        }
+        ListOrganizationCliniciansResponse list = (
+            await response.Content.ReadFromJsonAsync<ListOrganizationCliniciansResponse>(
+                NetworkClient.Json
+            )
+        )!;
+        foreach (OrganizationClinician clinician in list.Clinicians)
+        {
+            Console.WriteLine(
+                $"{clinician.DisplayName, -20}  {clinician.EventCount} events ({clinician.DeniedCount} refused)  last {clinician.LastSeenAt:yyyy-MM-dd HH:mm}  {clinician.ClinicianUri}"
+            );
+        }
         return 0;
     }
 
