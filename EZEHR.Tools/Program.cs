@@ -10,6 +10,7 @@ if (args.Length == 0)
     Console.Error.WriteLine(ProviderCommand.Usage);
     Console.Error.WriteLine(KidneyCheckCommand.Usage);
     Console.Error.WriteLine(BrokerCommand.Usage);
+    Console.Error.WriteLine(DemoCommand.Usage);
     return 1;
 }
 
@@ -23,6 +24,8 @@ switch (args[0])
         return await KidneyCheckCommand.RunAsync(args[1..]);
     case "broker":
         return await BrokerCommand.RunAsync(args[1..]);
+    case "demo":
+        return await DemoCommand.RunAsync(args[1..]);
     default:
         Console.Error.WriteLine($"unknown command: {args[0]}");
         Console.Error.WriteLine(Usage);
