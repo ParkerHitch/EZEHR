@@ -2,14 +2,18 @@ using System.Globalization;
 
 namespace EZEHR.Services;
 
-/// <summary>Times shown on screen, in the clinic's time zone (AppOptions.TimeZone), like "5:00 PM".</summary>
+/// <summary>Times as the patient and clinician read them, in AppOptions.TimeZone.</summary>
 public static class LocalTime
 {
-    public static string ShortTime(DateTimeOffset at, string timeZoneId)
+    /// <summary>"5:00 PM"</summary>
+    public static string Clock(DateTimeOffset at, TimeZoneInfo zone)
     {
-        TimeZoneInfo timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
-        return TimeZoneInfo
-            .ConvertTime(at, timeZone)
-            .ToString("h:mm tt", CultureInfo.InvariantCulture);
+        return TimeZoneInfo.ConvertTime(at, zone).ToString("h:mm tt", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>"Nov 14"</summary>
+    public static string Day(DateTimeOffset at, TimeZoneInfo zone)
+    {
+        return TimeZoneInfo.ConvertTime(at, zone).ToString("MMM d", CultureInfo.InvariantCulture);
     }
 }

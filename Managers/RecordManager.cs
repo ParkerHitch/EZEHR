@@ -147,6 +147,21 @@ public sealed class RecordManager(
         );
     }
 
+    /// <summary>
+    /// The patient's own record, as a timeline. Every entry is verified like any other read; the patient's own
+    /// reads go through the patient cookie, not the access check, and aren't logged.
+    /// </summary>
+    public async Task<PatientHome> ReadPatientHomeAsync(Guid patientId)
+    {
+        await using SqlConnection connection = await db.OpenAsync();
+        string name = await connection.QuerySingleAsync<string>(
+            "SELECT display_name FROM patients WHERE id = @patientId",
+            new { patientId }
+        );
+        Timeline timeline = TimelineBuilder.Build(await ReadVerifiedEntriesAsync(patientId, null));
+        return new PatientHome(name, timeline);
+    }
+
     /// <summary>A note (a FHIR Communication) signed by the caller itself. Idempotent per note id.</summary>
     public async Task<WriteSignedNoteResult> WriteSignedNoteAsync(
         Guid patientId,

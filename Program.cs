@@ -24,6 +24,7 @@ builder.Services.AddScoped<AccessManager>();
 builder.Services.AddScoped<InviteManager>();
 builder.Services.AddScoped<RecordManager>();
 builder.Services.AddScoped<EnrollmentManager>();
+builder.Services.AddScoped<ActivityManager>();
 
 // Patient passkeys. The relying party is the site's public origin, so passkeys only work on the real site.
 Uri origin = new(appOptions.Origin);

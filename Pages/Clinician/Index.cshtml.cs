@@ -42,9 +42,9 @@ public sealed class IndexModel(
         }
         if (check.SessionStartedAt is DateTimeOffset startedAt)
         {
-            string until = LocalTime.ShortTime(
+            string until = LocalTime.Clock(
                 startedAt + AccessManager.ClinicianShift,
-                options.Value.TimeZone
+                TimeZoneInfo.FindSystemTimeZoneById(options.Value.TimeZone)
             );
             SignedInBanner = Copy.ClinicianSignedIn(
                 check.Party!.DisplayName,

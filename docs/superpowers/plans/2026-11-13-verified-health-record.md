@@ -595,21 +595,27 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 **Files:** Create `Pages/Patient/Home`, `Share`, `Activity`, `Grants`, `_ActivityPartial`.
 
 These are checked manually on a phone. The UI isn't unit-tested, by choice; testing time goes to the access check and the crypto.
-- [ ] **Home:** the combined timeline grouped by date: the resource's clinical date (see Task 9), not `SignedAt`.
+- [x] **Home:** the combined timeline grouped by date: the resource's clinical date (see Task 9), not `SignedAt`.
   - Each entry shows `Copy.SignedBy(org)`, or `Copy.WrittenBy(...)` when the entry names an author (Dr. Rivera's plan, signed by Riverside).
   - The Kidney Check note shows as a card at the top.
   - An "Export my record" button (Task 14).
-- [ ] **Share:**
+- [x] **Share:**
   - Pick a duration (5 min, 1 h, 4 h, end of day). The page shows the code as `XXXX-XXXX` in large type, with a QRCoder PNG of the code.
   - The page polls `_ActivityPartial` every 2 s with htmx (`hx-get`, `hx-trigger="every 2s"`).
   - A pending request shows a full-screen `Copy.ApprovePrompt(...)` with Approve and Deny buttons, which post to `GrantManager.ApproveOrDenyAsync`.
-- [ ] **Activity:** a live list, in plain language:
+- [x] **Activity:** a live list, in plain language:
   - `"Dr. Rivera, Riverside Primary Care, viewed your record · 2:14 PM"`
   - `"Kidney Check read your lab results"`
   - `Copy.BrokerBlocked(purpose)`, in red
-- [ ] **Grants:** each grant has a Revoke button. The app grant shows `Copy.AppGrantLine("Kidney Check", "lab results only", date)`. Clinician grants show "until 5:00 PM".
-- [ ] **Layout:** works at 390 px width, with tap targets of at least 44 px.
-- [ ] Commit `feat: patient home, share, activity, grants`.
+- [x] **Grants:** each grant has a Revoke button. The app grant shows `Copy.AppGrantLine("Kidney Check", "lab results only", date)`. Clinician grants show "until 5:00 PM".
+- [x] **Layout:** works at 390 px width, with tap targets of at least 44 px.
+- **As built:**
+  - The timeline is shared with the clinician Record page: `TimelineBuilder.Build(IReadOnlyList<SignedEntry>)` (grouped by the resource's clinical date; app-signed notes go to the top) rendered by `Pages/Shared/_Timeline.cshtml`. The patient's own read is `RecordManager.ReadPatientHomeAsync`; it isn't logged, because it isn't someone else's access.
+  - Share polls its own status block (`?handler=Status`, `_ShareStatus`), which stops polling once a request or an outcome is shown, so the Approve and Deny buttons don't move under a tap. `GrantManager.ReadShareStatusAsync` refuses another patient's offer.
+  - Activity lines come from `ActivityManager.ListActivityAsync`, worded by `Copy.ActivityLine`. The Grants page is titled "Access" in the patient nav, and its lines come from `GrantManager.ListAccessAsync`.
+  - The export button waits for Task 14.
+  - `EZEHR.Tests/Flows/PatientPagesTests.cs` covers code → request → approve → Access and Activity, revoke, and another patient's offer.
+- [x] Commit `feat: patient home, share, activity, grants`.
 
 ### Task 12: Clinician UI and the share flow (Identity lead, 3:00–5:00 AM)
 

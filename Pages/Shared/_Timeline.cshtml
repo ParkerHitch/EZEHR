@@ -1,0 +1,39 @@
+@using EZEHR.Models
+@model Timeline
+
+@foreach (TimelineItem note in Model.AppNotes)
+{
+    <div class="card border-warning mb-3 app-note">
+        <div class="card-body">
+            <p class="card-text mb-2">@note.Title</p>
+            <small class="text-success">@note.Badge</small>
+        </div>
+    </div>
+}
+
+@if (Model.Days.Count == 0)
+{
+    <p class="text-muted">No records yet.</p>
+}
+
+@foreach (TimelineDay day in Model.Days)
+{
+    <section class="timeline-day mb-3">
+        <h2 class="h6 text-muted mb-2">@day.Date.ToString("MMM d, yyyy")</h2>
+        <ul class="list-group">
+            @foreach (TimelineItem item in day.Items)
+            {
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-baseline gap-2">
+                        <span>@item.Title</span>
+                        @if (item.Detail is not null)
+                        {
+                            <span class="text-nowrap text-muted small">@item.Detail</span>
+                        }
+                    </div>
+                    <small class="text-success">@item.Badge</small>
+                </li>
+            }
+        </ul>
+    </section>
+}

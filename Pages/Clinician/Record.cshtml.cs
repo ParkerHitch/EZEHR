@@ -19,7 +19,7 @@ public sealed class RecordModel(
 {
     public string Header { get; private set; } = "";
 
-    public IReadOnlyList<SignedEntry> Entries { get; private set; } = [];
+    public Timeline Timeline { get; private set; } = new([], []);
 
     public async Task<IActionResult> OnGetAsync(Guid patientId)
     {
@@ -42,9 +42,12 @@ public sealed class RecordModel(
                 _ => RedirectToPage("/Clinician/AccessEnded"),
             };
         }
-        string until = LocalTime.ShortTime(result.Grant!.ExpiresAt!.Value, options.Value.TimeZone);
+        string until = LocalTime.Clock(
+            result.Grant!.ExpiresAt!.Value,
+            TimeZoneInfo.FindSystemTimeZoneById(options.Value.TimeZone)
+        );
         Header = Copy.ClinicianRecordHeader(result.PatientName ?? "", until);
-        Entries = result.Entries;
+        Timeline = TimelineBuilder.Build(result.Entries);
         return Page();
     }
 }
