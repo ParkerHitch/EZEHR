@@ -220,7 +220,7 @@ public sealed class Db(IConfiguration configuration)
             DROP TABLE dbo.local_clinicians;
         END;
 
-        -- Who each organization is. Edited by hand by sysadmins until there's a registration endpoint. The CN is
+        -- Who each organization is. The platform adds providers (register-provider); sysadmins edit by hand. The CN is
         -- compared without case, like the DNS name it is; a tenant belongs to at most one provider.
         IF OBJECT_ID(N'dbo.organizations') IS NULL
         CREATE TABLE dbo.organizations(

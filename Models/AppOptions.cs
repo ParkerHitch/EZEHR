@@ -28,6 +28,12 @@ public sealed class AppOptions
     /// </summary>
     public string? ClientCertificateHeader { get; set; }
 
+    /// <summary>
+    /// SHA-256 thumbprint (hex) of the EZCA certificate the platform operator registers providers with. Unset means
+    /// nobody can. On App Service: App__PlatformCertificateThumbprint, printed by `ezehr-tools certs issue --platform`.
+    /// </summary>
+    public string? PlatformCertificateThumbprint { get; set; }
+
     public KeyWrapperOptions KeyWrapper { get; set; } = new();
 
     public KeyVaultOptions KeyVault { get; set; } = new();

@@ -17,7 +17,7 @@ public sealed class TestServices
     {
         IOptions<AppOptions> options = Options.Create(new AppOptions());
         Audit = new AuditManager(db, clock);
-        Organizations = new OrganizationManager(db);
+        Organizations = new OrganizationManager(db, NullLogger<OrganizationManager>.Instance);
         Invites = new InviteManager(db, Organizations, clock, options);
         Grants = new GrantManager(db, Audit, Invites, Organizations, clock, options);
         Access = new AccessManager(Grants, Audit, clock);

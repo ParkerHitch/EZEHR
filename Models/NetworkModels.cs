@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using EZEHR.Services;
 
 namespace EZEHR.Models;
 
@@ -10,6 +11,14 @@ public sealed record PushSignedRecordsRequest(
 );
 
 public sealed record WriteSignedNoteRequest([Required] string Jws);
+
+/// <summary>The slug becomes urn:provider:{slug} and the certificate CN {slug}.providers.ezehr.</summary>
+public sealed record RegisterProviderRequest(
+    [Required, RegularExpression(OrgDirectory.SlugPattern)] string Slug,
+    [Required, StringLength(200, MinimumLength = 1)] string DisplayName
+);
+
+public sealed record RegisterProviderResponse(string Uri, string CertificateCommonName);
 
 public sealed record CreateEnrollmentInviteResponse(string InviteCode, string EnrollmentUrl);
 

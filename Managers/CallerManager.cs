@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 using EZEHR.Services;
@@ -58,6 +59,38 @@ public sealed class CallerManager(
             return new UnverifiedCaller(DenyReason.UntrustedCertificate);
         }
         return new VerifiedCaller(party, null);
+    }
+
+    /// <summary>
+    /// The platform operator: an EZCA certificate that is valid now and whose SHA-256 thumbprint is the one pinned in
+    /// App:PlatformCertificateThumbprint. Any other certificate, or none pinned, is unverified.
+    /// </summary>
+    public Caller FromPlatformCertificate(X509Certificate2? certificate)
+    {
+        if (certificate is null)
+        {
+            return new UnverifiedCaller(DenyReason.NoCertificate);
+        }
+        CertificateCheck check = CertificateValidator.Validate(
+            certificate,
+            null,
+            time.GetUtcNow(),
+            _trustAnchors
+        );
+        if (!check.Valid)
+        {
+            return new UnverifiedCaller(check.Reason ?? DenyReason.UntrustedCertificate);
+        }
+        string? pinned = options.Value.PlatformCertificateThumbprint;
+        string thumbprint = certificate.GetCertHashString(HashAlgorithmName.SHA256);
+        if (
+            string.IsNullOrWhiteSpace(pinned)
+            || !string.Equals(pinned.Trim(), thumbprint, StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return new UnverifiedCaller(DenyReason.UntrustedCertificate);
+        }
+        return new PlatformCaller();
     }
 
     /// <summary>The principal the patient cookie carries after a passkey ceremony.</summary>

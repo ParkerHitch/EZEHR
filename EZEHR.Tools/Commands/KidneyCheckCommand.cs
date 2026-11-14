@@ -118,6 +118,7 @@ public static class KidneyCheckCommand
                 IntermediatesPemPath = ToolPaths.Pki("intermediates.pem"),
             }
         );
+        OrganizationDirectory directory = ToolOrganizations.Load();
         List<(DateOnly Date, double Egfr, string Source)> points = [];
         foreach (SignedEntry entry in entries)
         {
@@ -128,7 +129,7 @@ public static class KidneyCheckCommand
                     entry.Id,
                     entry.Jws,
                     trustAnchors,
-                    OrgDirectory.Demo
+                    directory
                 );
             }
             catch (RecordSignatureException exception)

@@ -70,6 +70,13 @@ public enum GrantError
     GrantNotPending,
 }
 
+/// <summary>Why the platform couldn't register an organization.</summary>
+public enum OrganizationError
+{
+    /// <summary>Its URI or certificate CN already has a row.</summary>
+    OrganizationExists,
+}
+
 public enum InviteError
 {
     InviteUnknown,

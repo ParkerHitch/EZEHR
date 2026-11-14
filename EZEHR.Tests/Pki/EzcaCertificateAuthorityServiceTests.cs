@@ -93,6 +93,81 @@ public class EzcaCertificateAuthorityServiceTests
         Assert.Contains("Subject name is not registered for this CA", exception.Message);
     }
 
+    [Fact]
+    public async Task Ezca_registers_missing_domain_with_known_owner()
+    {
+        AADObjectModel admin = new("oid-1", "EZCA Admin") { ObjectType = "User" };
+        FakeEzcaClient client = new(SuccessfulResponse())
+        {
+            Domains =
+            [
+                new DomainInformationModel
+                {
+                    CAID = Ca.CAID,
+                    Domain = "lakeside.providers.ezehr",
+                    DomainOwners = [admin],
+                },
+            ],
+        };
+        EzcaCertificateAuthorityService service = new(client, Ca);
+
+        bool registered = await service.EnsureDomainRegisteredAsync(
+            "harbor.providers.ezehr",
+            "oid-1",
+            "ezca-admin"
+        );
+
+        Assert.True(registered);
+        FakeEzcaClient.DomainRegistration registration = Assert.Single(client.Registrations);
+        Assert.Same(Ca, registration.Ca);
+        Assert.Equal("harbor.providers.ezehr", registration.Domain);
+        Assert.Same(admin, Assert.Single(registration.Owners));
+        Assert.Same(admin, Assert.Single(registration.Administrators));
+    }
+
+    [Fact]
+    public async Task Ezca_skips_registered_domain()
+    {
+        FakeEzcaClient client = new(SuccessfulResponse())
+        {
+            Domains =
+            [
+                new DomainInformationModel { CAID = Ca.CAID, Domain = "Harbor.providers.ezehr" },
+            ],
+        };
+        EzcaCertificateAuthorityService service = new(client, Ca);
+
+        bool registered = await service.EnsureDomainRegisteredAsync(
+            "harbor.providers.ezehr",
+            "oid-1",
+            "ezca-admin"
+        );
+
+        Assert.False(registered);
+        Assert.Empty(client.Registrations);
+    }
+
+    [Fact]
+    public async Task Ezca_domain_refusal_throws_with_message()
+    {
+        FakeEzcaClient client = new(SuccessfulResponse())
+        {
+            RegistrationResult = new APIResultModel(false, "Not a CA administrator"),
+        };
+        EzcaCertificateAuthorityService service = new(client, Ca);
+
+        CertificateAuthorityException exception =
+            await Assert.ThrowsAsync<CertificateAuthorityException>(() =>
+                service.EnsureDomainRegisteredAsync("harbor.providers.ezehr", "oid-1", "admin")
+            );
+
+        Assert.Contains("harbor.providers.ezehr", exception.Message);
+        Assert.Contains("Not a CA administrator", exception.Message);
+        // A new account is sent as itself when EZCA doesn't list it anywhere yet.
+        AADObjectModel owner = Assert.Single(Assert.Single(client.Registrations).Owners);
+        Assert.Equal("oid-1", owner.ObjectId);
+    }
+
     private CertificateCreatedResponse SuccessfulResponse()
     {
         X509Certificate2 leaf = _pki.Issue("lakeside.providers.ezehr");
@@ -138,7 +213,20 @@ public class EzcaCertificateAuthorityServiceTests
             List<string>? Ekus
         );
 
+        public sealed record DomainRegistration(
+            AvailableCAModel Ca,
+            string Domain,
+            List<AADObjectModel> Owners,
+            List<AADObjectModel> Administrators
+        );
+
         public List<Request> Requests { get; } = [];
+
+        public List<DomainInformationModel> Domains { get; init; } = [];
+
+        public APIResultModel RegistrationResult { get; init; } = new(true);
+
+        public List<DomainRegistration> Registrations { get; } = [];
 
         public Task<CertificateCreatedResponse?> RequestCertificateWithChainV2Async(
             AvailableCAModel ca,
@@ -238,7 +326,8 @@ public class EzcaCertificateAuthorityServiceTests
             List<string>? notificationEmails = null
         )
         {
-            throw new NotImplementedException();
+            Registrations.Add(new DomainRegistration(ca, domain, owners!, certificateAdministrators!));
+            return Task.FromResult(RegistrationResult);
         }
 
         public Task<CertificateCreatedResponse?> RequestCertificateWithChainAsync(
@@ -277,7 +366,7 @@ public class EzcaCertificateAuthorityServiceTests
 
         public Task<List<DomainInformationModel>> GetRegisteredDomainsAsync()
         {
-            throw new NotImplementedException();
+            return Task.FromResult(Domains);
         }
 
         public Task<List<SSLCertInfoV2>> GetMyCertificatesAsync()
