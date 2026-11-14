@@ -1,9 +1,9 @@
-using EZEHR.Domain;
+using EZEHR;
+using EZEHR.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.Configure<AppOptions>(builder.Configuration.GetSection(AppOptions.Section));
-builder.Services.AddSingleton(TimeProvider.System);
+builder.AddEzehrCore();
 builder.Services.AddRazorPages();
 
 var app = builder.Build();
@@ -14,12 +14,14 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+app.UseEzehrCore();
 app.UseHttpsRedirection();
 app.UseRouting();
 app.UseAuthorization();
 
 app.MapStaticAssets();
 app.MapRazorPages().WithStaticAssets();
+app.MapNetworkApi();
 
 app.Run();
 

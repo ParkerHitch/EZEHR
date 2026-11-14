@@ -26,6 +26,13 @@ public sealed class AppOptions
     /// <summary>The platform's own certificate with key (signs clinician notes). On App Service: a Key Vault reference.</summary>
     public string? PlatformCertPfxBase64 { get; set; }
 
+    /// <summary>
+    /// Header that carries the TLS client certificate from a fronting proxy ("X-ARR-ClientCert" on App Service).
+    /// Leave unset unless a proxy that terminates mutual TLS and overwrites this header sits in front of the app:
+    /// the header holds only a public certificate, so trusting it without that proxy would skip proof of the private key.
+    /// </summary>
+    public string? ClientCertificateHeader { get; set; }
+
     public KeyWrapperOptions KeyWrapper { get; set; } = new();
 
     public KeyVaultOptions KeyVault { get; set; } = new();
