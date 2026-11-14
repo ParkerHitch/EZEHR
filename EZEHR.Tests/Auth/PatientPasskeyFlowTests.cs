@@ -40,7 +40,7 @@ public class PatientPasskeyFlowTests : IAsyncLifetime
 
     private async Task<string> InviteAsync()
     {
-        Party lakeside = OrgDirectory.FindBySubjectUri(OrgDirectory.ProviderUri("lakeside"))!;
+        Party lakeside = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri("lakeside"))!;
         return await _app.WithAsync(async services =>
         {
             CreateEnrollmentInviteResult invite = await services

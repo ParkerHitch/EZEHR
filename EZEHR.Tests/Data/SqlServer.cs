@@ -75,6 +75,16 @@ public sealed class TestDatabase(
                 .Build()
         );
 
+    /// <summary>What a sysadmin does to trust an organization's Entra tenant: set it on the organization's row.</summary>
+    public async Task SetEntraTenantAsync(string organizationUri, Guid tenantId)
+    {
+        await using SqlConnection connection = await Db.OpenAsync();
+        await connection.ExecuteAsync(
+            "UPDATE organizations SET entra_tenant_id = @tenantId WHERE uri = @organizationUri",
+            new { tenantId, organizationUri }
+        );
+    }
+
     public async ValueTask DisposeAsync()
     {
         await using SqlConnection master = new(serverConnectionString);

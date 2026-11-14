@@ -1,4 +1,6 @@
+using Dapper;
 using EZEHR.Models;
+using EZEHR.Services;
 using Microsoft.Data.SqlClient;
 
 namespace EZEHR.Data;
@@ -22,17 +24,42 @@ public sealed class Db(IConfiguration configuration)
         return connection;
     }
 
-    /// <summary>Creates the tables, constraints and indexes that are missing. Safe to run on every start.</summary>
+    /// <summary>
+    /// Creates the tables, constraints and indexes that are missing, and adds any demo organization whose row is
+    /// missing. Safe to run on every start: it never changes a row that exists, so sysadmins' edits stay.
+    /// </summary>
     public async Task EnsureSchemaAsync(CancellationToken cancellationToken = default)
     {
         await using SqlConnection connection = await OpenAsync(cancellationToken);
-        await using SqlCommand command = new(Schema, connection);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        await using (SqlCommand command = new(Schema, connection))
+        {
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        foreach (Organization organization in OrgDirectory.DemoOrganizations)
+        {
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    """
+                    IF NOT EXISTS (SELECT 1 FROM dbo.organizations WHERE uri = @Uri)
+                    INSERT INTO dbo.organizations(uri, kind, display_name, certificate_cn, entra_tenant_id)
+                    VALUES (@Uri, @kind, @DisplayName, @CertificateCommonName, NULL);
+                    """,
+                    new
+                    {
+                        organization.Uri,
+                        kind = organization.Kind.ToString(),
+                        organization.DisplayName,
+                        organization.CertificateCommonName,
+                    },
+                    cancellationToken: cancellationToken
+                )
+            );
+        }
     }
 
     /// <summary>
     /// Deletes every row and keeps the tables. Only `ezehr-tools demo reset` calls this, from a laptop signed in
-    /// to the database; the site has no reset endpoint.
+    /// to the database; the site has no reset endpoint. Leaves organizations alone: that's configuration, not data.
     /// </summary>
     public async Task DeleteAllDataAsync(CancellationToken cancellationToken = default)
     {
@@ -157,5 +184,18 @@ public sealed class Db(IConfiguration configuration)
             IF NOT EXISTS (SELECT 1 FROM dbo.local_clinicians)
             DROP TABLE dbo.local_clinicians;
         END;
+
+        -- Who each organization is. Edited by hand by sysadmins until there's a registration endpoint. The CN is
+        -- compared without case, like the DNS name it is; a tenant belongs to at most one provider.
+        IF OBJECT_ID(N'dbo.organizations') IS NULL
+        CREATE TABLE dbo.organizations(
+            uri NVARCHAR(200) COLLATE Latin1_General_100_BIN2 NOT NULL PRIMARY KEY,
+            kind NVARCHAR(32) NOT NULL CONSTRAINT ck_organizations_kind CHECK (kind IN (N'Provider', N'App')),
+            display_name NVARCHAR(200) NOT NULL,
+            certificate_cn NVARCHAR(200) COLLATE Latin1_General_100_CI_AS NOT NULL
+                CONSTRAINT uq_organizations_cn UNIQUE,
+            entra_tenant_id UNIQUEIDENTIFIER NULL,
+            CONSTRAINT ck_organizations_tenant_provider CHECK (entra_tenant_id IS NULL OR kind = N'Provider'),
+            INDEX uq_organizations_tenant UNIQUE (entra_tenant_id) WHERE entra_tenant_id IS NOT NULL);
         """;
 }

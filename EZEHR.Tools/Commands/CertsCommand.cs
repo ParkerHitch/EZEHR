@@ -70,7 +70,11 @@ public static class CertsCommand
         }
 
         List<X509Certificate2> chainCertificates = [];
-        foreach (string commonName in OrgDirectory.KnownOrganizations.Keys)
+        foreach (
+            string commonName in OrgDirectory.DemoOrganizations.Select(organization =>
+                organization.CertificateCommonName
+            )
+        )
         {
             PfxFile issued = await IssueOneAsync(certificateAuthority, commonName, keyType);
             string path = ToolPaths.Pki($"{Slug(commonName)}.pfx");

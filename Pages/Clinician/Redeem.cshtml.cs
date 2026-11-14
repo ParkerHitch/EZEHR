@@ -17,7 +17,7 @@ public sealed class RedeemModel(CallerManager callerManager, GrantManager grantM
 
     public async Task<IActionResult> OnPostAsync()
     {
-        ClinicianCheck check = callerManager.EvaluateClinician(User);
+        ClinicianCheck check = await callerManager.EvaluateClinicianAsync(User);
         if (!check.Ok)
         {
             return RedirectToPage("/Clinician/Index");

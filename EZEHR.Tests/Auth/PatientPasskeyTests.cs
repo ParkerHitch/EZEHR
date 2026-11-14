@@ -27,6 +27,7 @@ public class PatientPasskeyTests : IAsyncLifetime
             _services.Invites,
             _services.Records,
             _services.Grants,
+            _services.Organizations,
             _clock
         );
     }
@@ -38,7 +39,7 @@ public class PatientPasskeyTests : IAsyncLifetime
 
     private async Task<string> InviteAsync(string slug, string providerPatientId)
     {
-        Party provider = OrgDirectory.FindBySubjectUri(OrgDirectory.ProviderUri(slug))!;
+        Party provider = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri(slug))!;
         CreateEnrollmentInviteResult invite = await _services.Invites.CreateEnrollmentInviteAsync(
             new VerifiedCaller(provider, null),
             providerPatientId

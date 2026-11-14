@@ -143,7 +143,9 @@ public class PkiTests
     [Fact]
     public void OrgDirectory_resolves_known_and_rejects_unknown()
     {
-        Party? lakeside = OrgDirectory.FindByCertificate(_pki.Issue("lakeside.providers.ezehr"));
+        Party? lakeside = OrgDirectory.Demo.FindByCertificate(
+            _pki.Issue("lakeside.providers.ezehr")
+        );
         Assert.Equal(
             new Party(
                 PartyKind.Provider,
@@ -155,14 +157,14 @@ public class PkiTests
         );
         Assert.Equal(
             "urn:app:kidney-check",
-            OrgDirectory.FindByCertificate(_pki.Issue("kidney-check.apps.ezehr"))!.SubjectUri
+            OrgDirectory.Demo.FindByCertificate(_pki.Issue("kidney-check.apps.ezehr"))!.SubjectUri
         );
         Assert.Equal(
             "urn:provider:riverside",
-            OrgDirectory.FindByCertificate(_pki.Issue("riverside.providers.ezehr"))!.SubjectUri
+            OrgDirectory.Demo.FindByCertificate(_pki.Issue("riverside.providers.ezehr"))!.SubjectUri
         );
-        Assert.Null(OrgDirectory.FindByCertificate(_pki.Issue("platform.ezehr")));
-        Assert.Null(OrgDirectory.FindByCertificate(_pki.Issue("mallory.providers.ezehr")));
+        Assert.Null(OrgDirectory.Demo.FindByCertificate(_pki.Issue("platform.ezehr")));
+        Assert.Null(OrgDirectory.Demo.FindByCertificate(_pki.Issue("mallory.providers.ezehr")));
     }
 
     [Theory]
@@ -305,7 +307,7 @@ public class PkiTests
 
     private VerifiedEntry Verify(Guid entryId, string jws)
     {
-        return RecordVerifier.Verify(entryId, jws, _pki.TrustAnchors);
+        return RecordVerifier.Verify(entryId, jws, _pki.TrustAnchors, OrgDirectory.Demo);
     }
 
     private static JsonElement Resource(string json)

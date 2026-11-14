@@ -127,11 +127,8 @@ public static class ProviderCommand
 
     private static bool IsProvider(string slug)
     {
-        return OrgDirectory.KnownOrganizations.TryGetValue(
-                OrgDirectory.ProviderCommonName(slug),
-                out Party? party
-            )
-            && party.Kind == PartyKind.Provider;
+        return OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri(slug))?.Kind
+            == PartyKind.Provider;
     }
 
     private sealed record SeedFile(string Provider, string Organization, SeedVisit[] Visits)

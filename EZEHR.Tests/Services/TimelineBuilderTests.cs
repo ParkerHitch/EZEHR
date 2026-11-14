@@ -6,13 +6,11 @@ namespace EZEHR.Tests.Services;
 
 public class TimelineBuilderTests
 {
-    private static readonly Party Lakeside = OrgDirectory.FindBySubjectUri(
-        "urn:provider:lakeside"
-    )!;
-    private static readonly Party Riverside = OrgDirectory.FindBySubjectUri(
+    private static readonly Party Lakeside = OrgDirectory.Demo.FindByUri("urn:provider:lakeside")!;
+    private static readonly Party Riverside = OrgDirectory.Demo.FindByUri(
         "urn:provider:riverside"
     )!;
-    private static readonly Party KidneyCheck = OrgDirectory.FindBySubjectUri(
+    private static readonly Party KidneyCheck = OrgDirectory.Demo.FindByUri(
         "urn:app:kidney-check"
     )!;
 

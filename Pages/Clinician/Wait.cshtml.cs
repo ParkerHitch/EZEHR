@@ -20,7 +20,7 @@ public sealed class WaitModel(CallerManager callerManager, GrantManager grantMan
 
     public async Task<IActionResult> OnGetStatusAsync(Guid patientId)
     {
-        ClinicianCheck check = callerManager.EvaluateClinician(User);
+        ClinicianCheck check = await callerManager.EvaluateClinicianAsync(User);
         if (!check.Ok)
         {
             Response.Headers["HX-Redirect"] = Url.Page("/Clinician/Index");

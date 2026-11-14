@@ -2,10 +2,12 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using Dapper;
 using EZEHR.Managers;
 using EZEHR.Models;
 using EZEHR.Services;
 using EZEHR.Tests.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EZEHR.Tests.Api;
@@ -102,10 +104,7 @@ public class NetworkAccessTests : IAsyncLifetime
         return _app.WithAsync(services =>
             services
                 .GetRequiredService<GrantManager>()
-                .CreateAppGrantAsync(
-                    _sam,
-                    OrgDirectory.KnownOrganizations[OrgDirectory.KidneyCheckCommonName]
-                )
+                .CreateAppGrantAsync(_sam, OrgDirectory.Demo.FindByUri("urn:app:kidney-check")!)
         );
     }
 
@@ -226,5 +225,28 @@ public class NetworkAccessTests : IAsyncLifetime
         HttpResponseMessage response = await _app.Client(_kidney)
             .GetAsync("/api/network/patients/not-a-guid/read-egfr-labs");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Organization_added_by_sysadmin_is_recognized()
+    {
+        await using (SqlConnection connection = await _app.Database.Db.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO organizations(uri, kind, display_name, certificate_cn, entra_tenant_id)
+                VALUES ('urn:provider:harbor', 'Provider', N'Harbor Clinic', 'harbor.providers.ezehr', NULL)
+                """
+            );
+        }
+        X509Certificate2 harbor = _app.Pki.Issue("harbor.providers.ezehr");
+
+        HttpResponseMessage response = await _app.Client(harbor)
+            .PostAsJsonAsync(
+                "/api/network/create-enrollment-invite",
+                new { providerPatientId = "HBR-1" }
+            );
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 }

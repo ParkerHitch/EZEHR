@@ -13,7 +13,12 @@ namespace EZEHR.Managers;
 /// patient id to the EZEHR patient, which is what lets that provider push records. A link lets the provider write,
 /// never read; the patient can see their links on the Access page and disconnect one.
 /// </summary>
-public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions> options)
+public sealed class InviteManager(
+    Db db,
+    OrganizationManager organizationManager,
+    TimeProvider time,
+    IOptions<AppOptions> options
+)
 {
     public static readonly TimeSpan InviteLifetime = TimeSpan.FromDays(7);
 
@@ -152,10 +157,11 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
             """,
             new { patientId }
         );
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
         return rows.Select(row => new ConnectedProviderLine(
                 row.ProviderUri,
                 Copy.ConnectedProviderLine(
-                    OrgDirectory.FindBySubjectUri(row.ProviderUri)?.DisplayName ?? row.ProviderUri,
+                    directory.FindByUri(row.ProviderUri)?.DisplayName ?? row.ProviderUri,
                     row.LinkedAt is DateTimeOffset linkedAt
                         ? LocalTime.Day(linkedAt, _timeZone)
                         : null

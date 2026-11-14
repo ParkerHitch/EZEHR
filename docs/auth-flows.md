@@ -74,8 +74,8 @@ flowchart LR
 ```
 
 **What EZEHR trusts, and nothing else:**
-1. **Microsoft Entra ID**, but only for the tenants listed in `TrustedTenants` (for the demo, our tenant, which plays Riverside Primary Care).
-2. **The EZCA root CA**, whose public certificate is committed in `Security/Trust/`.
+1. **Microsoft Entra ID**, but only for tenants that a provider's row in the `organizations` table names (for the demo, our tenant, set on Riverside Primary Care's row).
+2. **The EZCA root CA**, whose public certificate is committed in `Security/Trust/`, and only for certificate CNs that have a row in `organizations`.
 3. **Its own passkey table**, for patients.
 
 ---
@@ -86,7 +86,7 @@ flowchart LR
 |---|---|---|---|---|---|
 | **Sam (patient)** | patient ID (GUID) | Passkey | The phone's secure hardware; it never leaves | Nobody else; our server stored Sam's public key at enrollment | WebAuthn signature against the stored public key |
 | **Dr. Rivera (clinician)** | `urn:entra:{tenantId}:{objectId}` | Security key (FIDO2) used for **Entra** sign-in | Inside the security key | **Microsoft Entra** signs the ID token | Token signature, issuer, and audience (library); tenant trusted; app role `Clinician`; session under 10 h |
-| **Lakeside, Northwind, Maple, Riverside (providers)** | `urn:provider:lakeside` and so on | EZCA client certificate (CN `lakeside.providers.ezehr`) | `.pki/lakeside.pfx` on the simulator's machine | **EZCA** | Chain to the EZCA root; not expired; Client Authentication usage; CN in `OrgDirectory` |
+| **Lakeside, Northwind, Maple, Riverside (providers)** | `urn:provider:lakeside` and so on | EZCA client certificate (CN `lakeside.providers.ezehr`) | `.pki/lakeside.pfx` on the simulator's machine | **EZCA** | Chain to the EZCA root; not expired; Client Authentication usage; CN found in `organizations` |
 | **Kidney Check (app)** | `urn:app:kidney-check` | EZCA client certificate (CN `kidney-check.apps.ezehr`) | `.pki/kidney-check.pfx` | **EZCA**, plus Sam's grant | The same certificate checks, plus a `LabsAndNotes` grant from Sam |
 | **Data broker** | none | No certificate, or a self-made one | Its own machine | Nobody | Fails the certificate checks, so `UnverifiedCaller` and refused |
 | **EZEHR server → Azure** | App Service **managed identity** | Azure-issued token, automatic | Azure manages it; we store no secret | Azure | Key Vault role: Crypto User (wrap and unwrap). Azure SQL: a database user that can read, write and create tables |
@@ -123,7 +123,26 @@ The broker's certificate is made by the same tool **without EZCA** (`certs broke
   - redirect URI `/signin-oidc`
   - app role **Clinician**, assigned to Dr. Rivera
 - **Dr. Rivera's sign-in methods:** passkey (FIDO2) enabled, and **the physical security key registered** as Dr. Rivera's passkey.
-- **EZEHR's config:** `TrustedTenants = { tenantId: "Riverside Primary Care" }`. This is how a tenant ID turns into an organization name.
+- **EZEHR's organizations table:** Riverside's row carries the tenant id. This is how a tenant id turns into a provider identity; the organization's name comes from the same row. A sysadmin sets it once per environment:
+
+  ```sql
+  UPDATE organizations SET entra_tenant_id = '<tenant id>' WHERE uri = 'urn:provider:riverside';
+  ```
+
+### 4b-2. The organizations table
+
+`organizations` is the one list of who each organization is: `uri` (its identity on the platform), `kind` (`Provider` or `App`), `display_name`, `certificate_cn` (the CN on its EZCA certificate, compared without case), and `entra_tenant_id` (providers only; a tenant belongs to at most one provider). The server reads it on every request that needs it, so an edit takes effect immediately.
+
+- On every start the app adds any of the five demo organizations whose row is missing. It never changes an existing row, so a sysadmin's edits survive restarts, and `ezehr-tools demo reset` leaves the table alone.
+- There is no registration endpoint yet. To add an organization, a sysadmin inserts its row, and EZCA must also issue a certificate with that CN:
+
+  ```sql
+  INSERT INTO organizations(uri, kind, display_name, certificate_cn)
+  VALUES ('urn:provider:harbor', 'Provider', N'Harbor Clinic', 'harbor.providers.ezehr');
+  ```
+- The tools have no database; they use the demo list in `OrgDirectory` (`OrgDirectory.Demo`).
+
+**Deployment note (moving off `App:TrustedTenants`):** before deploying, copy the tenant id out of the App Service setting `App__TrustedTenants__…` (the id is in the setting's name, with underscores where the hyphens go). Once the deployed app has started and seeded the table, run the `UPDATE` above against prod, then delete the old setting. Dr. Rivera is refused between the deploy and the `UPDATE`.
 
 ### 4c. Azure plumbing
 
@@ -235,7 +254,7 @@ sequenceDiagram
   Tool->>FE: TLS handshake, presents the Lakeside certificate
   FE->>App: request plus X-ARR-ClientCert header
   App->>App: CertificateValidator, chains to EZCA root, valid, Client Authentication
-  App->>App: OrgDirectory, CN lakeside.providers.ezehr is Lakeside Urgent Care
+  App->>App: organizations table, CN lakeside.providers.ezehr is Lakeside Urgent Care
   App->>App: RecordVerifier, every record signed by Lakeside
   App->>App: provider_links, LUC-20417 belongs to Sam
   App->>KV: unwrap Sam's data key
@@ -367,7 +386,7 @@ flowchart TB
   end
   subgraph Trust
     CV["CertificateValidator<br/>EZCA root and intermediates"]
-    OD["OrgDirectory<br/>CN to Party"]
+    OD["OrganizationDirectory<br/>organizations table<br/>CN or tenant to Party"]
   end
   subgraph Core
     G{{"AccessManager"}}
@@ -400,10 +419,10 @@ flowchart TB
 |---|---|---|---|
 | `IClientCertificateService` | `NetworkController` | the HTTP request | the caller's certificate, or nothing |
 | `CertificateValidator` | `CallerManager`, `RecordVerifier` | a certificate (+ chain) and a time | OK, `UntrustedCertificate`, or `CertificateExpired` (2-minute clock-skew tolerance) |
-| `OrgDirectory` | `CallerManager`, `RecordVerifier` | the certificate's CN | a `Party` (provider or app), or nothing |
-| `CallerManager.FromCertificate` | `NetworkController` | a certificate or nothing | `VerifiedCaller(party)` or `UnverifiedCaller(reason)` |
+| `OrganizationManager` / `OrganizationDirectory` | `CallerManager`, `RecordManager` (for `RecordVerifier`), `EnrollmentManager` | the `organizations` table; then a certificate's CN, a platform URI or an Entra tenant id | a `Party` (provider or app), or nothing |
+| `CallerManager.FromCertificateAsync` | `NetworkController` | a certificate or nothing | `VerifiedCaller(party)` or `UnverifiedCaller(reason)` |
 | `EnrollmentManager` | patient pages, `PatientPasskeyController` | WebAuthn responses | a patient cookie (`patient_id`) |
-| `CallerManager.FromClinician` | clinician pages | Entra claims from the cookie | `VerifiedCaller(clinician, sessionStartedAt)`, or the `NotAClinician` / `UntrustedOrg` message |
+| `CallerManager.FromClinicianAsync` | clinician pages | Entra claims from the cookie; the tenant is looked up in `organizations` | `VerifiedCaller(clinician, sessionStartedAt)`, or the `NotAClinician` / `UntrustedOrg` message |
 | `GrantManager` | patient pages, clinician pages, gate | offers, redemptions, approvals, revocations | grants |
 | **`AccessManager`** | **every read and write** | patient, action, `Caller`, claimed purpose | allowed + grant, or a `DenyReason`. **Always exactly one audit event** |
 | `AuditManager` | gate; patient activity page | events | the patient's activity list |
@@ -436,7 +455,7 @@ flowchart TB
 | `DenyReason` | Where it comes from | HTTP or page | Logged to the patient? |
 |---|---|---|---|
 | `NoCertificate` | Network door: nothing presented | 401 | Yes, when the request targets a patient |
-| `UntrustedCertificate` | Network door: chain doesn't reach EZCA, or the CN isn't in `OrgDirectory` | 401 | Yes, when the request targets a patient |
+| `UntrustedCertificate` | Network door: chain doesn't reach EZCA, or the CN isn't in `organizations` | 401 | Yes, when the request targets a patient |
 | `CertificateExpired` | Network door, or record verification | 401 / record rejected | Yes, when the request targets a patient |
 | `ShiftEnded` | Gate: clinician session over 10 h | "Sign in again" page | Yes |
 | `NoGrant` | Gate: no grant for this identity | "Access ended" page / 403 | Yes |

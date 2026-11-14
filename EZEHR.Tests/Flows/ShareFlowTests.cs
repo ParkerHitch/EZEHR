@@ -30,7 +30,7 @@ public class ShareFlowTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _app = new EzehrFactory(await SqlServer.CreateDatabaseAsync());
-        _clinicianApp = TestClinicianAuthHandler.Install(_app);
+        _clinicianApp = await TestClinicianAuthHandler.InstallAsync(_app);
         _sam = await WithAsync(services =>
             services.GetRequiredService<RecordManager>().CreatePatientAsync("Sam Taylor")
         );
@@ -85,7 +85,7 @@ public class ShareFlowTests : IAsyncLifetime
                     RecordSigner.Sign(resource, certificate, [], _app.Pki.Clock.GetUtcNow())
                 )
                 .ToList();
-            Party provider = OrgDirectory.FindBySubjectUri(OrgDirectory.ProviderUri(slug))!;
+            Party provider = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri(slug))!;
             PushSignedRecordsResult pushed = await WithAsync(services =>
                 services
                     .GetRequiredService<RecordManager>()
@@ -98,7 +98,7 @@ public class ShareFlowTests : IAsyncLifetime
             Assert.True(pushed.Allowed && pushed.Error is null, $"{slug}: {pushed.Error}");
         }
 
-        Party kidneyCheck = OrgDirectory.FindBySubjectUri("urn:app:kidney-check")!;
+        Party kidneyCheck = OrgDirectory.Demo.FindByUri("urn:app:kidney-check")!;
         X509Certificate2 appCertificate = _app.Pki.Issue(OrgDirectory.KidneyCheckCommonName);
         JsonElement note = JsonSerializer.SerializeToElement(
             new

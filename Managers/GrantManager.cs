@@ -18,6 +18,7 @@ public sealed class GrantManager(
     Db db,
     AuditManager auditManager,
     InviteManager inviteManager,
+    OrganizationManager organizationManager,
     TimeProvider time,
     IOptions<AppOptions> options
 )
@@ -37,10 +38,6 @@ public sealed class GrantManager(
                approved_at AS ApprovedAt, expires_at AS ExpiresAt, revoked_at AS RevokedAt
         FROM grants
         """;
-
-    private static readonly Party KidneyCheck = OrgDirectory.KnownOrganizations[
-        OrgDirectory.KidneyCheckCommonName
-    ];
 
     private readonly TimeZoneInfo _timeZone = TimeZoneInfo.FindSystemTimeZoneById(
         options.Value.TimeZone
@@ -155,7 +152,8 @@ public sealed class GrantManager(
         IReadOnlyList<ConnectedProviderLine> connectedProviders =
             await inviteManager.ListConnectedProvidersAsync(patientId);
         bool kidneyCheckOn = grants.Any(grant =>
-            grant.Grantee.SubjectUri == KidneyCheck.SubjectUri && grant.Status == GrantStatus.Active
+            grant.Grantee.SubjectUri == OrgDirectory.KidneyCheckUri
+            && grant.Status == GrantStatus.Active
         );
         return new AccessOverview(lines, connectedProviders, kidneyCheckOn);
     }
@@ -353,7 +351,12 @@ public sealed class GrantManager(
     /// </summary>
     public async Task<Grant> TurnOnKidneyCheckAsync(Guid patientId)
     {
-        return await CreateAppGrantAsync(patientId, KidneyCheck);
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
+        Party kidneyCheck = directory.FindByUri(OrgDirectory.KidneyCheckUri)
+            ?? throw new InvalidOperationException(
+                $"{OrgDirectory.KidneyCheckUri} is missing from the organizations table."
+            );
+        return await CreateAppGrantAsync(patientId, kidneyCheck);
     }
 
     /// <summary>An app the patient turned on: lab results and notes only, ongoing until revoked. Idempotent.</summary>

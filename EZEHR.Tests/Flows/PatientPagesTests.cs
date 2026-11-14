@@ -47,7 +47,7 @@ public class PatientPagesTests : IAsyncLifetime
 
     private async Task EnrollSamAsync()
     {
-        Party lakeside = OrgDirectory.FindBySubjectUri(OrgDirectory.ProviderUri("lakeside"))!;
+        Party lakeside = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri("lakeside"))!;
         string inviteCode = await _app.WithAsync(async services =>
             (
                 await services

@@ -23,7 +23,7 @@ public sealed class RecordModel(
 
     public async Task<IActionResult> OnGetAsync(Guid patientId)
     {
-        Caller caller = callerManager.FromClinician(User);
+        Caller caller = await callerManager.FromClinicianAsync(User);
         ReadFullRecordResult result = await recordManager.ReadFullRecordAsync(
             patientId,
             caller,

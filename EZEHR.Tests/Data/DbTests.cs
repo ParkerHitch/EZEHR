@@ -51,6 +51,7 @@ public class DbTests : IAsyncLifetime
             "share_offers",
             "grants",
             "audit_events",
+            "organizations",
         ];
         foreach (string table in expected)
         {
@@ -125,5 +126,63 @@ public class DbTests : IAsyncLifetime
         Assert.Equal(0, await check.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM entries"));
         Assert.Equal(0, await check.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM provider_links"));
         Assert.Contains("entries", await TablesAsync());
+    }
+
+    [Fact]
+    public async Task EnsureSchema_seeds_demo_organizations_once_and_keeps_edits()
+    {
+        Guid tenantId = Guid.NewGuid();
+        await using SqlConnection connection = await _database.Db.OpenAsync();
+        Assert.Equal(
+            5,
+            await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM organizations")
+        );
+        await connection.ExecuteAsync(
+            """
+            UPDATE organizations SET entra_tenant_id = @tenantId, display_name = N'Riverside Health'
+            WHERE uri = 'urn:provider:riverside'
+            """,
+            new { tenantId }
+        );
+
+        await _database.Db.EnsureSchemaAsync();
+        await _database.Db.DeleteAllDataAsync();
+
+        Assert.Equal(
+            5,
+            await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM organizations")
+        );
+        (Guid? EntraTenantId, string DisplayName) riverside = await connection.QuerySingleAsync<(
+            Guid?,
+            string
+        )>(
+            """
+            SELECT entra_tenant_id, display_name FROM organizations
+            WHERE uri = 'urn:provider:riverside'
+            """
+        );
+        Assert.Equal(tenantId, riverside.EntraTenantId);
+        Assert.Equal("Riverside Health", riverside.DisplayName);
+    }
+
+    [Fact]
+    public async Task Tenant_belongs_to_one_provider_only()
+    {
+        const string SetTenant =
+            "UPDATE organizations SET entra_tenant_id = @tenantId WHERE uri = @uri";
+        Guid tenantId = Guid.NewGuid();
+        await using SqlConnection connection = await _database.Db.OpenAsync();
+        await connection.ExecuteAsync(SetTenant, new { tenantId, uri = "urn:provider:riverside" });
+
+        SqlException duplicate = await Assert.ThrowsAsync<SqlException>(() =>
+            connection.ExecuteAsync(SetTenant, new { tenantId, uri = "urn:provider:maple" })
+        );
+        Assert.True(Db.IsUniqueViolation(duplicate));
+        await Assert.ThrowsAsync<SqlException>(() =>
+            connection.ExecuteAsync(
+                SetTenant,
+                new { tenantId = Guid.NewGuid(), uri = "urn:app:kidney-check" }
+            )
+        );
     }
 }

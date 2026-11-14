@@ -124,7 +124,12 @@ public static class KidneyCheckCommand
             VerifiedEntry verified;
             try
             {
-                verified = RecordVerifier.Verify(entry.Id, entry.Jws, trustAnchors);
+                verified = RecordVerifier.Verify(
+                    entry.Id,
+                    entry.Jws,
+                    trustAnchors,
+                    OrgDirectory.Demo
+                );
             }
             catch (RecordSignatureException exception)
             {

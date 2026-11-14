@@ -19,6 +19,7 @@ public sealed class EnrollmentManager(
     InviteManager inviteManager,
     RecordManager recordManager,
     GrantManager grantManager,
+    OrganizationManager organizationManager,
     TimeProvider time
 )
 {
@@ -32,7 +33,7 @@ public sealed class EnrollmentManager(
         {
             return new InviteCheck(false, null, ToEnrollmentError(invite.Error!.Value));
         }
-        return new InviteCheck(true, ProviderName(invite.Link!), null);
+        return new InviteCheck(true, await ProviderNameAsync(invite.Link!), null);
     }
 
     /// <summary>Step 1 of enrollment: a WebAuthn challenge, only for an invite that can still be used.</summary>
@@ -195,9 +196,10 @@ public sealed class EnrollmentManager(
         return new EnrollmentResult(true, stored.PatientId, null);
     }
 
-    private static string ProviderName(ProviderLink link)
+    private async Task<string> ProviderNameAsync(ProviderLink link)
     {
-        return OrgDirectory.FindBySubjectUri(link.ProviderUri)?.DisplayName ?? link.ProviderUri;
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
+        return directory.FindByUri(link.ProviderUri)?.DisplayName ?? link.ProviderUri;
     }
 
     private static EnrollmentError ToEnrollmentError(InviteError error)

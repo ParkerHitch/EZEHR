@@ -8,7 +8,11 @@ using Microsoft.Identity.Web;
 namespace EZEHR.Managers;
 
 /// <summary>Turns each front door's raw identity into a Caller. No certificate, a bad chain, or an unknown name is unverified.</summary>
-public sealed class CallerManager(TimeProvider time, IOptions<AppOptions> options)
+public sealed class CallerManager(
+    TimeProvider time,
+    IOptions<AppOptions> options,
+    OrganizationManager organizationManager
+)
 {
     /// <summary>The patient cookie scheme and authorization policy.</summary>
     public const string PatientScheme = "Patient";
@@ -31,7 +35,7 @@ public sealed class CallerManager(TimeProvider time, IOptions<AppOptions> option
         options.Value
     );
 
-    public Caller FromCertificate(X509Certificate2? certificate)
+    public async Task<Caller> FromCertificateAsync(X509Certificate2? certificate)
     {
         if (certificate is null)
         {
@@ -47,7 +51,8 @@ public sealed class CallerManager(TimeProvider time, IOptions<AppOptions> option
         {
             return new UnverifiedCaller(check.Reason ?? DenyReason.UntrustedCertificate);
         }
-        Party? party = OrgDirectory.FindByCertificate(certificate);
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
+        Party? party = directory.FindByCertificate(certificate);
         if (party is null)
         {
             return new UnverifiedCaller(DenyReason.UntrustedCertificate);
@@ -84,15 +89,18 @@ public sealed class CallerManager(TimeProvider time, IOptions<AppOptions> option
 
     /// <summary>
     /// Signing in proves who someone is; this decides whether they count as a clinician here: their tenant must
-    /// be an organization we trust, and that organization must have given them the Clinician role.
+    /// belong to a provider in the organizations table, and that provider must have given them the Clinician role.
     /// </summary>
-    public ClinicianCheck EvaluateClinician(ClaimsPrincipal user)
+    public async Task<ClinicianCheck> EvaluateClinicianAsync(ClaimsPrincipal user)
     {
         string? tenantId = user.GetTenantId();
-        if (
-            tenantId is null
-            || !options.Value.TrustedTenants.TryGetValue(tenantId, out string? organization)
-        )
+        if (!Guid.TryParse(tenantId, out Guid tenantGuid))
+        {
+            return new ClinicianCheck(false, null, null, Copy.UntrustedOrg);
+        }
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
+        Party? provider = directory.FindProviderByTenant(tenantGuid);
+        if (provider is null)
         {
             return new ClinicianCheck(false, null, null, Copy.UntrustedOrg);
         }
@@ -111,15 +119,15 @@ public sealed class CallerManager(TimeProvider time, IOptions<AppOptions> option
             PartyKind.Clinician,
             OrgDirectory.ClinicianUri(tenantId, objectId),
             displayName,
-            organization
+            provider.DisplayName
         );
         return new ClinicianCheck(true, party, SessionStartedAt(user), null);
     }
 
     /// <summary>The caller for the access check. A session without a start time is refused there as NotSignedIn.</summary>
-    public Caller FromClinician(ClaimsPrincipal user)
+    public async Task<Caller> FromClinicianAsync(ClaimsPrincipal user)
     {
-        ClinicianCheck check = EvaluateClinician(user);
+        ClinicianCheck check = await EvaluateClinicianAsync(user);
         if (!check.Ok)
         {
             return new UnverifiedCaller(DenyReason.NotSignedIn);

@@ -11,9 +11,6 @@ public sealed class AppOptions
     /// <summary>Public origin of the site, used by WebAuthn and invite links.</summary>
     public string Origin { get; set; } = "https://localhost:5001";
 
-    /// <summary>Entra tenant id → organization display name. Clinicians from other tenants are refused.</summary>
-    public Dictionary<string, string> TrustedTenants { get; set; } = [];
-
     public CertificateAuthorityOptions CertificateAuthority { get; set; } = new();
 
     public EzcaOptions Ezca { get; set; } = new();

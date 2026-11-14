@@ -11,16 +11,21 @@ public sealed class RecordSignatureException(string message, Exception? inner = 
 
 /// <summary>
 /// Verifies a signed record: the signature against the x5c leaf, then the leaf's chain at the header's iat
-/// (so records stay valid after their signer's certificate expires), then who the signer is.
+/// (so records stay valid after their signer's certificate expires), then who the signer is, in the directory given.
 /// Throws RecordSignatureException on any failure.
 /// </summary>
 public static class RecordVerifier
 {
-    public static VerifiedEntry Verify(Guid entryId, string jws, TrustAnchors trustAnchors)
+    public static VerifiedEntry Verify(
+        Guid entryId,
+        string jws,
+        TrustAnchors trustAnchors,
+        OrganizationDirectory directory
+    )
     {
         try
         {
-            return VerifyCore(entryId, jws, trustAnchors);
+            return VerifyCore(entryId, jws, trustAnchors, directory);
         }
         catch (RecordSignatureException)
         {
@@ -70,7 +75,12 @@ public static class RecordVerifier
         }
     }
 
-    private static VerifiedEntry VerifyCore(Guid entryId, string jws, TrustAnchors trustAnchors)
+    private static VerifiedEntry VerifyCore(
+        Guid entryId,
+        string jws,
+        TrustAnchors trustAnchors,
+        OrganizationDirectory directory
+    )
     {
         string[] parts = jws.Split('.');
         if (parts.Length != 3)
@@ -117,7 +127,7 @@ public static class RecordVerifier
             throw new RecordSignatureException($"Signer certificate rejected: {check.Reason}.");
         }
 
-        Party signer = OrgDirectory.FindByCertificate(leaf)
+        Party signer = directory.FindByCertificate(leaf)
             ?? throw new RecordSignatureException("Signer is not a known organization.");
 
         using JsonDocument payload = JsonDocument.Parse(Base64Url.Decode(parts[1]));

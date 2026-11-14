@@ -83,7 +83,7 @@ public class ExportTests : IAsyncLifetime
 
     private async Task EnrollSamAsync()
     {
-        Party lakeside = OrgDirectory.FindBySubjectUri(OrgDirectory.ProviderUri("lakeside"))!;
+        Party lakeside = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri("lakeside"))!;
         string inviteCode = await _app.WithAsync(async services =>
             (
                 await services
@@ -166,7 +166,12 @@ public class ExportTests : IAsyncLifetime
             string jws = Encoding.UTF8.GetString(
                 Convert.FromBase64String((string)signature["data"]!)
             );
-            VerifiedEntry verified = RecordVerifier.Verify(Guid.Empty, jws, _app.Pki.TrustAnchors);
+            VerifiedEntry verified = RecordVerifier.Verify(
+                Guid.Empty,
+                jws,
+                _app.Pki.TrustAnchors,
+                OrgDirectory.Demo
+            );
 
             Assert.Equal(
                 $"{verified.Signer.DisplayName}, {verified.Signer.OrgName}",

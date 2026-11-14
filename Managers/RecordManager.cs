@@ -23,6 +23,7 @@ public sealed class RecordManager(
     AccessManager accessManager,
     AuditManager auditManager,
     InviteManager inviteManager,
+    OrganizationManager organizationManager,
     TimeProvider time,
     IOptions<AppOptions> options,
     ILogger<RecordManager> logger
@@ -70,11 +71,12 @@ public sealed class RecordManager(
         }
 
         // Verify everything before storing anything, so a bad batch stores nothing.
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
         List<(string SourceKey, VerifiedEntry Entry, string Jws)> checkedEntries = [];
         foreach (string jws in signedEntries)
         {
             (VerifiedEntry? entry, string? sourceKey, RecordError? error) =
-                VerifyEntrySignedByCaller(jws, provider);
+                VerifyEntrySignedByCaller(jws, provider, directory);
             if (error is RecordError refused)
             {
                 return PushRefused(refused);
@@ -286,7 +288,8 @@ public sealed class RecordManager(
 
         (VerifiedEntry? note, string? sourceKey, RecordError? error) = VerifyEntrySignedByCaller(
             jws,
-            ((VerifiedCaller)caller).Party
+            ((VerifiedCaller)caller).Party,
+            await organizationManager.LoadDirectoryAsync()
         );
         if (error is RecordError refused)
         {
@@ -532,13 +535,14 @@ public sealed class RecordManager(
     /// </summary>
     private (VerifiedEntry? Entry, string? SourceKey, RecordError? Error) VerifyEntrySignedByCaller(
         string jws,
-        Party caller
+        Party caller,
+        OrganizationDirectory directory
     )
     {
         VerifiedEntry entry;
         try
         {
-            entry = RecordVerifier.Verify(Guid.Empty, jws, _trustAnchors);
+            entry = RecordVerifier.Verify(Guid.Empty, jws, _trustAnchors, directory);
         }
         catch (RecordSignatureException)
         {
@@ -571,6 +575,7 @@ public sealed class RecordManager(
         Func<string, bool>? resourceTypeFilter
     )
     {
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
         List<SignedEntry> entries = [];
         int unverifiedCount = 0;
         foreach (
@@ -582,7 +587,8 @@ public sealed class RecordManager(
                 VerifiedEntry verified = RecordVerifier.Verify(
                     decrypted.Id,
                     decrypted.Jws,
-                    _trustAnchors
+                    _trustAnchors,
+                    directory
                 );
                 entries.Add(
                     new SignedEntry(

@@ -30,7 +30,7 @@ public sealed class NetworkController(
     )
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
-        Caller caller = callerManager.FromCertificate(certificate);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
         CreateEnrollmentInviteResult result = await inviteManager.CreateEnrollmentInviteAsync(
             caller,
             request.ProviderPatientId
@@ -49,7 +49,7 @@ public sealed class NetworkController(
     public async Task<IActionResult> PushSignedRecordsAsync(PushSignedRecordsRequest request)
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
-        Caller caller = callerManager.FromCertificate(certificate);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
         PushSignedRecordsResult result = await recordManager.PushSignedRecordsAsync(
             caller,
             request.ProviderPatientId,
@@ -72,7 +72,7 @@ public sealed class NetworkController(
     public async Task<IActionResult> ReadEgfrLabsAsync(Guid patientId)
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
-        Caller caller = callerManager.FromCertificate(certificate);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
         ReadEgfrLabsResult result = await recordManager.ReadEgfrLabsAsync(patientId, caller);
         if (!result.Allowed)
         {
@@ -88,7 +88,7 @@ public sealed class NetworkController(
     )
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
-        Caller caller = callerManager.FromCertificate(certificate);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
         ReadFullRecordResult result = await recordManager.ReadFullRecordAsync(
             patientId,
             caller,
@@ -108,7 +108,7 @@ public sealed class NetworkController(
     )
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
-        Caller caller = callerManager.FromCertificate(certificate);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
         WriteSignedNoteResult result = await recordManager.WriteSignedNoteAsync(
             patientId,
             caller,

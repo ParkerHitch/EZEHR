@@ -63,7 +63,7 @@ public class ClinicianSignInFlowTests : IAsyncLifetime
     [Fact]
     public async Task Index_shows_who_is_signed_in_until_the_shift_ends()
     {
-        WebApplicationFactory<Program> app = TestClinicianAuthHandler.Install(_app);
+        WebApplicationFactory<Program> app = await TestClinicianAuthHandler.InstallAsync(_app);
         string clinician = TestClinicianAuthHandler.HeaderValue(
             CallerManager.ClinicianRole,
             TestPki.Start
@@ -78,7 +78,7 @@ public class ClinicianSignInFlowTests : IAsyncLifetime
     [Fact]
     public async Task Index_shows_NotAClinician_for_an_account_without_the_role()
     {
-        WebApplicationFactory<Program> app = TestClinicianAuthHandler.Install(_app);
+        WebApplicationFactory<Program> app = await TestClinicianAuthHandler.InstallAsync(_app);
         string reader = TestClinicianAuthHandler.HeaderValue("Reader", TestPki.Start);
 
         string page = await PageTextAsync(Browser(app, reader), "/Clinician");

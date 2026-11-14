@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using EZEHR.Managers;
+using EZEHR.Services;
+using EZEHR.Tests.Api;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -29,11 +31,14 @@ public sealed class TestClinicianAuthHandler(
     public const string RiveraObjectId = "c2a7e5d1-9b3f-4e8a-a6c4-3d2b1e0f9a87";
 
     /// <summary>The app hosted with this handler in place of the clinician cookie, and Riverside's tenant trusted.</summary>
-    public static WebApplicationFactory<Program> Install(WebApplicationFactory<Program> app)
+    public static async Task<WebApplicationFactory<Program>> InstallAsync(EzehrFactory app)
     {
+        await app.Database.SetEntraTenantAsync(
+            OrgDirectory.ProviderUri("riverside"),
+            Guid.Parse(RiversideTenant)
+        );
         return app.WithWebHostBuilder(builder =>
         {
-            builder.UseSetting($"App:TrustedTenants:{RiversideTenant}", "Riverside Primary Care");
             builder.ConfigureTestServices(services =>
                 services.Configure<AuthenticationOptions>(authentication =>
                     authentication.SchemeMap[CallerManager.ClinicianScheme].HandlerType =

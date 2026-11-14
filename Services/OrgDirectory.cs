@@ -1,46 +1,34 @@
-using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 
 namespace EZEHR.Services;
 
 /// <summary>
-/// Who each organization and app certificate belongs to, keyed by subject name (CN). The only place that builds
-/// subject URIs and certificate CNs. Unknown names resolve to nobody.
+/// The only place that builds subject URIs and certificate CNs. Also holds the five demo organizations: the
+/// database seeds them into the organizations table, and the tools (which have no database) use them as their
+/// directory. The server's directory is the table, not this list.
 /// </summary>
 public static class OrgDirectory
 {
     public const string KidneyCheckCommonName = "kidney-check.apps.ezehr";
 
-    public static readonly IReadOnlyDictionary<string, Party> KnownOrganizations = new Dictionary<
-        string,
-        Party
-    >(StringComparer.OrdinalIgnoreCase)
-    {
-        [ProviderCommonName("lakeside")] = Provider("lakeside", "Lakeside Urgent Care"),
-        [ProviderCommonName("northwind")] = Provider("northwind", "Northwind Workplace Health"),
-        [ProviderCommonName("maple")] = Provider("maple", "Maple Street Family Medicine"),
-        [ProviderCommonName("riverside")] = Provider("riverside", "Riverside Primary Care"),
-        [KidneyCheckCommonName] = Organization(
+    public const string KidneyCheckUri = "urn:app:kidney-check";
+
+    public static readonly IReadOnlyList<Organization> DemoOrganizations =
+    [
+        DemoProvider("lakeside", "Lakeside Urgent Care"),
+        DemoProvider("northwind", "Northwind Workplace Health"),
+        DemoProvider("maple", "Maple Street Family Medicine"),
+        DemoProvider("riverside", "Riverside Primary Care"),
+        new Organization(
+            KidneyCheckUri,
             PartyKind.App,
-            "urn:app:kidney-check",
-            "Kidney Check"
+            "Kidney Check",
+            KidneyCheckCommonName,
+            null
         ),
-    };
+    ];
 
-    public static Party? FindByCertificate(X509Certificate2 leaf)
-    {
-        string subjectName = leaf.GetNameInfo(X509NameType.SimpleName, false);
-        if (KnownOrganizations.TryGetValue(subjectName, out Party? party))
-        {
-            return party;
-        }
-        return null;
-    }
-
-    public static Party? FindBySubjectUri(string uri)
-    {
-        return KnownOrganizations.Values.FirstOrDefault(party => party.SubjectUri == uri);
-    }
+    public static readonly OrganizationDirectory Demo = new(DemoOrganizations);
 
     public static string ProviderCommonName(string slug)
     {
@@ -57,13 +45,14 @@ public static class OrgDirectory
         return $"urn:entra:{tenantId}:{objectId}";
     }
 
-    private static Party Provider(string slug, string name)
+    private static Organization DemoProvider(string slug, string name)
     {
-        return Organization(PartyKind.Provider, ProviderUri(slug), name);
-    }
-
-    private static Party Organization(PartyKind kind, string uri, string name)
-    {
-        return new Party(kind, uri, name, name);
+        return new Organization(
+            ProviderUri(slug),
+            PartyKind.Provider,
+            name,
+            ProviderCommonName(slug),
+            null
+        );
     }
 }

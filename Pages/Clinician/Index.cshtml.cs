@@ -34,7 +34,7 @@ public sealed class IndexModel(
         {
             return Page();
         }
-        ClinicianCheck check = callerManager.EvaluateClinician(authentication.Principal);
+        ClinicianCheck check = await callerManager.EvaluateClinicianAsync(authentication.Principal);
         if (!check.Ok)
         {
             ErrorCopy = check.ErrorCopy;

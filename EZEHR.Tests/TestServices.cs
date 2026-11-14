@@ -17,8 +17,9 @@ public sealed class TestServices
     {
         IOptions<AppOptions> options = Options.Create(new AppOptions());
         Audit = new AuditManager(db, clock);
-        Invites = new InviteManager(db, clock, options);
-        Grants = new GrantManager(db, Audit, Invites, clock, options);
+        Organizations = new OrganizationManager(db);
+        Invites = new InviteManager(db, Organizations, clock, options);
+        Grants = new GrantManager(db, Audit, Invites, Organizations, clock, options);
         Access = new AccessManager(Grants, Audit, clock);
         Records = new RecordManager(
             db,
@@ -26,6 +27,7 @@ public sealed class TestServices
             Access,
             Audit,
             Invites,
+            Organizations,
             clock,
             options,
             NullLogger<RecordManager>.Instance
@@ -39,6 +41,8 @@ public sealed class TestServices
     public AccessManager Access { get; }
 
     public InviteManager Invites { get; }
+
+    public OrganizationManager Organizations { get; }
 
     public RecordManager Records { get; }
 
