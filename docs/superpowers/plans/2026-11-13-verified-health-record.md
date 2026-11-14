@@ -231,7 +231,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - [ ] **Client certificates:** Configuration → General settings → Incoming client certificates = **Optional Interactive User**, so browsers aren't prompted and programs can send certificates.
   - This mode uses TLS renegotiation, so set **HTTP version 1.1** (HTTP/2 off).
   - Requests over 100 KB fail under renegotiation. The tools send `Expect: 100-continue` and keep each push small.
-- [ ] **Verify:** `https://{app}.azurewebsites.net` loads, `/DbTest` connects, and `az keyvault key show --id {KeyVault:KeyId}` succeeds. Delete `Pages/DbTest` once Task 1's schema is running; it shows server details and raw exception text.
+- [ ] **Verify:** `https://{app}.azurewebsites.net` loads, `/DbTest` connects, and `az keyvault key show --id {KeyVault:KeyId}` succeeds. `Pages/DbTest` is deleted; it showed server details and raw exception text.
 
 ### Task 1: Foundations (App lead, 6:00–7:00 PM)
 
@@ -670,10 +670,10 @@ The download is named `sam-taylor-record.json`.
 ### Task 15: Freeze, deploy, rehearse, record, submit (both, 8:00 AM–1:00 PM)
 
 - [ ] **8:00 AM feature freeze.** `dotnet test` must be all green, then deploy. Have a fresh Claude Code session review the whole branch, focused on the access check, certificate handling and the copy rules. Fix only real defects.
-- [ ] **Demo reset script** (`EZEHR.Tools`, command `demo reset`):
-  1. Clear the production database with `Db.DeleteAllDataAsync()`. The tool connects straight to Azure SQL as the teammate running it (`az login`, then `Authentication=Active Directory Default`), so that laptop's IP must be in the server firewall. The site has no reset endpoint.
-  2. Create 3 invites and print the URLs.
-  3. After phone enrollment, push all 3 providers and run Kidney Check. Riverside's invite is redeemed and its push run live, after the visit scene.
+- [x] **Demo command** (`EZEHR.Tools`, `demo reset|seed|riverside|broker|status`). `source scripts/azure.env` points it at the deployed site (`EZEHR_BASE_URL`) and the production database (`AZURE_SQL_CONNECTIONSTRING` with `Authentication=Active Directory Default`, signed in as whoever ran `az login`, who must be a database user; that laptop's IP must be allowed through the `ezehrdb` firewall). The site has no reset endpoint.
+  1. `demo reset` asks you to type `reset` (or takes `--yes`), clears the database with `Db.DeleteAllDataAsync()`, and prints invite links for Lakeside (Sam enrolls with it), Northwind, Maple and Riverside.
+  2. After Sam enrolls on the phone and links the others: `demo seed` pushes Maple, Northwind and Lakeside, then runs Kidney Check. It finds Sam through the Lakeside link, so no ids are copied by hand.
+  3. Live: `demo broker` (no certificate, then a self-made one) and `demo riverside` (after the visit scene). `demo status` shows Sam's id, entry count, grants and the latest activity.
 
   Rehearse it twice. It must take under 5 minutes.
 - [ ] **Video plan (about 5:00):**

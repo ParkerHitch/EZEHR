@@ -109,4 +109,22 @@ public class DbTests : IAsyncLifetime
         );
         Assert.True(Db.IsUniqueViolation(duplicate));
     }
+
+    [Fact]
+    public async Task DeleteAllData_empties_every_table_and_keeps_them()
+    {
+        await using (SqlConnection connection = await _database.Db.OpenAsync())
+        {
+            Guid patientId = Guid.NewGuid();
+            await connection.ExecuteAsync(InsertEntry, new { patientId, sourceKey = "a" });
+            await connection.ExecuteAsync(InsertLink, new { patientId });
+        }
+
+        await _database.Db.DeleteAllDataAsync();
+
+        await using SqlConnection check = await _database.Db.OpenAsync();
+        Assert.Equal(0, await check.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM entries"));
+        Assert.Equal(0, await check.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM provider_links"));
+        Assert.Contains("entries", await TablesAsync());
+    }
 }

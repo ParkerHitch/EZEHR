@@ -30,6 +30,29 @@ public sealed class Db(IConfiguration configuration)
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Deletes every row and keeps the tables. Only `ezehr-tools demo reset` calls this, from a laptop signed in
+    /// to the database; the site has no reset endpoint.
+    /// </summary>
+    public async Task DeleteAllDataAsync(CancellationToken cancellationToken = default)
+    {
+        await using SqlConnection connection = await OpenAsync(cancellationToken);
+        await using SqlCommand command = new(
+            """
+            DELETE FROM dbo.audit_events;
+            DELETE FROM dbo.grants;
+            DELETE FROM dbo.share_offers;
+            DELETE FROM dbo.entries;
+            DELETE FROM dbo.provider_links;
+            DELETE FROM dbo.invites;
+            DELETE FROM dbo.patient_credentials;
+            DELETE FROM dbo.patients;
+            """,
+            connection
+        );
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     /// <summary>True for a duplicate key in a unique index (2601) or a unique or primary key constraint (2627).</summary>
     public static bool IsUniqueViolation(SqlException exception)
     {
