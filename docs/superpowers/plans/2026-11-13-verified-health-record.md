@@ -180,7 +180,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Dr. Rivera signing in with a security key.
 - `docs/ezca-notes.md`.
 
-- [ ] **Azure account:** Azure for Students with a **personal Microsoft account**, verified with the Purdue email. Don't use the Purdue account itself, because its tenant belongs to Purdue. Invite the App lead (Entra → Users → Invite external user) as Contributor on the subscription.
+- [ ] **Azure account:** Azure for Students with a **personal Microsoft account**, verified with the Purdue email. Don't use the Purdue account itself, because its tenant belongs to Purdue. Invite the other teammate (Entra → Users → Invite external user) as **Owner on resource group `ezehr`**: Contributor can't assign roles, so it can't grant the managed identity Key Vault access. The other teammate also needs Entra roles for the portal work below: Global Administrator is simplest in a throwaway tenant. Otherwise use Privileged Role Administrator (EZCA consent), Authentication Policy Administrator (passkey and TAP policies), User Administrator (Dr. Rivera) and Application Administrator (app registration and role assignment). Guests can't register apps by default.
 - [ ] **Dr. Rivera:**
   - Create the user, with display name `Dr. Rivera`.
   - Under Authentication methods → Policies, enable **Passkey (FIDO2)** and **Temporary Access Pass**.
@@ -337,15 +337,21 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - It writes `.pki/{slug}.pfx`, `.pki/anchors.pem` and `.pki/intermediates.pem`.
     - With `local`, it first creates `.pki/local-root.pfx`.
   - `certs broker` writes `.pki/broker.pfx`, a self-signed certificate (CN `exchange.broker.example`), on purpose.
+  - As built:
+    - The adapter passes the bare CN as the subject, one DNS SAN, and the clientAuth EKU. The SDK throws `HttpRequestException` carrying EZCA's response body; the adapter rethrows it as `CertificateAuthorityException` naming the subject.
+    - `certs issue --ca ezca` signs in with `DefaultAzureCredential` and uses the only CA EZCA offers, or the one picked with `--ca-id` / `--template-id`. With neither, it lists the choices. `--key rsa` switches to RSA 2048 if the probe says EC isn't accepted.
+    - `--ca local` reuses `.pki/local-root.pfx` if it exists, so re-issuing keeps the server's trust anchor.
+    - The `.pfx` files are password-less PKCS#12 (AES-256), holding the key, the leaf and its chain. Self-signed chain members go to `anchors.pem`, the rest to `intermediates.pem`; for `local` the latter is empty.
+  - **Local trust (`CertificateAuthority:Mode=Local`):** `appsettings.Development.json` points `App:TrustAnchorsPemPath` and `App:IntermediatesPemPath` at `.pki/`, so a local `dotnet run` (from the repo root) trusts what `certs issue` just wrote. Nothing local is committed to `Security/Trust/`. To run the *deployed* site on the Local fallback, copy `.pki/anchors.pem` and `.pki/intermediates.pem` to `Security/Trust/` and commit them. Switching to EZCA later is `certs issue --ca ezca` plus replacing those two files; no code changes.
 
-- [ ] **Write failing tests** against a fake `IEZCAClient`:
+- [x] **Write failing tests** against a fake `IEZCAClient`:
   - `Ezca_passes_subject_validity_and_csr`.
   - `Ezca_maps_chain`: returns a leaf plus 2 chain certificates.
   - `Ezca_error_throws_with_message`.
-- [ ] Run (FAIL), implement, run (PASS).
-- [ ] Run `certs issue --ca ezca`, then check each organization certificate with `openssl verify`. Expected: `OK`.
+- [x] Run (FAIL), implement, run (PASS).
+- [ ] Run `certs issue --ca ezca`, then check each organization certificate with `openssl verify`. Expected: `OK`. (Blocked on the EZCA admin consent; `certs issue --ca local` verifies `OK` with `openssl verify -CAfile .pki/anchors.pem`.)
 - [ ] Copy `anchors.pem` and `intermediates.pem` to `Security/Trust/`. They're public, so commit them.
-- [ ] Commit `feat: EZCA certificate authority and org certificate tool`.
+- [x] Commit `feat: EZCA certificate authority and org certificate tool`.
 
 ### Task 4: Encryption at rest and the record store (App lead, 7:30–9:00 PM)
 
@@ -465,20 +471,19 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Consumes: `RecordManager.CreatePatientKeyAsync` (Task 4); `GrantManager.CreateAppGrantAsync` (Task 6; stub its signature until it merges).
 - Produces:
   - Cookie scheme `"Patient"`: 12 h, HttpOnly, Secure, SameSite=Lax, and the claim `patient_id`. Policy `"Patient"`. `AuthorizeFolder("/Patient", "Patient")`, with Enroll and SignIn anonymous.
-  - JSON endpoints (Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`.
-    - `POST /api/patient/passkey/create-registration-options { inviteCode }` (`CreateRegistrationOptionsAsync`). Discoverable credential, `UserVerification = Required`, attestation `none`. An invalid or used invite returns 400.
-    - `POST /api/patient/passkey/complete-registration { inviteCode, attestation, kidneyCheckOptIn }` (`CompleteRegistrationAsync`). It creates the patient (with the wrapped key), the credential and the provider link, redeems the invite, creates the Kidney Check grant **only if** opted in, and signs the patient in.
-    - `POST /api/patient/passkey/create-sign-in-options` (usernameless, `CreateSignInOptionsAsync`) and `/complete-sign-in` (`CompleteSignInAsync`).
-    - `POST /api/patient/redeem-invite { inviteCode }` (signed in, `RedeemInviteAsync`): adds another provider link.
-  - `passkey.js`: about 40 lines. It uses `PublicKeyCredential.parseCreationOptionsFromJSON`, `parseRequestOptionsFromJSON` and `credential.toJSON()`, with base64url helpers as a fallback for older browsers.
+  - JSON endpoints (`PatientPasskeyController`, Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`. Each ceremony's options (its challenge) wait in the ASP.NET Core session (in-memory cache, 5 minutes) between its two calls and are removed when the second call reads them, so a challenge answers once.
+    - `POST /api/patient/passkey/create-registration-options { inviteCode, displayName }` (`CreateRegistrationOptionsAsync`). Discoverable credential, `UserVerification = Required`, attestation `none`, a random 32-byte user handle. An invalid or used invite returns 400. Invites carry no name, so the Enroll page asks for it.
+    - `POST /api/patient/passkey/complete-registration { attestation, kidneyCheckOptIn }` (`CompleteRegistrationAsync`). The invite code comes from the session, not the body. In one transaction it redeems the invite, creates the patient (with the wrapped key) and stores the credential; then it creates the Kidney Check grant **only if** opted in, and signs the patient in. A used invite creates nothing.
+    - `POST /api/patient/passkey/create-sign-in-options` (usernameless, `CreateSignInOptions`) and `/complete-sign-in { assertion }` (`CompleteSignInAsync`).
+    - A signed-in patient who opens another invite link gets "Add your records from {provider}?" on the Enroll page, which posts to its `Link` handler (`EnrollmentManager.LinkInviteAsync`). This replaces a separate `redeem-invite` endpoint.
+  - `passkey.js`: buttons with `data-passkey="enroll" | "sign-in"`. It uses `PublicKeyCredential.parseCreationOptionsFromJSON` and `parseRequestOptionsFromJSON` when available (base64url helpers otherwise), and builds the response JSON itself.
+  - `Pages/Patient/Home` is a placeholder (name and sign out) until Task 11.
 - The Enroll page shows `Copy.KidneyOptIn` with a checkbox, plus one "Create passkey" button. The SignIn page has one "Sign in with passkey" button.
 
-- [ ] **Write failing tests** (Fido2 behind `IFido2Service`, stubbed):
-  - `Invite_single_use`, `Invite_expired`.
-  - `OptIn_creates_app_grant` and `No_optin_no_grant`.
-  - `Enroll_creates_wrapped_dek_and_link`.
-  - `Redeem_second_invite_adds_link`.
-- [ ] Run (FAIL), implement, run (PASS).
+- [x] **Write failing tests** (Fido2 behind `IFido2Service`; `FakeFido2Service` makes real options and stubs verification, and `EzehrFactory` always registers it):
+  - `PatientPasskeyTests`: `Invite_single_use`, `Invite_used_between_options_and_completion_creates_nothing`, `Invite_expired`, `Rejected_passkey_leaves_invite_usable`, `OptIn_creates_app_grant`, `No_optin_no_grant`, `Enroll_creates_wrapped_dek_and_link`, `Redeem_second_invite_adds_link`, and sign-in with a known, unknown and badly signed passkey.
+  - `PatientPasskeyFlowTests` (through HTTP): enrollment signs the patient in, patient pages redirect to SignIn without a cookie, a challenge answers once, sign-in on a new browser.
+- [x] Run (FAIL), implement, run (PASS).
 - [ ] On the deployed site, on a phone: enroll from an invite, then sign in again. Expected: no password field ever appears.
 - [ ] Commit `feat: patient passkeys, invites, sessions`.
 
@@ -522,7 +527,10 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Produces:
   - `NetworkClient.Create(string baseUrl, string pfxPath)`: an `HttpClient` with the client certificate, `SslProtocols = Tls12` (TLS renegotiation needs 1.2), HTTP/1.1, and `Expect100Continue = true`.
   - `ezehr-tools provider invite <lakeside|northwind|maple|riverside> <providerPatientId>` prints the enrollment URL.
-  - `ezehr-tools provider push <provider> <providerPatientId>` signs each resource in `seed/<provider>.json` with `iat` = the resource's clinical date at 12:00 UTC. It POSTs one request per encounter date, so each request stays well under 100 KB.
+  - `ezehr-tools provider push <provider> <providerPatientId>` signs each resource in `seed/<provider>.json` with `iat` = **the time of signing** (now). It POSTs one request per visit date, so each request stays well under 100 KB.
+    - *Changed from "`iat` = the clinical date at 12:00 UTC":* the verifier checks the signer's chain at `iat`, and a certificate issued today (by EZCA or the local CA) isn't valid on a 2024 date, so the push was refused with `BadSignature`. `SignedAt` therefore means "when the organization signed it". **Clinical dates come from the resource:** `effectiveDateTime` (Observation, MedicationStatement), `period.start` (Encounter), `onsetDateTime` (Condition), `sent` (Communication), `authoredOn` (ServiceRequest). The patient and clinician timelines (Tasks 11, 12) group by that date, and Kidney Check reads `effectiveDateTime`.
+  - As built: `NetworkClient.Create(baseUrl, pfxPath)` takes `null` for "no certificate" (the broker). The base URL comes from `EZEHR_BASE_URL`, defaulting to the local https profile, `https://localhost:7189`. For a loopback base URL only, it skips server-certificate validation, because the ASP.NET Core development certificate is often untrusted on Linux. JSON bodies are sent with a `Content-Length` rather than chunked, so `Expect: 100-continue` applies.
+  - Seed file shape: `{ provider, organization, providerPatientId, visits: [{ date, resources: [FHIR R4 resources] }] }`. Resource ids are `{provider}-{date}-{what}` (for example, `maple-2024-09-12-egfr`), and each resource's `subject` carries the provider's patient id and the display name "Sam Taylor". The files are copied next to the tool's binary.
 - **Seed data** (FHIR R4). Patient Sam Taylor, born 1984-05-17. Provider patient IDs: `LUC-20417`, `NWH-88213`, `MSF-0932`, and `RPC-1107` for Riverside.
 
   | Provider | Date | Resources |
@@ -547,7 +555,9 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   4. Later, redeem the Riverside invite and push `riverside`: 16 entries, and the plan shows `Copy.WrittenBy("Dr. Rivera", "Riverside Primary Care")`.
 
   Expected: Sam's record holds 13 entries. **(Review Focus 4)** Pushing again gives `stored:0`.
-- [ ] Commit `feat: provider simulator and seed data`.
+
+  Checked against a local `dotnet run` (enrollment stood in for by a script that calls `RecordManager.CreatePatientAsync` and `InviteManager.RedeemInviteAsync`, since Task 7 wasn't merged): 4 invites over mutual TLS, 13 stored, a second push of each provider gives `stored 0`, Riverside gives 409 `PatientNotLinked` until its invite is redeemed, then 16 entries.
+- [x] Commit `feat: provider simulator and seed data`.
 
 ### Task 10: Kidney Check example app (App lead, 1:00–2:00 AM)
 
@@ -563,22 +573,24 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - `ezehr-tools kidney-check run <patientId>` connects with `kidney-check.pfx` and GETs the labs.
     - When the rule flags, it POSTs a FHIR `Communication` (the endpoint accepts only that type): `payload[0].contentString` = `Copy.KidneyNote(...)`, `sender.display` = "Kidney Check", `id` = `kidney-check`, signed with the app's certificate.
     - On 403, it prints that access was revoked.
+    - As built: `KidneyResult` lives next to `KidneyRule` in `Services/KidneyRule.cs`. The app re-verifies every lab's JWS itself against `.pki/anchors.pem` and `.pki/intermediates.pem`, skipping any that fail. It dates each point by the resource's `effectiveDateTime` (not `SignedAt`, see Task 9), and its source is the signing organization.
 
-- [ ] **Write failing tests:**
+- [x] **Write failing tests:**
   - `Seed_series_flags_34_percent_3_providers`.
   - `Single_source_no_flag`.
   - `Drop_25_exactly_no_flag`.
   - `One_point_no_flag`.
-- [ ] Run (FAIL), implement, run (PASS).
+- [x] Run (FAIL), implement, run (PASS).
 - [ ] Manual check: run it twice; there is exactly 1 note **(Review Focus 4)**. Revoke the grant in Sam's app and run again; the result is 403, and Sam's activity shows the denial.
-- [ ] Commit `feat: Kidney Check example app`.
+  - Checked against a local `dotnet run`, with the grant created and revoked by calling `GrantManager` directly (Sam's app isn't merged yet): 403 `NoGrant` before opt-in; then "Wrote note: … dropped 34% across 3 providers …"; then "Note already written"; after revocation, 403 `GrantRevoked`. The audit log holds each read and write, and the denial.
+- [x] Commit `feat: Kidney Check example app`.
 
 ### Task 11: Patient UI (App lead, 2:00–6:00 AM)
 
 **Files:** Create `Pages/Patient/Home`, `Share`, `Activity`, `Grants`, `_ActivityPartial`.
 
 These are checked manually on a phone. The UI isn't unit-tested, by choice; testing time goes to the access check and the crypto.
-- [ ] **Home:** the combined timeline grouped by date.
+- [ ] **Home:** the combined timeline grouped by date: the resource's clinical date (see Task 9), not `SignedAt`.
   - Each entry shows `Copy.SignedBy(org)`, or `Copy.WrittenBy(...)` when the entry names an author (Dr. Rivera's plan, signed by Riverside).
   - The Kidney Check note shows as a card at the top.
   - An "Export my record" button (Task 14).
@@ -624,9 +636,10 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 
 **Files:** Create `EZEHR.Tools/Commands/BrokerCommand.cs`.
 
-- [ ] `ezehr-tools broker request <patientId> --cert none|self` calls `GET /api/network/patients/{id}/read-full-record?purpose=treatment`. With `self` it uses `.pki/broker.pfx`. It prints the status code and body verbatim, in large console text for the video.
+- [x] `ezehr-tools broker request <patientId> --cert none|self` calls `GET /api/network/patients/{id}/read-full-record?purpose=treatment`. With `self` it uses `.pki/broker.pfx` (from `certs broker`). It prints the status code and body verbatim inside a ruled banner, in red when the console is a terminal; a terminal can't change its font size, so zoom the terminal for the video.
 - [ ] Manual check: run both modes. Expected: two 401s, and two red `Copy.BrokerBlocked("treatment")` lines appear live on Sam's phone. The integration test from Task 6 covers the server side.
-- [ ] Commit `feat: unverified broker demo`.
+  - Checked against a local `dotnet run`: `401 {"error":"NoCertificate"}` and `401 {"error":"UntrustedCertificate"}`, and Sam's audit log holds two `ReadFullRecord` events with no actor, purpose `treatment`, and those reasons. The phone half waits for Task 11.
+- [x] Commit `feat: unverified broker demo`.
 
 ### Task 14: Export my whole record (App lead, 5:00–6:00 AM)
 

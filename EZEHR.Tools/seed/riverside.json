@@ -1,0 +1,99 @@
+{
+  "provider": "riverside",
+  "organization": "Riverside Primary Care",
+  "providerPatientId": "RPC-1107",
+  "visits": [
+    {
+      "date": "2026-11-14",
+      "resources": [
+        {
+          "resourceType": "Encounter",
+          "id": "riverside-2026-11-14-encounter",
+          "status": "finished",
+          "class": {
+            "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+            "code": "AMB",
+            "display": "ambulatory"
+          },
+          "type": [
+            {
+              "text": "New patient visit"
+            }
+          ],
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:riverside:patients",
+              "value": "RPC-1107"
+            },
+            "display": "Sam Taylor"
+          },
+          "participant": [
+            {
+              "individual": {
+                "display": "Dr. Rivera"
+              }
+            }
+          ],
+          "period": {
+            "start": "2026-11-14",
+            "end": "2026-11-14"
+          },
+          "serviceProvider": {
+            "display": "Riverside Primary Care"
+          }
+        },
+        {
+          "resourceType": "Communication",
+          "id": "riverside-2026-11-14-plan",
+          "status": "completed",
+          "category": [
+            {
+              "text": "Care plan"
+            }
+          ],
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:riverside:patients",
+              "value": "RPC-1107"
+            },
+            "display": "Sam Taylor"
+          },
+          "sent": "2026-11-14",
+          "sender": {
+            "display": "Dr. Rivera"
+          },
+          "payload": [
+            {
+              "contentString": "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed."
+            }
+          ]
+        },
+        {
+          "resourceType": "ServiceRequest",
+          "id": "riverside-2026-11-14-nephrology-referral",
+          "status": "active",
+          "intent": "order",
+          "code": {
+            "text": "Referral to nephrology"
+          },
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:riverside:patients",
+              "value": "RPC-1107"
+            },
+            "display": "Sam Taylor"
+          },
+          "authoredOn": "2026-11-14",
+          "requester": {
+            "display": "Dr. Rivera"
+          },
+          "reasonCode": [
+            {
+              "text": "Declining kidney function (eGFR)"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 using EZEHR.Services;
+using EZEHR.Tests.Auth;
 using EZEHR.Tests.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -42,6 +43,9 @@ public sealed class EzehrFactory(TestDatabase database) : WebApplicationFactory<
     public TestPki Pki { get; } = new();
 
     public TestDatabase Database { get; } = database;
+
+    /// <summary>Stands in for the phone's authenticator: tests set what the next passkey ceremony verifies to.</summary>
+    public FakeFido2Service Fido2 { get; } = new();
 
     public HttpClient Client(X509Certificate2? certificate = null)
     {
@@ -90,6 +94,8 @@ public sealed class EzehrFactory(TestDatabase database) : WebApplicationFactory<
             services.AddSingleton<TimeProvider>(Pki.Clock);
             services.RemoveAll<IClientCertificateService>();
             services.AddSingleton<IClientCertificateService, TestHeaderCertificateService>();
+            services.RemoveAll<IFido2Service>();
+            services.AddSingleton<IFido2Service>(Fido2);
         });
     }
 
