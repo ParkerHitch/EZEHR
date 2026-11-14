@@ -349,6 +349,64 @@ public class ShareFlowTests : IAsyncLifetime
         Assert.Contains("Sign in again", ended);
     }
 
+    private string RecordStatusPath()
+    {
+        return $"/Clinician/Record?handler=Status&patientId={_sam}";
+    }
+
+    private async Task<Grant> OpenRecordAsync(HttpClient browser)
+    {
+        ShareOffer offer = await CreateOfferAsync();
+        await RedeemAsync(browser, offer.Code);
+        Grant grant = await ClinicianGrantAsync();
+        await WithAsync(services =>
+            services.GetRequiredService<GrantManager>().ApproveOrDenyAsync(_sam, grant.Id, true)
+        );
+        string recordPage = await browser.GetStringAsync(RecordPath());
+        Assert.Contains("every 2s", recordPage);
+        return grant;
+    }
+
+    [Fact]
+    public async Task Open_record_polls_without_auditing_and_locks_on_revoke()
+    {
+        HttpClient browser = ClinicianBrowser();
+        Grant grant = await OpenRecordAsync(browser);
+        int auditCount = (await ActivityAsync()).Count;
+
+        HttpResponseMessage open = await browser.GetAsync(RecordStatusPath());
+        await browser.GetAsync(RecordStatusPath());
+
+        Assert.Equal(HttpStatusCode.NoContent, open.StatusCode);
+        Assert.Equal(auditCount, (await ActivityAsync()).Count);
+
+        await WithAsync(services =>
+            services.GetRequiredService<GrantManager>().RevokeAsync(_sam, grant.Id)
+        );
+        HttpResponseMessage revoked = await browser.GetAsync(RecordStatusPath());
+
+        Assert.Equal("/Clinician/AccessEnded", revoked.Headers.GetValues("HX-Redirect").Single());
+        Assert.Equal(auditCount, (await ActivityAsync()).Count);
+    }
+
+    [Fact]
+    public async Task Open_record_locks_on_expiry_and_on_shift_end()
+    {
+        HttpClient browser = ClinicianBrowser();
+        await OpenRecordAsync(browser);
+
+        _app.Pki.Clock.Advance(TimeSpan.FromMinutes(6));
+        HttpResponseMessage expired = await browser.GetAsync(RecordStatusPath());
+        _app.Pki.Clock.Advance(TimeSpan.FromHours(10));
+        HttpResponseMessage shiftEnded = await browser.GetAsync(RecordStatusPath());
+
+        Assert.Equal("/Clinician/AccessEnded", expired.Headers.GetValues("HX-Redirect").Single());
+        Assert.Equal(
+            "/Clinician/AccessEnded?reason=ShiftEnded",
+            shiftEnded.Headers.GetValues("HX-Redirect").Single()
+        );
+    }
+
     [Fact]
     public async Task Same_code_entered_twice_shows_ShareCodeUsed()
     {
