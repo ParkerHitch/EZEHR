@@ -1,0 +1,13 @@
+@page
+@model EZEHR.Pages.Clinician.WaitModel
+@using EZEHR.Models
+@{
+  ViewData["Title"] = "Waiting for approval";
+}
+
+<div class="clinician-page"
+     hx-get="@Url.Page("/Clinician/Wait", "Status", new { patientId = Model.PatientId })"
+     hx-trigger="every 2s" hx-swap="none">
+  <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
+  <p class="lead">@Copy.WaitingForApproval</p>
+</div>

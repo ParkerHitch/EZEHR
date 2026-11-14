@@ -1,0 +1,45 @@
+@page
+@model EZEHR.Pages.Clinician.RecordModel
+@using System.Text.Json
+@using EZEHR.Models
+@{
+  ViewData["Title"] = "Patient record";
+}
+
+@functions {
+  // Placeholder until the shared timeline partial lands.
+  private static string Summary(SignedEntry entry)
+  {
+    JsonElement resource = entry.Resource;
+    if (resource.TryGetProperty("payload", out JsonElement payload) && payload.GetArrayLength() > 0
+        && payload[0].TryGetProperty("contentString", out JsonElement content))
+    {
+      return content.GetString() ?? "";
+    }
+    if (resource.TryGetProperty("code", out JsonElement code) && code.TryGetProperty("text", out JsonElement codeText))
+    {
+      return codeText.GetString() ?? "";
+    }
+    return resource.TryGetProperty("id", out JsonElement id) ? id.GetString() ?? "" : "";
+  }
+
+  private static string Badge(SignedEntry entry)
+  {
+    return entry.WrittenBy is null
+      ? Copy.SignedBy(entry.Signer.OrgName)
+      : Copy.WrittenBy(entry.WrittenBy, entry.Signer.OrgName);
+  }
+}
+
+<div class="clinician-page">
+  <h1 class="h3">@Model.Header</h1>
+  <ul class="list-group">
+    @foreach (SignedEntry entry in Model.Entries)
+    {
+      <li class="list-group-item">
+        <strong>@entry.ResourceType</strong> @Summary(entry)
+        <div class="small text-success">@Badge(entry)</div>
+      </li>
+    }
+  </ul>
+</div>

@@ -30,10 +30,13 @@ public sealed record ReadEgfrLabsResult(
     IReadOnlyList<SignedEntry> EgfrLabs
 );
 
+/// <summary>Grant is the grant the access check decided on (pending, ended or active); PatientName is set when allowed.</summary>
 public sealed record ReadFullRecordResult(
     bool Allowed,
     DenyReason? Reason,
-    IReadOnlyList<SignedEntry> Entries
+    IReadOnlyList<SignedEntry> Entries,
+    Grant? Grant,
+    string? PatientName
 );
 
 public sealed record WriteSignedNoteResult(

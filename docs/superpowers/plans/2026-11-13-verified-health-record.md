@@ -615,7 +615,7 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 
 **Files:** Create `Pages/Clinician/Redeem`, `Wait`, `Record`, `AccessEnded`. Test: `EZEHR.Tests/Flows/ShareFlowTests.cs` (WebApplicationFactory with test authentication handlers for both schemes).
 
-- [ ] **Write the failing integration test** `Full_share_flow`:
+- [x] **Write the failing integration test** `Full_share_flow` (the patient's side through `GrantManager`, the clinician's through the pages with `TestClinicianAuthHandler`; the record is all four providers' seed files plus the Kidney Check note). Also: a grant expiring while the record is open, a shift ending (AccessEnded with "Sign in again"), the same code entered twice (`Copy.ShareCodeUsed`, one grant), and clinician pages without the cookie redirecting to Index:
   1. The patient creates an offer (5 min).
   2. The clinician redeems it: pending.
   3. Loading the record page redirects to Wait (`GrantPending`).
@@ -625,17 +625,17 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
   7. The patient revokes.
   8. The record page redirects to AccessEnded **(Review Focus 3)**.
   9. Activity contains the denial.
-- [ ] Run (FAIL), implement, run (PASS).
-- [ ] **Redeem:** a code field. On submit it calls `GrantManager.Redeem` with the clinician `Party` and goes to Wait.
-- [ ] **Wait:** polls the grant status with htmx every 2 s, showing "Waiting for Sam to approve…", then goes to Record.
-- [ ] **Record:**
-  - Every load calls `RecordManager.ReadFullRecordAsync` (`AccessAction.ReadFullRecord`).
-  - Header: "Sam Taylor · access until 5:00 PM".
+- [x] Run (FAIL), implement, run (PASS).
+- [x] **Redeem:** a code field. On submit it calls `GrantManager.RedeemShareCodeAsync` with the clinician `Party` and goes to `Wait?patientId=`. A failed code shows `Copy.ShareCodeFailed(error)`.
+- [x] **Wait:** `?handler=Status` is polled with htmx every 2 s (`GrantManager.FindNewestForGranteeAsync`): 204 while pending, then an `HX-Redirect` to Record, which decides. It shows `Copy.WaitingForApproval` ("Waiting for the patient to approve on their phone…"): the grant doesn't carry the patient's name, and a lookup just for the wait screen wasn't worth it.
+- [x] **Record:**
+  - Every load calls `RecordManager.ReadFullRecordAsync` (`AccessAction.ReadFullRecord`). `ReadFullRecordResult` also carries the decided `Grant` and, when allowed, the `PatientName`, so the page needs one manager call.
+  - Header: `Copy.ClinicianRecordHeader` ("Sam Taylor · access until 5:00 PM").
   - The combined timeline with badges, and the Kidney Check note at the top.
   - **Read-only.** There is no note form: Dr. Rivera's plan and referral arrive from Riverside's system (`provider push riverside`, Task 9).
-  - Any `GrantExpired`, `GrantRevoked`, `NoGrant` or `ShiftEnded` result redirects to AccessEnded.
-- [ ] **AccessEnded:** shows `Copy.AccessEnded`. A `ShiftEnded` result also shows a "Sign in again" link.
-- [ ] Commit `feat: clinician pages and share flow`.
+  - Any `GrantExpired`, `GrantRevoked`, `NoGrant` or `ShiftEnded` result redirects to AccessEnded (`ShiftEnded` as `?reason=ShiftEnded`). `GrantPending` goes back to Wait; `NotSignedIn` (an account that fails `EvaluateClinician`) goes to Index, which says why.
+- [x] **AccessEnded:** shows `Copy.AccessEnded`. A `ShiftEnded` result also shows a "Sign in again" link.
+- [x] Commit `feat: clinician pages and share flow`.
 
 ### Task 13: Data broker, the Particle moment (Identity lead, 5:00–6:00 AM)
 
