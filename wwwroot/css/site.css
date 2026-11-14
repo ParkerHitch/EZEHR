@@ -46,3 +46,14 @@ body {
 .btn-tap {
   min-height: 44px;
 }
+
+.app-note {
+  background: #fff8e6;
+}
+
+.patient-nav .nav-link {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

@@ -196,15 +196,6 @@ public sealed class EnrollmentManager(
         return new EnrollmentResult(true, stored.PatientId, null);
     }
 
-    public async Task<string?> FindPatientNameAsync(Guid patientId)
-    {
-        await using SqlConnection connection = await db.OpenAsync();
-        return await connection.QuerySingleOrDefaultAsync<string>(
-            "SELECT display_name FROM patients WHERE id = @patientId",
-            new { patientId }
-        );
-    }
-
     private static string ProviderName(ProviderLink link)
     {
         return OrgDirectory.FindBySubjectUri(link.ProviderUri)?.DisplayName ?? link.ProviderUri;
