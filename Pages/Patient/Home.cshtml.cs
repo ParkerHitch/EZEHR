@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EZEHR.Managers;
 using EZEHR.Models;
 using Microsoft.AspNetCore.Authentication;
@@ -16,6 +17,17 @@ public sealed class HomeModel(CallerManager callerManager, RecordManager recordM
         Guid patientId = callerManager.PatientIdFrom(User)!.Value;
         Home = await recordManager.ReadPatientHomeAsync(patientId);
         return Page();
+    }
+
+    public async Task<IActionResult> OnGetExportAsync()
+    {
+        Guid patientId = callerManager.PatientIdFrom(User)!.Value;
+        ExportPatientRecordResult export = await recordManager.ExportPatientRecordAsync(patientId);
+        byte[] json = JsonSerializer.SerializeToUtf8Bytes(
+            export.Bundle,
+            new JsonSerializerOptions { WriteIndented = true }
+        );
+        return File(json, "application/fhir+json", export.FileName);
     }
 
     public async Task<IActionResult> OnPostSignOutAsync()

@@ -613,7 +613,7 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
   - The timeline is shared with the clinician Record page: `TimelineBuilder.Build(IReadOnlyList<SignedEntry>)` (grouped by the resource's clinical date; app-signed notes go to the top) rendered by `Pages/Shared/_Timeline.cshtml`. The patient's own read is `RecordManager.ReadPatientHomeAsync`; it isn't logged, because it isn't someone else's access.
   - Share polls its own status block (`?handler=Status`, `_ShareStatus`), which stops polling once a request or an outcome is shown, so the Approve and Deny buttons don't move under a tap. `GrantManager.ReadShareStatusAsync` refuses another patient's offer.
   - Activity lines come from `ActivityManager.ListActivityAsync`, worded by `Copy.ActivityLine`. The Grants page is titled "Access" in the patient nav, and its lines come from `GrantManager.ListAccessAsync`.
-  - The export button waits for Task 14.
+  - The export button is a GET link to `?handler=Export` (Task 14).
   - `EZEHR.Tests/Flows/PatientPagesTests.cs` covers code → request → approve → Access and Activity, revoke, and another patient's offer.
 - [x] Commit `feat: patient home, share, activity, grants`.
 
@@ -664,8 +664,13 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 
 The download is named `sam-taylor-record.json`.
 
-- [ ] Test `Export_bundle_has_provenance_per_entry_and_signatures_verify`: Provenance count = resource count, and every `signature.data` decodes to a JWS that `RecordVerifier` accepts. Run (FAIL), implement, run (PASS).
-- [ ] Commit `feat: FHIR export with signed provenance`.
+- [x] Test `Export_bundle_has_provenance_per_entry_and_signatures_verify`: Provenance count = resource count, and every `signature.data` decodes to a JWS that `RecordVerifier` accepts. Run (FAIL), implement, run (PASS).
+- **As built:**
+  - `RecordManager.ExportPatientRecordAsync(patientId)` returns `ExportPatientRecordResult(FileName, Bundle)`. Like `ReadPatientHomeAsync`, it isn't logged.
+  - Each resource is followed by its Provenance. Resources get `fullUrl` `urn:uuid:{entryId}`, and `target` references that, because resource ids are only unique per signer. The signature also carries the R4-required `when` and `who`.
+  - The file name comes from the patient's name (`Sam Taylor` → `sam-taylor-record.json`, or `health-record.json` if nothing is left), served as `application/fhir+json` by `Pages/Patient/Home` `OnGetExportAsync`.
+  - `ExportTests` also covers the download for a signed-in patient and the Home link.
+- [x] Commit `feat: FHIR export with signed provenance`.
 
 ### Task 15: Freeze, deploy, rehearse, record, submit (both, 8:00 AM–1:00 PM)
 

@@ -1,5 +1,8 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Dapper;
 using EZEHR.Data;
 using EZEHR.Models;
@@ -160,6 +163,85 @@ public sealed class RecordManager(
         );
         Timeline timeline = TimelineBuilder.Build(await ReadVerifiedEntriesAsync(patientId, null));
         return new PatientHome(name, timeline);
+    }
+
+    /// <summary>
+    /// The patient's own whole record as a FHIR R4 collection Bundle. Each resource is followed by a Provenance
+    /// carrying the original JWS, so anyone can verify who signed it. Not logged, like ReadPatientHomeAsync.
+    /// </summary>
+    public async Task<ExportPatientRecordResult> ExportPatientRecordAsync(Guid patientId)
+    {
+        await using SqlConnection connection = await db.OpenAsync();
+        string name = await connection.QuerySingleAsync<string>(
+            "SELECT display_name FROM patients WHERE id = @patientId",
+            new { patientId }
+        );
+        JsonArray bundleEntries = [];
+        foreach (SignedEntry entry in await ReadVerifiedEntriesAsync(patientId, null))
+        {
+            // Resource ids are only unique per signer, so references go by the entry's own fullUrl.
+            string resourceUrl = $"urn:uuid:{entry.Id}";
+            Guid provenanceId = Guid.NewGuid();
+            string signer = $"{entry.Signer.DisplayName}, {entry.Signer.OrgName}";
+            bundleEntries.Add(
+                new JsonObject
+                {
+                    ["fullUrl"] = resourceUrl,
+                    ["resource"] = JsonNode.Parse(entry.Resource.GetRawText()),
+                }
+            );
+            bundleEntries.Add(
+                new JsonObject
+                {
+                    ["fullUrl"] = $"urn:uuid:{provenanceId}",
+                    ["resource"] = new JsonObject
+                    {
+                        ["resourceType"] = "Provenance",
+                        ["id"] = provenanceId.ToString(),
+                        ["target"] = new JsonArray(new JsonObject { ["reference"] = resourceUrl }),
+                        ["recorded"] = entry.SignedAt.ToString("o"),
+                        ["agent"] = new JsonArray(
+                            new JsonObject { ["who"] = new JsonObject { ["display"] = signer } }
+                        ),
+                        ["signature"] = new JsonArray(
+                            new JsonObject
+                            {
+                                ["type"] = new JsonArray(
+                                    new JsonObject
+                                    {
+                                        ["system"] = "urn:iso-astm:E1762-95:2013",
+                                        ["code"] = "1.2.840.10065.1.12.1.1",
+                                        ["display"] = "Author's Signature",
+                                    }
+                                ),
+                                ["when"] = entry.SignedAt.ToString("o"),
+                                ["who"] = new JsonObject { ["display"] = signer },
+                                ["sigFormat"] = "application/jose",
+                                ["data"] = Convert.ToBase64String(
+                                    Encoding.UTF8.GetBytes(entry.Jws)
+                                ),
+                            }
+                        ),
+                    },
+                }
+            );
+        }
+        JsonObject bundle = new()
+        {
+            ["resourceType"] = "Bundle",
+            ["id"] = Guid.NewGuid().ToString(),
+            ["type"] = "collection",
+            ["timestamp"] = time.GetUtcNow().ToString("o"),
+            ["entry"] = bundleEntries,
+        };
+        return new ExportPatientRecordResult(ExportFileName(name), bundle);
+    }
+
+    /// <summary>"Sam Taylor" → "sam-taylor-record.json".</summary>
+    private static string ExportFileName(string patientName)
+    {
+        string slug = Regex.Replace(patientName.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+        return slug.Length == 0 ? "health-record.json" : $"{slug}-record.json";
     }
 
     /// <summary>A note (a FHIR Communication) signed by the caller itself. Idempotent per note id.</summary>
