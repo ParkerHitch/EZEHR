@@ -635,9 +635,10 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 
 **Files:** Create `EZEHR.Tools/Commands/BrokerCommand.cs`.
 
-- [ ] `ezehr-tools broker request <patientId> --cert none|self` calls `GET /api/network/patients/{id}/read-full-record?purpose=treatment`. With `self` it uses `.pki/broker.pfx`. It prints the status code and body verbatim, in large console text for the video.
+- [x] `ezehr-tools broker request <patientId> --cert none|self` calls `GET /api/network/patients/{id}/read-full-record?purpose=treatment`. With `self` it uses `.pki/broker.pfx` (from `certs broker`). It prints the status code and body verbatim inside a ruled banner, in red when the console is a terminal; a terminal can't change its font size, so zoom the terminal for the video.
 - [ ] Manual check: run both modes. Expected: two 401s, and two red `Copy.BrokerBlocked("treatment")` lines appear live on Sam's phone. The integration test from Task 6 covers the server side.
-- [ ] Commit `feat: unverified broker demo`.
+  - Checked against a local `dotnet run`: `401 {"error":"NoCertificate"}` and `401 {"error":"UntrustedCertificate"}`, and Sam's audit log holds two `ReadFullRecord` events with no actor, purpose `treatment`, and those reasons. The phone half waits for Task 11.
+- [x] Commit `feat: unverified broker demo`.
 
 ### Task 14: Export my whole record (App lead, 5:00–6:00 AM)
 
