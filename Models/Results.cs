@@ -56,3 +56,11 @@ public sealed record WriteSignedNoteResult(
 
 /// <summary>The patient's whole record as a FHIR R4 collection Bundle, and the file name to download it as.</summary>
 public sealed record ExportPatientRecordResult(string FileName, JsonObject Bundle);
+
+/// <summary>NextAfterId is set when another page follows; pass it back as AfterId.</summary>
+public sealed record ReadOrganizationAuditResult(
+    bool Allowed,
+    DenyReason? Reason,
+    IReadOnlyList<OrganizationAuditEvent> Events,
+    long? NextAfterId
+);

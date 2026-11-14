@@ -21,6 +21,7 @@ public sealed class TestServices
         Invites = new InviteManager(db, Organizations, clock, options);
         Grants = new GrantManager(db, Audit, Invites, Organizations, clock, options);
         Access = new AccessManager(Grants, Audit, clock);
+        OrganizationAudit = new OrganizationAuditManager(db);
         Records = new RecordManager(
             db,
             keyWrapService ?? LocalKeyWrapService(),
@@ -43,6 +44,8 @@ public sealed class TestServices
     public InviteManager Invites { get; }
 
     public OrganizationManager Organizations { get; }
+
+    public OrganizationAuditManager OrganizationAudit { get; }
 
     public RecordManager Records { get; }
 

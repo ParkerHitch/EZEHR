@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography.X509Certificates;
 using EZEHR.Managers;
 using EZEHR.Models;
@@ -18,7 +19,8 @@ public sealed class NetworkController(
     IClientCertificateService clientCertificateService,
     CallerManager callerManager,
     InviteManager inviteManager,
-    RecordManager recordManager
+    RecordManager recordManager,
+    OrganizationAuditManager organizationAuditManager
 ) : ControllerBase
 {
     /// <summary>Calls a minute per client address, set up in Program.cs.</summary>
@@ -123,6 +125,43 @@ public sealed class NetworkController(
             return RecordErrorResult(error);
         }
         return Ok(new WriteSignedNoteResponse(result.Stored, result.EntryId));
+    }
+
+    /// <summary>
+    /// The caller organization's own audit trail: attempts by its clinicians and its own system, oldest first.
+    /// Filters combine; page with the response's nextAfterId.
+    /// </summary>
+    [HttpGet("read-organization-audit")]
+    public async Task<IActionResult> ReadOrganizationAuditAsync(
+        [FromQuery] string? clinicianUri,
+        [FromQuery] Guid? patientId,
+        [FromQuery] string? providerPatientId,
+        [FromQuery] DateTimeOffset? since,
+        [FromQuery] DateTimeOffset? until,
+        [FromQuery] long afterId = 0,
+        [FromQuery, Range(1, 500)] int limit = 100
+    )
+    {
+        X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
+        ReadOrganizationAuditResult result =
+            await organizationAuditManager.ReadOrganizationAuditAsync(
+                caller,
+                new OrganizationAuditFilter(
+                    clinicianUri,
+                    patientId,
+                    providerPatientId,
+                    since,
+                    until,
+                    afterId,
+                    limit
+                )
+            );
+        if (!result.Allowed)
+        {
+            return DenialResult(result.Reason);
+        }
+        return Ok(new ReadOrganizationAuditResponse(result.Events, result.NextAfterId));
     }
 
     /// <summary>401 for certificate problems; 403 for everything else a verified caller is refused.</summary>

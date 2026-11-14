@@ -21,3 +21,8 @@ public sealed record WriteSignedNoteResponse(bool Stored, Guid? EntryId);
 public sealed record SignedEntriesResponse(IReadOnlyList<SignedEntry> Entries);
 
 public sealed record ErrorResponse(string Error);
+
+public sealed record ReadOrganizationAuditResponse(
+    IReadOnlyList<OrganizationAuditEvent> Events,
+    long? NextAfterId
+);
