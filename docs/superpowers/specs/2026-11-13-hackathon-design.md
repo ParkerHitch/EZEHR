@@ -1,6 +1,6 @@
 # Hackathon Design: Patient-Controlled Health Record with Verified Access
 
-*Working name: EZEHR. Written 2026-11-13; updated the same evening with the C# stack, the identity design, and the platform-first framing.*
+*Working name: EZEHR. Written 2026-11-13; updated the same evening with the C# stack, the identity design, and the platform-first framing. Updated 2026-11-14: clinicians only read; Riverside's own system writes the visit (section 8, "Where clinicians write").*
 
 ## 1. Context
 
@@ -47,7 +47,7 @@
 
 ## 4. Non-goals
 
-- Clinical charting, orders, billing, scheduling. The clinician writes one simple note in the demo; there are no order workflows.
+- Clinical charting, orders, billing, scheduling. EZEHR has no charting UI: after the visit, Riverside's system (simulated) pushes Dr. Rivera's plan and one referral as signed FHIR resources. There are no order workflows.
 - Real integrations with hospital EHRs, FHIR servers, or health information exchanges. Source records are **seeded fake data** in FHIR format.
 - Clinical decision rules beyond the one-line example app. No medical guidelines, charts, or risk scores.
 - Claims of HIPAA compliance.
@@ -73,9 +73,8 @@
 - **Team skills:** both know C#; neither knows Node or TypeScript. Browser JavaScript is limited to the passkey prompt.
 - **Azure:** Azure for Students credit and a free Entra ID tenant. The Entra ID P2 30-day free trial is the fallback if security-key sign-in or Conditional Access needs it.
 - **EZCA is in the core build.** Keytos, the host, approved using its products through their free trials. EZCA's free trial lasts a month and needs no credit card. **EZCA issues every certificate in the demo:**
-  - the three source providers
+  - the three source providers, plus Riverside Primary Care (Dr. Rivera's clinic)
   - the example app
-  - the platform's own signing certificate
   - the unverified broker, whose certificate is deliberately **not** from EZCA
   - Our own small `LocalCA` exists only for automated tests and as the fallback if EZCA setup stalls.
 - **EZCA specifics that shape the design:**
@@ -104,7 +103,8 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
    - Sam taps Share, picks a duration, and shows a short code (with a QR code of it).
    - Dr. Rivera signs in to the clinician page through the clinic's Entra ID by **tapping a physical security key**.
    - Dr. Rivera enters the code. Sam's phone asks "Give Dr. Rivera at Riverside Primary Care access until 5:00 PM?" and Sam approves.
-   - Dr. Rivera sees the combined record and the app's note (and the regular ibuprofen from urgent care), then writes a short plan.
+   - Dr. Rivera sees the combined record and the app's note (and the regular ibuprofen from urgent care). The clinician view is read-only.
+   - After the visit, Riverside's own system pushes Dr. Rivera's plan and a nephrology referral, like any other provider. Sam's timeline shows "Written by Dr. Rivera · signed by Riverside Primary Care ✓."
 4. **The Particle moment.**
    - A data broker's system asks the network for Sam's record, claiming the purpose is "treatment."
    - First it has no certificate; then it has one that EZCA didn't issue. Both requests are refused.
@@ -137,6 +137,14 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
 | EZCA certificate on the security key, used for Entra certificate-based sign-in | Very on-brand for Keytos and needs no change to our code. Kept as stretch goal 3, because setup (a user-certificate template, generating the key on the device, Entra's certificate sign-in configuration) could take hours. |
 | Browser presents the security key's certificate to our app (mutual TLS for people) | Gives a hardware-backed per-clinician certificate on every request without custom JavaScript. Rejected: browser certificate pickers, App Service client-certificate configuration for browser pages, and revocation checks for long-lived certificates. |
 
+**Where clinicians write (revised 2026-11-14):** the rule is *people read; organizations write, and sign what they write.*
+
+| Option | Trade-off |
+|---|---|
+| A note form on the clinician page, signed by the platform's certificate on the clinician's behalf | The original plan. A live typing moment in the video, but inconsistent: the clinic's own chart never sees its doctor's plan, EZEHR vouches for clinical content it didn't write, and Riverside had no identity on the network. History and referrals would end up squeezed into a free-text note. Rejected. |
+| **The clinician page is read-only; Riverside's system pushes the visit documentation (picked)** | Matches real custody: the clinic's system is the record of the care it gave, and it signs it. One write path, one signature model, no platform certificate. Costs the on-camera typing moment; the plan arrives from a console push instead. |
+| SMART on FHIR EHR launch (clinician opens EZEHR from inside the clinic's EHR, carrying both identities) | How it would work in production. It needs a simulated EHR to launch from, so it's too big for the event. Mentioned in Q&A as the path forward. |
+
 **Stack (revised):** C# / ASP.NET Core with Razor Pages, picked over TypeScript/Node.
 - The team knows C#; Keytos's codebase and EZCA's .NET SDK are C#.
 - .NET has certificates, mutual TLS, AES-GCM, Entra sign-in and Key Vault built in or first-party.
@@ -159,9 +167,8 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
 |---|---|---|---|
 | Patient (Sam) | Passkey (WebAuthn) | The phone's secure hardware; never leaves it | Our server verifies the passkey |
 | Clinician (Dr. Rivera) | Entra ID sign-in with a **physical security key** (FIDO2), through OpenID Connect | Inside the security key | Microsoft signs the sign-in token; our server checks the tenant and the Clinician app role |
-| Source providers (3) | **EZCA certificate**, presented over **mutual TLS**; records signed with the same key | The provider system's key file (the simulator's, for the demo) | EZCA; our server checks the chain to the EZCA root and matches the organization |
+| Providers (the 3 sources, plus Riverside) | **EZCA certificate**, presented over **mutual TLS**; records signed with the same key | The provider system's key file (the simulator's, for the demo) | EZCA; our server checks the chain to the EZCA root and matches the organization |
 | Example app (Kidney Check) | **EZCA certificate** over mutual TLS | The app's key file | EZCA, plus Sam's grant |
-| The platform itself | **EZCA certificate** used to sign clinician-written notes | App Service setting backed by Key Vault | EZCA |
 | Data broker (demo) | Nothing, or a certificate EZCA didn't issue | n/a | Nobody, so it's refused |
 | Records at rest | AES-256-GCM, one data key per patient, wrapped by a Key Vault key | Key Vault (the wrapping key never leaves it) | Azure, via App Service's managed identity (no secrets) |
 
@@ -180,8 +187,7 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
      - sign in with Entra ID (security key)
      - enter a share code
      - wait for Sam's approval
-     - view the record
-     - write a short note
+     - view the record (read-only)
      - an "access ended" page
    - **Live updates** by simple polling (htmx, or a few lines of script).
    - **The only custom browser JavaScript is the passkey prompt.**
@@ -199,7 +205,7 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
    - Signature verification on every stored record.
 4. **Tools** (C# console apps):
    - **certificate issuer** (EZCA via the `EZCAClient` SDK, or `LocalCA`)
-   - **provider simulator** (invites and record pushes)
+   - **provider simulator** (invites and record pushes, for the three sources and for Riverside's post-visit documentation)
    - **Kidney Check app**
    - **data broker**
 
@@ -220,7 +226,7 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
   3. Sam's phone shows the approval prompt with Dr. Rivera's verified name and organization.
   4. On approval, the grant is active until its end time.
   5. Every page load of the record passes the access check and is logged.
-- **Clinician notes.** A note Dr. Rivera writes is signed with **the platform's EZCA certificate**, and records Dr. Rivera's Entra identity and the grant used. The badge reads "Written by Dr. Rivera, Riverside Primary Care · signed by EZEHR ✓."
+- **Visit documentation.** Dr. Rivera documents the visit in Riverside's own system, not in EZEHR. Riverside's system (the provider simulator) pushes the plan as a FHIR `Communication` and the referral as a `ServiceRequest`, signed with **Riverside's EZCA certificate**, with Dr. Rivera as the author. The badge reads "Written by Dr. Rivera · signed by Riverside Primary Care ✓." Riverside is linked to Sam the usual way, through an invite Sam redeems at the visit.
 - **Shift limit.** The clinician's session is fixed at 10 hours from sign-in, with no sliding renewal. After that, the clinician signs in again with the security key.
 - **The broker.** It calls the network API for Sam's record with purpose "treatment": first with no certificate, then with a self-made one. Both are refused, and Sam's activity shows each attempt.
 
@@ -230,13 +236,14 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
 - **Libraries and services:**
   - Microsoft.Identity.Web for Entra sign-in
   - Fido2 (fido2-net-lib) for passkeys
-  - Microsoft.Data.Sqlite
+  - Dapper over Microsoft.Data.SqlClient, against Azure SQL Database
   - Azure.Identity + Azure.Security.KeyVault.Keys
   - `EZCAClient` (Keytos's EZCA SDK)
   - QRCoder
   - htmx from a CDN
 - **Hosting:**
   - Azure App Service (Linux, B1) with its managed identity
+  - Azure SQL Database, with Entra-only authentication; App Service connects with its managed identity, so no database password exists
   - Azure Key Vault
   - one Entra ID tenant
   - the EZCA free trial (Basic plan): one root CA and one issuing CA that allows Client Authentication
@@ -246,14 +253,15 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
 - **The server can decrypt** behind the access check. An insider who changes the code could bypass it. In a real system, this is mitigated by reviewed infrastructure-as-code, audit, and HSM key-release policies. Not eliminated.
 - **Expiry stops future reads**, not what a clinician already saw or copied. That is why every read is logged and shown to the patient.
 - **Clinician requests use a session cookie.** It's limited to one shift, HttpOnly, and same-site, and the sign-in itself is phishing-resistant (a security key). A stolen cookie would still work until the shift ends. Per-request clinician certificates were considered (section 8) and deferred.
-- **Clinician-written notes are signed by the platform on the clinician's behalf,** not by a key only the clinician holds. Provider records and app notes are signed by their own EZCA certificates.
+- **The author of a provider's record is the provider's word.** "Written by Dr. Rivera" comes from the record that Riverside signed; EZEHR verifies Riverside, not Dr. Rivera personally. That matches how custody works (the organization stands behind its chart), but no key only the clinician holds is involved.
+- **Two doors for one organization.** Dr. Rivera reads through the clinician pages, while Riverside writes through the network API. In production these would merge into a SMART on FHIR EHR launch, so the clinician opens EZEHR from inside Riverside's system and both identities travel together.
 - **The trust roots are EZCA (for organizations and apps) and each hospital's Entra tenant (for clinicians).**
 - **Source data is only as trustworthy as the provider's signature.**
 - **A patient passkey proves "the same person who enrolled,"** and enrollment is anchored by a provider's invite. Stronger identity proofing (Verified ID) is a stretch goal.
 
 ## 11. Left to the builder
 
-- Database access style (Dapper or EF Core), schema, and the API shape.
+- The schema and the API shape. (Database access is decided: Dapper over Azure SQL Database.)
 - Grant duration choices (suggested: 5 minutes for the demo, 1 hour, 4 hours, end of day). The shift length is decided: 10 hours.
 - The signature format for records: JWS with the signing certificate attached, or CMS. It must be standard and verifiable outside our app, and it goes into the FHIR export as Provenance.
 - The polling mechanism (htmx or a few lines of script).

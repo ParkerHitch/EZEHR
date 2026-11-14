@@ -16,6 +16,20 @@ EZEHR has **three front doors**, one for each kind of party. Each door checks a 
 
 A sign-in only proves **who** someone is. Whether they may read Sam's record is a separate question, answered by **Sam's grant**. Even a perfectly signed-in doctor gets nothing until Sam approves.
 
+### Who writes, who reads
+
+**People read; organizations write, and sign what they write.**
+
+| | Reads | Writes |
+|---|---|---|
+| **Clinician** (clinician pages) | the combined record, under Sam's grant | **nothing** |
+| **Provider system** (network API) | nothing | records for its own linked patients, each signed with its EZCA key |
+| **App** (network API) | what its grant allows (Kidney Check: lab results) | signed notes, if its grant allows |
+
+This mirrors how care is really documented. A clinician charts in **their own organization's system**, which is the legal custodian of that record: history taken at the visit, diagnoses, medication changes, referrals. That system then pushes the result to EZEHR like any other provider. So Dr. Rivera's plan and the nephrology referral reach Sam's record from **Riverside's** system, signed by Riverside, with Dr. Rivera as author. The clinician pages exist for the gap no single system can fill: seeing what *other* organizations hold, with the patient's consent.
+
+The production form of this is a SMART on FHIR EHR launch: the clinician opens EZEHR from inside their own EHR, and the request carries both the organization's identity and the clinician's. The demo keeps the two doors separate instead.
+
 ---
 
 ## 2. The big picture
@@ -72,11 +86,10 @@ flowchart LR
 |---|---|---|---|---|---|
 | **Sam (patient)** | patient ID (GUID) | Passkey | The phone's secure hardware; it never leaves | Nobody else; our server stored Sam's public key at enrollment | WebAuthn signature against the stored public key |
 | **Dr. Rivera (clinician)** | `urn:entra:{tenantId}:{objectId}` | Security key (FIDO2) used for **Entra** sign-in | Inside the security key | **Microsoft Entra** signs the ID token | Token signature, issuer, and audience (library); tenant trusted; app role `Clinician`; session under 10 h |
-| **Lakeside, Northwind, Maple (providers)** | `urn:provider:lakeside` and so on | EZCA client certificate (CN `lakeside.providers.ezehr`) | `.pki/lakeside.pfx` on the simulator's machine | **EZCA** | Chain to the EZCA root; not expired; Client Authentication usage; CN in `OrgDirectory` |
+| **Lakeside, Northwind, Maple, Riverside (providers)** | `urn:provider:lakeside` and so on | EZCA client certificate (CN `lakeside.providers.ezehr`) | `.pki/lakeside.pfx` on the simulator's machine | **EZCA** | Chain to the EZCA root; not expired; Client Authentication usage; CN in `OrgDirectory` |
 | **Kidney Check (app)** | `urn:app:kidney-check` | EZCA client certificate (CN `kidney-check.apps.ezehr`) | `.pki/kidney-check.pfx` | **EZCA**, plus Sam's grant | The same certificate checks, plus a `LabsAndNotes` grant from Sam |
-| **EZEHR platform** | `urn:platform:ezehr` | EZCA certificate (CN `platform.ezehr`), used only to **sign** clinician notes | Key Vault secret `platform-cert`, loaded by App Service | **EZCA** | Anyone can verify the signature against the EZCA root |
 | **Data broker** | none | No certificate, or a self-made one | Its own machine | Nobody | Fails the certificate checks, so `UnverifiedCaller` and refused |
-| **EZEHR server → Azure** | App Service **managed identity** | Azure-issued token, automatic | Azure manages it; we store no secret | Azure | Key Vault roles: Crypto User (wrap and unwrap), Secrets User (read the platform certificate) |
+| **EZEHR server → Azure** | App Service **managed identity** | Azure-issued token, automatic | Azure manages it; we store no secret | Azure | Key Vault role: Crypto User (wrap and unwrap). Azure SQL: a database user that can read, write and create tables |
 
 ---
 
@@ -91,16 +104,14 @@ sequenceDiagram
   autonumber
   participant Dev as Identity lead laptop
   participant EZ as EZCA
-  participant KV as Key Vault
   Dev->>Dev: az login as the EZCA PKI admin
-  loop lakeside, northwind, maple, kidney-check, platform
+  loop lakeside, northwind, maple, riverside, kidney-check
     Dev->>Dev: generate key pair and CSR
     Dev->>EZ: RequestSSLCertificateV2 with CSR, subject name, 365 days, Client Authentication
     EZ-->>Dev: certificate, issuing CA, root CA
   end
   Dev->>Dev: save .pki/NAME.pfx, private and never committed
   Dev->>Dev: commit root and issuing CA certificates, public, to Security/Trust
-  Dev->>KV: store platform.pfx as secret platform-cert
 ```
 
 The broker's certificate is made by the same tool **without EZCA** (`certs broker`), on purpose.
@@ -117,8 +128,8 @@ The broker's certificate is made by the same tool **without EZCA** (`certs broke
 ### 4c. Azure plumbing
 
 - App Service has a **system-assigned managed identity**. Key Vault grants it:
-  - **Key Vault Crypto User** on `records-kek`, to wrap and unwrap patients' data keys
-  - **Key Vault Secrets User**, to read `platform-cert`
+  - **Key Vault Crypto User** on `records-kek`, to wrap and unwrap patients' data keys. The server holds no certificate of its own and needs no other secret.
+- Azure SQL uses **Entra-only authentication**. The same managed identity is a database user (`db_datareader`, `db_datawriter`, `db_ddladmin`), so the connection string holds no password.
 - App Service **client certificates = "Optional Interactive User"**:
   - browsers aren't asked for a certificate
   - programs (our tools) can present one
@@ -141,7 +152,7 @@ sequenceDiagram
   participant Ph as Sam's phone
   participant Web as Patient pages
   participant KV as Key Vault
-  Prov->>Net: POST /invites over mutual TLS
+  Prov->>Net: POST /create-enrollment-invite over mutual TLS
   Net->>Net: certificate check, caller must be a provider
   Net-->>Prov: invite code and enrollment URL
   Note over Prov,Ph: the clinic gives Sam the link
@@ -195,7 +206,7 @@ sequenceDiagram
   En-->>Br: ID token signed by Microsoft
   Br->>Web: POST /signin-oidc with the ID token
   Web->>Web: Microsoft.Identity.Web checks signature, issuer, audience
-  Web->>Web: ClinicianAuth checks trusted tenant and Clinician role
+  Web->>Web: CallerManager checks trusted tenant and Clinician role
   Web-->>Br: clinician cookie, 10 hours, no renewal
 ```
 
@@ -204,6 +215,8 @@ sequenceDiagram
 **Not yet proven:** that Dr. Rivera may see Sam's record. That is Flow 5.
 
 ### Flow 4: A provider pushes records (mutual TLS + signed records)
+
+Riverside's system uses this same flow after the visit to push Dr. Rivera's plan and referral (see section 1, "Who writes, who reads").
 
 Two separate proofs are at work:
 - **The TLS client certificate** proves *who is connected right now*.
@@ -224,8 +237,8 @@ sequenceDiagram
   App->>App: RecordVerifier, every record signed by Lakeside
   App->>App: provider_links, LUC-20417 belongs to Sam
   App->>KV: unwrap Sam's data key
-  App->>App: encrypt, store, skip duplicates, audit Ingest
-  App-->>Tool: inserted and skipped counts
+  App->>App: encrypt, store, skip duplicates, audit PushSignedRecords
+  App-->>Tool: stored and alreadyStored counts
 ```
 
 ### Flow 5: Sharing with a clinician (code → approval → grant)
@@ -252,7 +265,7 @@ sequenceDiagram
 
 The name in the prompt comes from **Microsoft's token**, not from anything the doctor typed. A photo of the code doesn't help anyone else: the code works once, and Sam sees exactly who redeemed it.
 
-### Flow 6: The clinician reads the record (and writes a note)
+### Flow 6: The clinician reads the record
 
 ```mermaid
 sequenceDiagram
@@ -263,8 +276,8 @@ sequenceDiagram
   participant KV as Key Vault
   participant Ph as Sam's phone
   Doc->>Pg: GET record, with the clinician cookie
-  Pg->>Pg: ClinicianAuth turns the cookie into VerifiedCaller with session start time
-  Pg->>G: Authorize ReadRecord for Sam
+  Pg->>Pg: CallerManager turns the cookie into VerifiedCaller with session start time
+  Pg->>G: Authorize ReadFullRecord for Sam
   G->>G: shift under 10 h, grant found, Active, not expired, scope Full
   G->>G: audit, Dr. Rivera viewed your record
   G-->>Pg: allowed
@@ -273,11 +286,9 @@ sequenceDiagram
   Pg-->>Doc: combined record with Signed by badges
   Ph->>Pg: activity polling
   Pg-->>Ph: Dr. Rivera, Riverside Primary Care, viewed your record
-  Doc->>Pg: save note
-  Pg->>G: Authorize WriteNote
-  G-->>Pg: allowed and audited
-  Pg->>Pg: sign the note with the platform EZCA certificate, recording Dr. Rivera as the writer
 ```
+
+The clinician pages are read-only. A clinician grant (scope `Full`) allows `ReadFullRecord` and `ReadEgfrLabs`, and the gate answers `ScopeDenied` to any write. Dr. Rivera documents the visit in Riverside's own system, which pushes it through Flow 4.
 
 Every page load repeats the gate check. That's how revocation and expiry take effect immediately (Flow 9).
 
@@ -291,19 +302,19 @@ sequenceDiagram
   participant App as Kidney Check app
   participant Net as Network API
   participant G as Access gate
-  App->>Net: GET /patients/ID/labs over mutual TLS with the kidney-check certificate
+  App->>Net: GET /patients/ID/read-egfr-labs over mutual TLS with the kidney-check certificate
   Net->>Net: certificate check, CN kidney-check.apps.ezehr is the Kidney Check app
-  Net->>G: Authorize ReadLabs
+  Net->>G: Authorize ReadEgfrLabs
   G->>G: LabsAndNotes grant from Sam, Active
   G-->>Net: allowed, audit Kidney Check read your lab results
   Net-->>App: eGFR results
   App->>App: rule, more than 25 percent drop across 2 or more providers
-  App->>Net: POST /patients/ID/notes with a Flag signed by the app certificate
-  Net->>G: Authorize WriteNote
+  App->>Net: POST /patients/ID/write-signed-note with a Communication signed by the app certificate
+  Net->>G: Authorize WriteSignedNote
   G-->>Net: allowed
 ```
 
-If the app tries `GET /patients/ID/record` (everything), the gate answers `ScopeDenied`. If Sam revokes the grant, the next call gets `GrantRevoked`.
+If the app tries `GET /patients/ID/read-full-record` (everything), the gate answers `ScopeDenied`. If Sam revokes the grant, the next call gets `GrantRevoked`.
 
 ### Flow 8: The data broker is refused (the Particle moment)
 
@@ -314,7 +325,7 @@ sequenceDiagram
   participant Net as Network API
   participant G as Access gate
   participant Ph as Sam's phone
-  Br->>Net: GET /patients/ID/record?purpose=treatment with no certificate
+  Br->>Net: GET /patients/ID/read-full-record?purpose=treatment with no certificate
   Net->>G: UnverifiedCaller NoCertificate, claimed purpose treatment
   G->>G: audit denial with the claimed purpose
   Net-->>Br: 401
@@ -347,23 +358,23 @@ Expiry stops **future** reads. It can't erase what someone already saw, which is
 ```mermaid
 flowchart TB
   subgraph Doors
-    CS["IClientCertificateSource<br/>reads X-ARR-ClientCert"]
-    CR["CallerResolver"]
-    PK["PatientPasskeys<br/>Fido2"]
-    CA["ClinicianAuth<br/>Entra claims"]
+    CS["IClientCertificateService<br/>reads X-ARR-ClientCert"]
+    CR["CallerManager.FromCertificate"]
+    PK["EnrollmentManager<br/>IFido2Service"]
+    CA["CallerManager.FromClinician<br/>Entra claims"]
   end
   subgraph Trust
     CV["CertificateValidator<br/>EZCA root and intermediates"]
     OD["OrgDirectory<br/>CN to Party"]
   end
   subgraph Core
-    G{{"AccessGate"}}
-    GS["GrantService"]
-    AL[("AuditLog")]
+    G{{"AccessManager"}}
+    GS["GrantManager"]
+    AL[("AuditManager")]
   end
   subgraph Data
-    RS["RecordStore"]
-    KW["IKeyWrapper<br/>Key Vault"]
+    RS["RecordManager"]
+    KW["IKeyWrapService<br/>Key Vault"]
     RV["RecordVerifier"]
     RSG["RecordSigner"]
   end
@@ -380,25 +391,25 @@ flowchart TB
   RS --> RV
   RV --> CV
   RV --> OD
-  RSG -. "used by tools and the note form" .-> RS
+  RSG -. "used by the tools" .-> RS
 ```
 
 | Component | Called by | Takes | Gives back |
 |---|---|---|---|
-| `IClientCertificateSource` | Network API | the HTTP request | the caller's certificate, or nothing |
-| `CertificateValidator` | `CallerResolver`, `RecordVerifier` | a certificate (+ chain) and a time | OK, `UntrustedCertificate`, or `CertificateExpired` (2-minute clock-skew tolerance) |
-| `OrgDirectory` | `CallerResolver`, `RecordVerifier` | the certificate's CN | a `Party` (provider, app, or platform), or nothing |
-| `CallerResolver` | Network API | a certificate or nothing | `VerifiedCaller(party)` or `UnverifiedCaller(reason)` |
-| `PatientPasskeys` | patient pages | WebAuthn responses | a patient cookie (`patient_id`) |
-| `ClinicianAuth` | clinician pages | Entra claims from the cookie | `VerifiedCaller(clinician, sessionStartedAt)`, or the `NotAClinician` / `UntrustedOrg` message |
-| `GrantService` | patient pages, clinician pages, gate | offers, redemptions, approvals, revocations | grants |
-| **`AccessGate`** | **every read and write** | patient, action, `Caller`, claimed purpose | allowed + grant, or a `DenyReason`. **Always exactly one audit event** |
-| `AuditLog` | gate; patient activity page | events | the patient's activity list |
-| `RecordStore` | only code that the gate has allowed, plus the patient's own pages | patient ID | decrypted signed entries; unwraps the key through Key Vault on every call |
-| `IKeyWrapper` | `RecordStore` | a patient data key | the wrapped or unwrapped key (Key Vault, `RSA-OAEP-256`) |
-| `RecordSigner` | tools; the clinician note form (platform certificate) | a FHIR resource and a certificate with its key | a JWS with the certificate attached |
+| `IClientCertificateService` | `NetworkController` | the HTTP request | the caller's certificate, or nothing |
+| `CertificateValidator` | `CallerManager`, `RecordVerifier` | a certificate (+ chain) and a time | OK, `UntrustedCertificate`, or `CertificateExpired` (2-minute clock-skew tolerance) |
+| `OrgDirectory` | `CallerManager`, `RecordVerifier` | the certificate's CN | a `Party` (provider or app), or nothing |
+| `CallerManager.FromCertificate` | `NetworkController` | a certificate or nothing | `VerifiedCaller(party)` or `UnverifiedCaller(reason)` |
+| `EnrollmentManager` | patient pages, `PatientPasskeyController` | WebAuthn responses | a patient cookie (`patient_id`) |
+| `CallerManager.FromClinician` | clinician pages | Entra claims from the cookie | `VerifiedCaller(clinician, sessionStartedAt)`, or the `NotAClinician` / `UntrustedOrg` message |
+| `GrantManager` | patient pages, clinician pages, gate | offers, redemptions, approvals, revocations | grants |
+| **`AccessManager`** | **every read and write** | patient, action, `Caller`, claimed purpose | allowed + grant, or a `DenyReason`. **Always exactly one audit event** |
+| `AuditManager` | gate; patient activity page | events | the patient's activity list |
+| `RecordManager` | `NetworkController`, clinician and patient pages | patient ID and `Caller` | verified signed entries, after asking the gate; unwraps the key through Key Vault on every call |
+| `IKeyWrapService` | `RecordManager` | a patient data key | the wrapped or unwrapped key (Key Vault, `RSA-OAEP-256`) |
+| `RecordSigner` | the tools (provider simulator, Kidney Check) | a FHIR resource and a certificate with its key | a JWS with the certificate attached |
 | `RecordVerifier` | ingest, reads, export | a JWS | `VerifiedEntry` with the signer `Party` and the signing time |
-| `ICertificateAuthority` (`EzcaCa`, `LocalCa`) | **only the `certs` tool** (setup time) | a CSR and a subject name | a certificate and chain |
+| `ICertificateAuthorityService` (`EzcaCertificateAuthorityService`, `LocalCertificateAuthorityService`) | **only the `certs` tool** (setup time) | a CSR and a subject name | a certificate and chain |
 
 ---
 
@@ -411,7 +422,7 @@ flowchart TB
 | Entra ID token + security key | Microsoft vouches: this is Dr. Rivera from a trusted tenant, holding the Clinician role, signed in with a phishing-resistant key | That Sam agreed to share; that comes from the grant |
 | Clinician cookie | That sign-in happened within this 10-hour shift | That it hasn't been stolen; it's limited by HttpOnly, same-site, and the 10-hour cap |
 | EZCA client certificate (mutual TLS) | EZCA vouches that this connection is Lakeside's (or the app's) system | That the organization may read Sam's data; that comes from links and grants |
-| Record signature (JWS) | This exact record was written by Lakeside (or the app, or EZEHR for a clinician), and hasn't changed since | That its medical content is correct |
+| Record signature (JWS) | This exact record was written by Lakeside (or the app; or Riverside, for a note authored by Dr. Rivera), and hasn't changed since | That its medical content is correct |
 | Grant | Sam agreed: this party, this scope, until this time | Anything after it's revoked or expired |
 | Audit event | That an attempt happened, by whom, with what outcome and claimed purpose | Nothing beyond that; it's evidence, not prevention |
 | Key Vault envelope encryption | Data at rest is unreadable without EZEHR's managed identity calling Key Vault | That EZEHR itself can't read it (it can, behind the gate; see the spec's honest limits) |
@@ -429,7 +440,7 @@ flowchart TB
 | `NoGrant` | Gate: no grant for this identity | "Access ended" page / 403 | Yes |
 | `GrantPending` | Gate: Sam hasn't approved yet | Waiting page / 403 | Yes |
 | `GrantRevoked` / `GrantExpired` | Gate | "Access ended" page / 403 | Yes |
-| `ScopeDenied` | Gate: an app asked for more than lab results | 403 | Yes |
+| `ScopeDenied` | Gate: an app asked for more than lab results, or a clinician tried to write | 403 | Yes |
 
 ---
 

@@ -1,3 +1,5 @@
 <Solution>
   <Project Path="EZEHR.csproj" />
+  <Project Path="EZEHR.Tests/EZEHR.Tests.csproj" />
+  <Project Path="EZEHR.Tools/EZEHR.Tools.csproj" />
 </Solution>
