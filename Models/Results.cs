@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace EZEHR.Models;
 
 /// <summary>A share or grant change. Grant is set when it succeeded, Error when it didn't.</summary>
@@ -46,3 +48,6 @@ public sealed record WriteSignedNoteResult(
     bool Stored,
     Guid? EntryId
 );
+
+/// <summary>The patient's whole record as a FHIR R4 collection Bundle, and the file name to download it as.</summary>
+public sealed record ExportPatientRecordResult(string FileName, JsonObject Bundle);
