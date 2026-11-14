@@ -10,7 +10,7 @@
     <h1 class="h4">Who can see your record</h1>
     @if (!Model.Lines.Any(line => line.CanRevoke))
     {
-        <p class="text-muted">Nobody. Share a code when you want a clinician to see it.</p>
+        <p class="text-muted">No clinicians. Share a code when you want one to see it.</p>
     }
     <ul class="list-group mb-4">
         @foreach (AccessLine line in Model.Lines.Where(line => line.CanRevoke))
@@ -24,17 +24,6 @@
             </li>
         }
     </ul>
-    @if (!Model.KidneyCheckOn)
-    {
-        <div class="card mb-4">
-            <div class="card-body">
-                <p class="card-text">@Copy.KidneyOptIn</p>
-                <form method="post" asp-page-handler="TurnOnKidneyCheck">
-                    <button class="btn btn-outline-primary btn-tap">@Copy.TurnOnKidneyCheck</button>
-                </form>
-            </div>
-        </div>
-    }
     @if (Model.Lines.Any(line => !line.CanRevoke))
     {
         <h2 class="h6 text-muted">Ended</h2>
@@ -45,6 +34,39 @@
             }
         </ul>
     }
+
+    <h2 class="h5">Apps</h2>
+    <p class="text-muted small">@Copy.AppsHint</p>
+    <ul class="list-group mb-4">
+        <li class="list-group-item">
+            <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                <span class="fw-semibold">Kidney Check</span>
+                @if (Model.KidneyCheck is not null)
+                {
+                    <span class="badge text-bg-success">On</span>
+                }
+                else
+                {
+                    <span class="badge text-bg-secondary">Off</span>
+                }
+            </div>
+            @if (Model.KidneyCheck is AccessLine kidneyCheck)
+            {
+                <p class="mb-2">@kidneyCheck.Text</p>
+                <form method="post" asp-page-handler="Revoke">
+                    <input type="hidden" name="grantId" value="@kidneyCheck.GrantId"/>
+                    <button class="btn btn-outline-secondary btn-tap">@Copy.TurnOffKidneyCheck</button>
+                </form>
+            }
+            else
+            {
+                <p class="mb-2">@Copy.KidneyOptIn</p>
+                <form method="post" asp-page-handler="TurnOnKidneyCheck">
+                    <button class="btn btn-primary btn-tap">@Copy.TurnOnKidneyCheck</button>
+                </form>
+            }
+        </li>
+    </ul>
 
     <h2 class="h5">Connected clinics</h2>
     <p class="text-muted small">@Copy.ConnectedProvidersHint</p>

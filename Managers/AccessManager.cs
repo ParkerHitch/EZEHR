@@ -35,6 +35,19 @@ public sealed class AccessManager(
         return decision;
     }
 
+    /// <summary>
+    /// The same decision as AuthorizeAsync, without the audit event. Only for status polls that return no record
+    /// data, like the clinician's open record checking every few seconds whether it should lock itself.
+    /// </summary>
+    public async Task<AccessDecision> CheckAccessWithoutAuditAsync(
+        Guid patientId,
+        AccessAction action,
+        Caller caller
+    )
+    {
+        return await DecideAccessAsync(patientId, action, caller);
+    }
+
     private async Task<AccessDecision> DecideAccessAsync(
         Guid patientId,
         AccessAction action,

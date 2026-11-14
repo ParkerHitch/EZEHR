@@ -139,23 +139,29 @@ public sealed class GrantManager(
 
     /// <summary>
     /// Everyone who has or had access, newest first, and the providers that can add records, as the Access page
-    /// lists them.
+    /// lists them. Kidney Check's current grant comes out of the list, since the page shows it under Apps.
     /// </summary>
     public async Task<AccessOverview> ListAccessAsync(Guid patientId)
     {
         DateTimeOffset now = time.GetUtcNow();
         IReadOnlyList<Grant> grants = await ListForPatientAsync(patientId);
-        List<AccessLine> lines = grants
-            .OrderByDescending(grant => grant.CreatedAt)
-            .Select(grant => ToAccessLine(grant, now))
-            .ToList();
+        List<AccessLine> lines = [];
+        AccessLine? kidneyCheck = null;
+        foreach (Grant grant in grants.OrderByDescending(grant => grant.CreatedAt))
+        {
+            AccessLine line = ToAccessLine(grant, now);
+            if (grant.Grantee.SubjectUri == OrgDirectory.KidneyCheckUri && line.CanRevoke)
+            {
+                kidneyCheck = line;
+            }
+            else
+            {
+                lines.Add(line);
+            }
+        }
         IReadOnlyList<ConnectedProviderLine> connectedProviders =
             await inviteManager.ListConnectedProvidersAsync(patientId);
-        bool kidneyCheckOn = grants.Any(grant =>
-            grant.Grantee.SubjectUri == OrgDirectory.KidneyCheckUri
-            && grant.Status == GrantStatus.Active
-        );
-        return new AccessOverview(lines, connectedProviders, kidneyCheckOn);
+        return new AccessOverview(lines, connectedProviders, kidneyCheck);
     }
 
     private AccessLine ToAccessLine(Grant grant, DateTimeOffset now)

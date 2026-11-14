@@ -23,7 +23,7 @@ public sealed record Timeline(
 );
 
 /// <summary>What the patient's home page shows.</summary>
-public sealed record PatientHome(string PatientName, Timeline Timeline);
+public sealed record PatientHome(string PatientName, Timeline Timeline, string RecordVersion);
 
 /// <summary>A share offer as the Share page shows it, and what became of it.</summary>
 public sealed record ShareStatus(
@@ -43,13 +43,13 @@ public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke);
 public sealed record ConnectedProviderLine(string ProviderUri, string Text);
 
 /// <summary>
-/// The Access page: who can see the record (grants), which providers can add to it (links), and whether Kidney
-/// Check is on (when it isn't, the page offers to turn it on).
+/// The Access page: who can see the record (grants), which providers can add to it (links), and Kidney Check's
+/// current grant, or null when it's off (then the page offers to turn it on).
 /// </summary>
 public sealed record AccessOverview(
     IReadOnlyList<AccessLine> Lines,
     IReadOnlyList<ConnectedProviderLine> ConnectedProviders,
-    bool KidneyCheckOn
+    AccessLine? KidneyCheck
 );
 
 /// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>

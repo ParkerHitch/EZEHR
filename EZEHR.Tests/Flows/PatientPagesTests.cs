@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using EZEHR.Managers;
@@ -116,6 +117,53 @@ public class PatientPagesTests : IAsyncLifetime
         return await _phone.PostAsync(postUrl, new FormUrlEncodedContent(fields));
     }
 
+    private static string TimelinePollPath(string page)
+    {
+        return Regex
+            .Match(page, "hx-get=\"(/Patient/Home\\?[^\"]*handler=Timeline[^\"]*)\"")
+            .Groups[1]
+            .Value;
+    }
+
+    [Fact]
+    public async Task Home_timeline_poll_shows_a_pushed_record_without_a_refresh()
+    {
+        string pollPath = TimelinePollPath(await ReadAsync("/Patient/Home"));
+        HttpResponseMessage unchanged = await _phone.GetAsync(pollPath);
+        Assert.Equal(HttpStatusCode.NoContent, unchanged.StatusCode);
+
+        Party lakeside = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri("lakeside"))!;
+        X509Certificate2 certificate = _app.Pki.Issue(OrgDirectory.ProviderCommonName("lakeside"));
+        JsonElement condition = JsonSerializer.SerializeToElement(
+            new
+            {
+                resourceType = "Condition",
+                id = "poll-test",
+                recordedDate = "2026-11-14",
+                code = new { text = "Seasonal allergies" },
+            }
+        );
+        PushSignedRecordsResult pushed = await _app.WithAsync(services =>
+            services
+                .GetRequiredService<RecordManager>()
+                .PushSignedRecordsAsync(
+                    new VerifiedCaller(lakeside, null),
+                    "LUC-20417",
+                    [RecordSigner.Sign(condition, certificate, [], _app.Pki.Clock.GetUtcNow())]
+                )
+        );
+        Assert.True(pushed.Allowed && pushed.Error is null, $"{pushed.Error}");
+
+        HttpResponseMessage changed = await _phone.GetAsync(pollPath);
+        string timeline = WebUtility.HtmlDecode(await changed.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+        Assert.Contains("Seasonal allergies", timeline);
+        string nextPollPath = TimelinePollPath(timeline);
+        Assert.NotEqual(pollPath, nextPollPath);
+        Assert.Equal(HttpStatusCode.NoContent, (await _phone.GetAsync(nextPollPath)).StatusCode);
+    }
+
     [Fact]
     public async Task Share_request_approve_then_access_and_activity_show_it()
     {
@@ -170,19 +218,27 @@ public class PatientPagesTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Kidney_check_can_be_turned_back_on_after_revoke()
+    public async Task Apps_section_turns_kidney_check_off_and_back_on()
     {
+        string on = await ReadAsync("/Patient/Grants");
         string kidneyGrantId = Regex
-            .Match(await ReadAsync("/Patient/Grants"), "name=\"grantId\" value=\"([0-9a-f-]+)\"")
+            .Match(on, "name=\"grantId\" value=\"([0-9a-f-]+)\"")
             .Groups[1]
             .Value;
-        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, await ReadAsync("/Patient/Grants"));
+        Assert.Contains(Copy.TurnOffKidneyCheck, on);
+        Assert.Contains(">On<", on);
+        Assert.Contains("No clinicians.", on);
+        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, on);
+
         await PostFormAsync(
             "/Patient/Grants",
             "/Patient/Grants?handler=Revoke",
             new() { ["grantId"] = kidneyGrantId }
         );
-        Assert.Contains(Copy.TurnOnKidneyCheck, await ReadAsync("/Patient/Grants"));
+        string off = await ReadAsync("/Patient/Grants");
+        Assert.Contains(Copy.TurnOnKidneyCheck, off);
+        Assert.Contains(Copy.KidneyOptIn, off);
+        Assert.Contains(">Off<", off);
 
         HttpResponseMessage turnedOn = await PostFormAsync(
             "/Patient/Grants",
@@ -193,6 +249,7 @@ public class PatientPagesTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
         string access = await ReadAsync("/Patient/Grants");
         Assert.Contains("Kidney Check · lab results only · you allowed this", access);
+        Assert.Contains(Copy.TurnOffKidneyCheck, access);
         Assert.DoesNotContain(Copy.TurnOnKidneyCheck, access);
     }
 

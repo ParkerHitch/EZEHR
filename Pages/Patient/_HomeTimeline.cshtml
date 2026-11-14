@@ -1,0 +1,6 @@
+@model EZEHR.Models.PatientHome
+
+<div hx-get="@Url.Page("/Patient/Home", "Timeline", new { version = Model.RecordVersion })"
+     hx-trigger="every 2s" hx-swap="outerHTML">
+    <partial name="_Timeline" model="Model.Timeline"/>
+</div>

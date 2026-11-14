@@ -109,7 +109,7 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
    - A data broker's system asks the network for Sam's record, claiming the purpose is "treatment."
    - First it has no certificate; then it has one that EZCA didn't issue. Both requests are refused.
    - Sam's activity shows: "Blocked: unverified requester claimed treatment."
-5. **Visibility and expiry.** Sam's phone showed each read live. When the grant expires, or Sam revokes it, Dr. Rivera's next page load shows "access ended."
+5. **Visibility and expiry.** Sam's phone showed each read live. When the grant expires, or Sam revokes it, Dr. Rivera's open record locks itself within a couple of seconds and shows "access ended."
 
 **Stretch goals, in priority order:**
 1. Conditional Access requiring phishing-resistant sign-in for the clinician app (needs the P2 trial; about 30 minutes).

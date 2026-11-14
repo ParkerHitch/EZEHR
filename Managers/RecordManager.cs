@@ -178,12 +178,52 @@ public sealed class RecordManager(
             "SELECT display_name FROM patients WHERE id = @patientId",
             new { patientId }
         );
+        // Read before the entries, so a record stored in between shows up on the next poll.
+        string recordVersion = await ReadRecordVersionAsync(connection, patientId);
         VerifiedEntries record = await ReadVerifiedEntriesAsync(patientId, null);
         Timeline timeline = TimelineBuilder.Build(record.Entries) with
         {
             UnverifiedCount = record.UnverifiedCount,
         };
-        return new PatientHome(name, timeline);
+        return new PatientHome(name, timeline, recordVersion);
+    }
+
+    /// <summary>
+    /// The home timeline again, or null if no entry was added, corrected or removed since
+    /// <paramref name="knownVersion"/>. The check reads no ciphertext, so the home page can poll it every 2 s
+    /// without a key unwrap each time.
+    /// </summary>
+    public async Task<PatientHome?> ReadPatientHomeIfChangedAsync(
+        Guid patientId,
+        string? knownVersion
+    )
+    {
+        await using (SqlConnection connection = await db.OpenAsync())
+        {
+            if (await ReadRecordVersionAsync(connection, patientId) == knownVersion)
+            {
+                return null;
+            }
+        }
+        return await ReadPatientHomeAsync(patientId);
+    }
+
+    /// <summary>
+    /// A fingerprint of the patient's stored entries. A correction re-encrypts with a fresh IV, so it changes too.
+    /// </summary>
+    private static async Task<string> ReadRecordVersionAsync(
+        SqlConnection connection,
+        Guid patientId
+    )
+    {
+        return await connection.QuerySingleAsync<string>(
+            """
+            SELECT CONCAT(COUNT(*), ':', CHECKSUM_AGG(BINARY_CHECKSUM(id, CAST(iv AS VARBINARY(64)))))
+            FROM entries
+            WHERE patient_id = @patientId
+            """,
+            new { patientId }
+        );
     }
 
     /// <summary>

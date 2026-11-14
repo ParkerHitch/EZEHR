@@ -7,7 +7,7 @@ namespace EZEHR.Pages.Patient;
 
 /// <summary>
 /// Who can see the record now, with a Revoke button for each, and who could before. Below that, the clinics that
-/// can add records (provider links), with a Disconnect button for each. Kidney Check can be turned on here too.
+/// can add records (provider links), with a Disconnect button for each. Apps: Kidney Check, on or off.
 /// </summary>
 public sealed class GrantsModel(
     CallerManager callerManager,
@@ -19,7 +19,7 @@ public sealed class GrantsModel(
 
     public IReadOnlyList<ConnectedProviderLine> ConnectedProviders { get; private set; } = [];
 
-    public bool KidneyCheckOn { get; private set; }
+    public AccessLine? KidneyCheck { get; private set; }
 
     public async Task<IActionResult> OnGetAsync()
     {
@@ -28,7 +28,7 @@ public sealed class GrantsModel(
         );
         Lines = overview.Lines;
         ConnectedProviders = overview.ConnectedProviders;
-        KidneyCheckOn = overview.KidneyCheckOn;
+        KidneyCheck = overview.KidneyCheck;
         return Page();
     }
 
