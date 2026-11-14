@@ -337,15 +337,21 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - It writes `.pki/{slug}.pfx`, `.pki/anchors.pem` and `.pki/intermediates.pem`.
     - With `local`, it first creates `.pki/local-root.pfx`.
   - `certs broker` writes `.pki/broker.pfx`, a self-signed certificate (CN `exchange.broker.example`), on purpose.
+  - As built:
+    - The adapter passes the bare CN as the subject, one DNS SAN, and the clientAuth EKU. The SDK throws `HttpRequestException` carrying EZCA's response body; the adapter rethrows it as `CertificateAuthorityException` naming the subject.
+    - `certs issue --ca ezca` signs in with `DefaultAzureCredential` and uses the only CA EZCA offers, or the one picked with `--ca-id` / `--template-id`. With neither, it lists the choices. `--key rsa` switches to RSA 2048 if the probe says EC isn't accepted.
+    - `--ca local` reuses `.pki/local-root.pfx` if it exists, so re-issuing keeps the server's trust anchor.
+    - The `.pfx` files are password-less PKCS#12 (AES-256), holding the key, the leaf and its chain. Self-signed chain members go to `anchors.pem`, the rest to `intermediates.pem`; for `local` the latter is empty.
+  - **Local trust (`CertificateAuthority:Mode=Local`):** `appsettings.Development.json` points `App:TrustAnchorsPemPath` and `App:IntermediatesPemPath` at `.pki/`, so a local `dotnet run` (from the repo root) trusts what `certs issue` just wrote. Nothing local is committed to `Security/Trust/`. To run the *deployed* site on the Local fallback, copy `.pki/anchors.pem` and `.pki/intermediates.pem` to `Security/Trust/` and commit them. Switching to EZCA later is `certs issue --ca ezca` plus replacing those two files; no code changes.
 
-- [ ] **Write failing tests** against a fake `IEZCAClient`:
+- [x] **Write failing tests** against a fake `IEZCAClient`:
   - `Ezca_passes_subject_validity_and_csr`.
   - `Ezca_maps_chain`: returns a leaf plus 2 chain certificates.
   - `Ezca_error_throws_with_message`.
-- [ ] Run (FAIL), implement, run (PASS).
-- [ ] Run `certs issue --ca ezca`, then check each organization certificate with `openssl verify`. Expected: `OK`.
+- [x] Run (FAIL), implement, run (PASS).
+- [ ] Run `certs issue --ca ezca`, then check each organization certificate with `openssl verify`. Expected: `OK`. (Blocked on the EZCA admin consent; `certs issue --ca local` verifies `OK` with `openssl verify -CAfile .pki/anchors.pem`.)
 - [ ] Copy `anchors.pem` and `intermediates.pem` to `Security/Trust/`. They're public, so commit them.
-- [ ] Commit `feat: EZCA certificate authority and org certificate tool`.
+- [x] Commit `feat: EZCA certificate authority and org certificate tool`.
 
 ### Task 4: Encryption at rest and the record store (App lead, 7:30–9:00 PM)
 
