@@ -45,8 +45,8 @@ public static class ToolOrganizations
             return [];
         }
         return JsonSerializer.Deserialize<List<Organization>>(
-                File.ReadAllText(FilePath),
-                NetworkClient.Json
-            ) ?? [];
+            File.ReadAllText(FilePath),
+            NetworkClient.Json
+        ) ?? [];
     }
 }

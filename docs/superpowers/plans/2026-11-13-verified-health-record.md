@@ -681,6 +681,7 @@ The download is named `sam-taylor-record.json`.
   2. After Sam enrolls on the phone and links the others: `demo seed` pushes Maple, Northwind and Lakeside, then runs Kidney Check. It finds Sam through the Lakeside link, so no ids are copied by hand.
   3. Live: `demo broker` (no certificate, then a self-made one) and `demo riverside` (after the visit scene). `demo status` shows Sam's id, entry count, grants and the latest activity.
   4. **Revised 2026-11-14:** `demo seed|riverside|broker` are gone, and `demo reset` no longer prints invites. On camera the demo's network calls come from `stage` instead, one key press per call, each showing the organization, its certificate and the request (`docs/components/13-tools-and-demo.md`), so viewers see what each system does rather than a wrapper. `demo reset` and `demo status` stay backstage.
+  5. **Revised again 2026-11-14:** `stage` follows `script.md`: Northwind joins first (EZCA issues its certificate, then the platform's `register-provider`; `demo reset` takes Northwind's row out so this is a real signup), Sam enrolls with Northwind's invite, Riverside's invite comes at check-in, and the broker runs after the revoke.
 
   Rehearse it twice. It must take under 5 minutes.
 - [ ] **Video plan (about 5:00):**

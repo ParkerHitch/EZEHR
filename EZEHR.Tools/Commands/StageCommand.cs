@@ -7,19 +7,29 @@ namespace EZEHR.Tools.Commands;
 
 /// <summary>
 /// The demo's network calls, in order, one per key press. Each step names the system making the call and the
-/// certificate it presents, then shows every request and response. Everything on screen is a real call to
-/// /api/network; the only thing done behind the scenes is finding Sam's EZEHR patient id in the database.
+/// certificate it presents, then shows every request and response. Everything on screen is a real call, to EZCA
+/// or to /api/network; the only thing done behind the scenes is finding Sam's EZEHR patient id in the database.
 /// </summary>
 public static class StageCommand
 {
     public const string Usage = """
-          stage [--from <step>]   the demo's network calls in order, one per key press
+          stage [--from <step>] [--ca ezca|local] [--ca-id <id>] [--template-id <id>]
+                                  the demo's network calls in order, one per key press
           stage --list            the steps, numbered
         """;
 
+    /// <summary>The provider that joins the network on camera. `demo reset` takes it off first.</summary>
+    public const string JoiningProviderSlug = "northwind";
+
     private const int BannerWidth = 76;
 
-    private sealed record Actor(string Name, string Role, string Certificate, ConsoleColor Color);
+    /// <summary>Certificate is read when the banner prints, since step 1 issues one.</summary>
+    private sealed record Actor(
+        string Name,
+        string Role,
+        Func<string> Certificate,
+        ConsoleColor Color
+    );
 
     private sealed record Step(Actor Actor, string Action, Func<Task<bool>> RunAsync);
 
@@ -36,16 +46,17 @@ public static class StageCommand
             );
             return 1;
         }
-        List<Step> steps;
-        try
+        string authority = CommandLine.Option(args, "--ca") ?? "ezca";
+        if (authority is not ("ezca" or "local"))
         {
-            steps = BuildSteps();
-        }
-        catch (FileNotFoundException exception)
-        {
-            Console.Error.WriteLine(exception.Message);
+            Console.Error.WriteLine("--ca must be ezca or local");
             return 1;
         }
+        List<Step> steps = BuildSteps(
+            authority,
+            CommandLine.Option(args, "--ca-id"),
+            CommandLine.Option(args, "--template-id")
+        );
 
         if (args.Contains("--list"))
         {
@@ -103,29 +114,41 @@ public static class StageCommand
         return 0;
     }
 
-    private static List<Step> BuildSteps()
+    private static List<Step> BuildSteps(string authority, string? caId, string? templateId)
     {
-        Actor lakeside = Provider("lakeside", ConsoleColor.Cyan);
         Actor northwind = Provider("northwind", ConsoleColor.Blue);
+        Actor lakeside = Provider("lakeside", ConsoleColor.Cyan);
         Actor maple = Provider("maple", ConsoleColor.DarkYellow);
         Actor riverside = Provider("riverside", ConsoleColor.Magenta);
+        Actor northwindJoining = northwind with
+        {
+            Role = "its IT team, joining the network",
+            Certificate = () => "none yet: it asks EZCA for one",
+        };
+        Actor platform = new(
+            "EZEHR",
+            "the network's operator",
+            () => DescribeCertificate("platform.pfx"),
+            ConsoleColor.Green
+        );
         Actor kidneyCheck = new(
             KidneyCheckCommand.AppName,
             "an app Sam allowed to read lab results",
-            DescribeCertificate("kidney-check.pfx"),
+            () => DescribeCertificate("kidney-check.pfx"),
             ConsoleColor.Yellow
         );
         Actor brokerWithoutCertificate = new(
             "Data broker",
             "a system nobody verified",
-            "none",
+            () => "none",
             ConsoleColor.Red
         );
         Actor brokerWithOwnCertificate = brokerWithoutCertificate with
         {
-            Certificate =
+            Certificate = () =>
                 $"{CertsCommand.BrokerCommonName}, self-signed: it made the certificate itself, EZCA didn't issue it",
         };
+        string northwindName = northwind.Name;
 
         Guid? samId = null;
         KidneyResult? kidneyResult = null;
@@ -158,16 +181,57 @@ public static class StageCommand
             });
         }
 
+        Step Broker(Actor actor, string action, bool withSelfSignedCertificate)
+        {
+            return new Step(actor, action, async () =>
+            {
+                if (await FindSamAsync() is not Guid patientId)
+                {
+                    return false;
+                }
+                await BrokerCommand.RequestAsync(patientId, withSelfSignedCertificate);
+                return true;
+            });
+        }
+
         const string pushSamsRecords = "pushes Sam's records, each one signed with its own key";
         return
         [
-            Invite(lakeside, "lakeside", "LUC-20417"),
+            // Northwind joins the network.
+            new Step(
+                northwindJoining,
+                authority == "ezca"
+                    ? "gets its certificate from EZCA (portal.ezca.io)"
+                    : "gets its certificate from the local test CA (stands in for EZCA)",
+                async () =>
+                {
+                    return await CertsCommand.IssueProviderCertificateAsync(
+                            authority,
+                            JoiningProviderSlug,
+                            "ec",
+                            caId,
+                            templateId
+                        ) == 0;
+                }
+            ),
+            new Step(
+                platform,
+                $"adds {northwindName} to the network: its name and its certificate's CN",
+                async () =>
+                {
+                    return await CertsCommand.RegisterProviderAsync(
+                            JoiningProviderSlug,
+                            northwindName
+                        ) == 0;
+                }
+            ),
+            // Sam's providers invite Sam. Sam enrolls with Northwind's, then adds the others.
             Invite(northwind, "northwind", "NWH-88213"),
+            Invite(lakeside, "lakeside", "LUC-20417"),
             Invite(maple, "maple", "MSF-0932"),
-            Invite(riverside, "riverside", "RPC-1107"),
-            Push(maple, "maple", "MSF-0932", pushSamsRecords),
             Push(northwind, "northwind", "NWH-88213", pushSamsRecords),
             Push(lakeside, "lakeside", "LUC-20417", pushSamsRecords),
+            Push(maple, "maple", "MSF-0932", pushSamsRecords),
             new Step(
                 kidneyCheck,
                 "reads Sam's kidney labs and checks who signed each one",
@@ -194,7 +258,7 @@ public static class StageCommand
                     if (kidneyResult is null)
                     {
                         Console.Error.WriteLine(
-                            "  Kidney Check hasn't read the labs in this run: skip this, or quit and start with --from 8."
+                            "  Kidney Check hasn't read the labs in this run: skip this, or quit and start again from its read step (stage --list)."
                         );
                         return false;
                     }
@@ -207,37 +271,25 @@ public static class StageCommand
                         ) == 0;
                 }
             ),
+            // Sam checks in at Riverside, which needs its own link to write the visit later.
+            Invite(riverside, "riverside", "RPC-1107"),
+            // The visit: sign-in, share code, approval and reads happen on the phone and the clinician page.
             Push(
                 riverside,
                 "riverside",
                 "RPC-1107",
                 "pushes today's visit: Dr. Rivera's plan and a nephrology referral"
             ),
-            new Step(
+            // Sam revokes Dr. Rivera's access; then the broker.
+            Broker(
                 brokerWithoutCertificate,
                 $"asks for Sam's whole record, claiming \"{BrokerCommand.ClaimedPurpose}\"",
-                async () =>
-                {
-                    if (await FindSamAsync() is not Guid patientId)
-                    {
-                        return false;
-                    }
-                    await BrokerCommand.RequestAsync(patientId, withSelfSignedCertificate: false);
-                    return true;
-                }
+                withSelfSignedCertificate: false
             ),
-            new Step(
+            Broker(
                 brokerWithOwnCertificate,
                 "asks again, this time with a certificate",
-                async () =>
-                {
-                    if (await FindSamAsync() is not Guid patientId)
-                    {
-                        return false;
-                    }
-                    await BrokerCommand.RequestAsync(patientId, withSelfSignedCertificate: true);
-                    return true;
-                }
+                withSelfSignedCertificate: true
             ),
             new Step(
                 riverside,
@@ -254,13 +306,18 @@ public static class StageCommand
     private static Actor Provider(string slug, ConsoleColor color)
     {
         string name = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri(slug))!.DisplayName;
-        return new Actor(name, "its EHR system", DescribeCertificate($"{slug}.pfx"), color);
+        return new Actor(name, "its EHR system", () => DescribeCertificate($"{slug}.pfx"), color);
     }
 
     /// <summary>"lakeside.providers.ezehr, issued by EZEHR Issuing CA", read from the certificate itself.</summary>
     private static string DescribeCertificate(string pfxFileName)
     {
-        X509Certificate2 certificate = PfxFile.Load(ToolPaths.Pki(pfxFileName)).Certificate;
+        string path = ToolPaths.Pki(pfxFileName);
+        if (!File.Exists(path))
+        {
+            return $"none: {path} is missing";
+        }
+        X509Certificate2 certificate = PfxFile.Load(path).Certificate;
         string subject = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
         string issuer = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: true);
         return $"{subject}, issued by {issuer}";
@@ -288,7 +345,7 @@ public static class StageCommand
             step.Actor.Color,
             $"  {step.Actor.Name.ToUpperInvariant()} · {step.Actor.Role}"
         );
-        Console.WriteLine($"  certificate: {step.Actor.Certificate}");
+        Console.WriteLine($"  certificate: {step.Actor.Certificate()}");
         Console.WriteLine($"  {step.Actor.Name} {step.Action}");
         Console.WriteLine();
     }

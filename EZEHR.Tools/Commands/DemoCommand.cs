@@ -1,6 +1,7 @@
 using Dapper;
 using EZEHR.Data;
 using EZEHR.Models;
+using EZEHR.Services;
 using EZEHR.Tools.Net;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
@@ -16,7 +17,7 @@ namespace EZEHR.Tools.Commands;
 public static class DemoCommand
 {
     public const string Usage = """
-          demo reset [--yes]   empty the database (organizations stay), before `stage`
+          demo reset [--yes]   empty the database and take Northwind off the network, before `stage`
           demo status          Sam's patient id, what the record holds, and the latest activity
         """;
 
@@ -46,7 +47,7 @@ public static class DemoCommand
         if (!confirmed)
         {
             Console.Write(
-                "This deletes every patient, record, grant and audit event there. Type reset: "
+                "This deletes every patient, record, grant and audit event there, and Northwind's organization. Type reset: "
             );
             if (Console.ReadLine()?.Trim() != "reset")
             {
@@ -55,7 +56,16 @@ public static class DemoCommand
             }
         }
         await db.DeleteAllDataAsync();
-        Console.WriteLine("Database emptied. Next: ezehr-tools stage");
+        // Stage opens with Northwind joining the network, so it has to start off it. Only Northwind's row goes:
+        // the other organizations, and any sysadmin edits to them (Riverside's tenant), stay.
+        await using SqlConnection connection = await db.OpenAsync();
+        await connection.ExecuteAsync(
+            "DELETE FROM organizations WHERE uri = @northwindUri",
+            new { northwindUri = OrgDirectory.ProviderUri(StageCommand.JoiningProviderSlug) }
+        );
+        Console.WriteLine(
+            "Database emptied, and Northwind is off the network until stage onboards it. Next: ezehr-tools stage"
+        );
         return 0;
     }
 
@@ -104,6 +114,7 @@ public static class DemoCommand
     }
 
     /// <summary>Sam is whoever enrolled with Lakeside's invite for LUC-20417.</summary>
+    /// <summary>Sam is whoever redeemed one of the demo providers' invites for Sam's patient ids.</summary>
     public static async Task<Guid?> FindSamAsync()
     {
         Db? db = OpenDatabase();
@@ -112,16 +123,19 @@ public static class DemoCommand
             return null;
         }
         await using SqlConnection connection = await db.OpenAsync();
-        Guid? samId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+        Guid? samId = await connection.QueryFirstOrDefaultAsync<Guid?>(
             """
-            SELECT patient_id FROM provider_links
-            WHERE provider_uri = 'urn:provider:lakeside' AND provider_patient_id = 'LUC-20417'
+            SELECT TOP 1 patient_id FROM provider_links
+            WHERE (provider_uri = 'urn:provider:northwind' AND provider_patient_id = 'NWH-88213')
+               OR (provider_uri = 'urn:provider:lakeside' AND provider_patient_id = 'LUC-20417')
+               OR (provider_uri = 'urn:provider:maple' AND provider_patient_id = 'MSF-0932')
+               OR (provider_uri = 'urn:provider:riverside' AND provider_patient_id = 'RPC-1107')
             """
         );
         if (samId is null)
         {
             Console.Error.WriteLine(
-                "  Sam isn't enrolled yet: enroll on the phone with Lakeside's invite (stage step 1)."
+                "  Sam isn't enrolled yet: enroll on the phone with one of the invite links."
             );
         }
         return samId;

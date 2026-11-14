@@ -116,7 +116,9 @@ public static class ProviderCommand
         PfxFile signingCertificate = PfxFile.Load(ToolPaths.Pki($"{slug}.pfx"));
         if (!File.Exists(SeedFile.PathFor(slug)))
         {
-            Console.Error.WriteLine($"{slug} has no seed records to push; only the demo providers do.");
+            Console.Error.WriteLine(
+                $"{slug} has no seed records to push; only the demo providers do."
+            );
             return 1;
         }
         SeedFile seed = SeedFile.Load(slug);

@@ -33,7 +33,7 @@
 
 ## Review Focus
 
-1. **Sysadmin edits must survive.** A restart (re-running `EnsureSchemaAsync`) must not overwrite Riverside's tenant id or display name, nor duplicate a seeded row, and `demo reset` must not empty `organizations`. → Task 1 `EnsureSchema_seeds_demo_organizations_once_and_keeps_edits`.
+1. **Sysadmin edits must survive.** A restart (re-running `EnsureSchemaAsync`) must not overwrite Riverside's tenant id or display name, nor duplicate a seeded row, and `demo reset` must not empty `organizations`. (Revised 2026-11-14: `demo reset` deletes Northwind's row only, so `stage` can onboard Northwind through `register-provider` on camera; every other row, and Riverside's tenant, stays.) → Task 1 `EnsureSchema_seeds_demo_organizations_once_and_keeps_edits`.
 2. **The deployed database already has `audit_events` and `grants`.** `EnsureSchemaAsync` must add the new columns and index to those existing tables and stay safe to run on every start. → Tasks 2–3 `EnsureSchema_adds_org_columns_to_existing_tables`.
 3. **Cross-organization leakage.** Lakeside filtering by a patient that Riverside's clinician read must get none of Riverside's events, and vice versa. → Task 4 `Provider_sees_only_its_own_clinicians_and_systems`.
 4. **A patient with two patient ids at the same provider** must appear once per event, not once per link. → Task 4 `Patient_with_two_ids_at_one_provider_appears_once`.
