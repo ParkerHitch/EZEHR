@@ -30,7 +30,8 @@ builder.Services.AddFido2(fido2 =>
     fido2.ServerName = "EZEHR";
     fido2.Origins = new HashSet<string> { origin.GetLeftPart(UriPartial.Authority) };
 });
-builder.Services.AddSingleton<IFido2Service, Fido2Service>();
+// Scoped, because AddFido2 registers IFido2 as scoped.
+builder.Services.AddScoped<IFido2Service, Fido2Service>();
 
 // Holds a passkey ceremony's challenge between its two requests.
 builder.Services.AddDistributedMemoryCache();
