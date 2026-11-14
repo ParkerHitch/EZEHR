@@ -14,6 +14,39 @@ public static class Copy
 
     public const string UntrustedOrg = "This organization isn't connected to EZEHR yet.";
 
+    public const string ClinicianSignInUnavailable =
+        "Clinician sign-in isn't set up on this site yet.";
+
+    public const string ShareCodeUsed =
+        "That code has already been used. Ask the patient to share again.";
+
+    public const string ShareCodeExpired = "That code has expired. Ask the patient to share again.";
+
+    public const string ShareCodeUnknown = "We don't recognize that code. Check it and try again.";
+
+    public const string WaitingForApproval = "Waiting for the patient to approve on their phone…";
+
+    public static string ClinicianSignedIn(string name, string org, string time)
+    {
+        return $"{name} · {org} · signed in until {time}";
+    }
+
+    public static string ClinicianRecordHeader(string patient, string time)
+    {
+        return $"{patient} · access until {time}";
+    }
+
+    /// <summary>What the clinician sees when a share code can't be redeemed.</summary>
+    public static string ShareCodeFailed(GrantError error)
+    {
+        return error switch
+        {
+            GrantError.OfferUsed => ShareCodeUsed,
+            GrantError.OfferExpired => ShareCodeExpired,
+            _ => ShareCodeUnknown,
+        };
+    }
+
     public const string Pitch =
         "Epic says it blocks data to protect patients. We make blocking unnecessary.";
 

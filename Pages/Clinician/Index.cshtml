@@ -1,0 +1,33 @@
+@page
+@model EZEHR.Pages.Clinician.IndexModel
+@using EZEHR.Models
+@{
+  ViewData["Title"] = "Clinician sign-in";
+}
+
+<div class="clinician-page">
+  <h1 class="h3">Clinicians</h1>
+  @if (Model.SignedInBanner is not null)
+  {
+    <p class="lead">@Model.SignedInBanner</p>
+    <form method="post" asp-page-handler="SignOut">
+      <button type="submit" class="btn btn-outline-secondary">Sign out</button>
+    </form>
+  }
+  else if (Model.ErrorCopy is not null)
+  {
+    <div class="alert alert-warning" role="alert">@Model.ErrorCopy</div>
+    <form method="post" asp-page-handler="SignOut">
+      <button type="submit" class="btn btn-outline-secondary">Sign out</button>
+    </form>
+  }
+  else if (Model.SignInAvailable)
+  {
+    <p>Sign in with your organization's account and your security key.</p>
+    <a class="btn btn-primary" asp-page-handler="SignIn">Sign in with your organization</a>
+  }
+  else
+  {
+    <p>@Copy.ClinicianSignInUnavailable</p>
+  }
+</div>

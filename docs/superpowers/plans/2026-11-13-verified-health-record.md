@@ -493,20 +493,25 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 
 **Interfaces:**
 - Produces:
-  - `AddMicrosoftIdentityWebApp(Configuration.GetSection("AzureAd"), openIdConnectScheme: "ClinicianOidc", cookieScheme: "Clinician")`. Sign-in only, ID token, no secret; if the library insists on a secret, set `ResponseType = "id_token"`.
-  - On `OnTokenValidated`, add the claim `session_started_at`. The cookie is set to `ExpireTimeSpan = 10h`, `SlidingExpiration = false`, and the OIDC `UseTokenLifetime = false`.
-  - `ClinicianCheck CallerManager.EvaluateClinician(ClaimsPrincipal user)` (trusted tenants come from `AppOptions`), returning `(bool Ok, Party? Party, DateTimeOffset? SessionStartedAt, string? ErrorCopy)`:
+  - `Program.cs` always registers the `"Clinician"` cookie itself (`ExpireTimeSpan = 10h`, `SlidingExpiration = false`, login path `/Clinician/Index`), so a passkey fallback (Task 8b) can issue the same cookie.
+  - **Only when `AzureAd:ClientId` is set**, it adds `AddMicrosoftIdentityWebApp(Configuration.GetSection("AzureAd"), openIdConnectScheme: "ClinicianOidc", cookieScheme: null)`, and a `PostConfigure<OpenIdConnectOptions>` sets `SignInScheme = "Clinician"`, `ResponseType = "id_token"` (sign-in only, no secret, so the app registration must allow ID tokens), and `UseTokenLifetime = false`. Without `AzureAd` config the site starts and `/Clinician` says sign-in isn't set up.
+  - On `OnTokenValidated`, add the claim `session_started_at` (Unix seconds, from `CallerManager.SessionStartedClaim()`).
+  - Config to fill in once the tenant exists: `AzureAd:TenantId`, `AzureAd:ClientId` (`appsettings.json` has the section, empty), and `App:TrustedTenants:{tid}` = `Riverside Primary Care`. Redirect URI: `{Origin}/signin-oidc`.
+  - `ClinicianCheck CallerManager.EvaluateClinician(ClaimsPrincipal user)` (trusted tenants come from `AppOptions`), returning `(bool Ok, Party? Party, DateTimeOffset? SessionStartedAt, string? ErrorCopy)` (`Models/ClinicianCheck.cs`). `tid`, `oid` and roles are read in both their short and their mapped long claim forms:
     - `tid` (`http://schemas.microsoft.com/identity/claims/tenantid`) not trusted → `Copy.UntrustedOrg`
     - no `Clinician` role (claim type `roles`) → `Copy.NotAClinician`
     - otherwise a `Party` with `OrgDirectory.ClinicianUri(tid, oid)` (`urn:entra:{tid}:{oid}`), display name from `name`, and the organization from `trustedTenants`
   - Policy `"Clinician"` uses scheme `"Clinician"`. `AuthorizeFolder("/Clinician", "Clinician")`, except `Index` and `AccessEnded`.
-  - `Caller CallerManager.FromClinician(ClaimsPrincipal)` builds the `VerifiedCaller` for the gate.
+  - `Caller CallerManager.FromClinician(ClaimsPrincipal)` builds the `VerifiedCaller` for the gate; an account that fails the check is `UnverifiedCaller(NotSignedIn)`.
+  - `Pages/Clinician/Index` reads the cookie itself (it's anonymous) and shows the banner, the check's `ErrorCopy`, a sign-in link (`?handler=SignIn`, a challenge to `ClinicianOidc`), or `Copy.ClinicianSignInUnavailable`.
 
-- [ ] **Write failing tests** on `Evaluate`, with hand-built `ClaimsPrincipal`s:
+- [x] **Write failing tests** on `Evaluate`, with hand-built `ClaimsPrincipal`s:
   - `Valid_clinician`.
   - **(Review Focus 5)** `Missing_role_returns_NotAClinician` and `Untrusted_tenant_returns_UntrustedOrg`.
   - `Session_started_at_parsed`.
-- [ ] Run (FAIL), implement, run (PASS). Deploy, then sign in as Dr. Rivera **with the security key**. Expected: the page shows "Dr. Rivera · Riverside Primary Care · signed in until {time}".
+  - Also `ClinicianSignInFlowTests` (through HTTP, with `TestClinicianAuthHandler` standing in for the cookie): the banner, `NotAClinician` on the page, and the Entra wiring when `AzureAd` is configured.
+- [x] Run (FAIL), implement, run (PASS).
+- [ ] Deploy, then sign in as Dr. Rivera **with the security key**. Expected: the page shows "Dr. Rivera · Riverside Primary Care · signed in until {time}".
 - [ ] Commit `feat: clinician Entra sign-in with 10-hour shift`.
 - [ ] **11 PM CHECKPOINT:**
   - If deployed sign-in doesn't work, do Task 8b now.

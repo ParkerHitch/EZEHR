@@ -3,8 +3,11 @@ using EZEHR.Data;
 using EZEHR.Managers;
 using EZEHR.Models;
 using EZEHR.Services;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
+using Microsoft.Identity.Web;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 AppOptions appOptions = builder.Configuration.GetSection(AppOptions.Section).Get<AppOptions>()
@@ -30,6 +33,7 @@ builder.Services.AddFido2(fido2 =>
     fido2.ServerName = "EZEHR";
     fido2.Origins = new HashSet<string> { origin.GetLeftPart(UriPartial.Authority) };
 });
+
 // Scoped, because AddFido2 registers IFido2 as scoped.
 builder.Services.AddScoped<IFido2Service, Fido2Service>();
 
@@ -45,7 +49,7 @@ builder.Services.AddSession(session =>
     session.Cookie.IsEssential = true;
 });
 
-builder
+AuthenticationBuilder authentication = builder
     .Services.AddAuthentication()
     .AddCookie(CallerManager.PatientScheme, cookie =>
     {
@@ -57,14 +61,57 @@ builder
         cookie.SlidingExpiration = false;
         cookie.LoginPath = "/Patient/SignIn";
         cookie.AccessDeniedPath = "/Patient/SignIn";
+    })
+    // The clinician's shift: 10 hours from sign-in, never sliding. AccessManager enforces the same limit.
+    // Whatever signs a clinician in (Entra below, or a passkey fallback) ends by issuing this cookie.
+    .AddCookie(CallerManager.ClinicianScheme, cookie =>
+    {
+        cookie.Cookie.Name = "ezehr.clinician";
+        cookie.Cookie.HttpOnly = true;
+        cookie.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        cookie.Cookie.SameSite = SameSiteMode.Lax;
+        cookie.ExpireTimeSpan = AccessManager.ClinicianShift;
+        cookie.SlidingExpiration = false;
+        cookie.LoginPath = "/Clinician/Index";
+        cookie.AccessDeniedPath = "/Clinician/Index";
     });
+
+// Entra ID sign-in for clinicians, only once the app registration is configured. Sign-in only: an ID token, no
+// client secret, no API tokens.
+if (!string.IsNullOrEmpty(builder.Configuration["AzureAd:ClientId"]))
+{
+    authentication.AddMicrosoftIdentityWebApp(
+        builder.Configuration.GetSection("AzureAd"),
+        CallerManager.ClinicianOidcScheme,
+        cookieScheme: null
+    );
+    builder.Services.PostConfigure<OpenIdConnectOptions>(CallerManager.ClinicianOidcScheme, oidc =>
+    {
+        oidc.SignInScheme = CallerManager.ClinicianScheme;
+        oidc.ResponseType = "id_token";
+        oidc.UseTokenLifetime = false;
+        Func<TokenValidatedContext, Task> previous = oidc.Events.OnTokenValidated;
+        oidc.Events.OnTokenValidated = async context =>
+        {
+            await previous(context);
+            CallerManager callerManager =
+                context.HttpContext.RequestServices.GetRequiredService<CallerManager>();
+            context.Principal?.Identities.First().AddClaim(callerManager.SessionStartedClaim());
+        };
+    });
+}
+
 builder.Services.AddAuthorization(authorization =>
+{
     authorization.AddPolicy(CallerManager.PatientScheme, policy =>
         policy
             .AddAuthenticationSchemes(CallerManager.PatientScheme)
             .RequireClaim(CallerManager.PatientIdClaim)
-    )
-);
+    );
+    authorization.AddPolicy(CallerManager.ClinicianScheme, policy =>
+        policy.AddAuthenticationSchemes(CallerManager.ClinicianScheme).RequireAuthenticatedUser()
+    );
+});
 
 if (appOptions.KeyWrapper.Mode == "KeyVault")
 {
@@ -111,6 +158,9 @@ builder.Services.AddRazorPages(pages =>
     pages.Conventions.AuthorizeFolder("/Patient", CallerManager.PatientScheme);
     pages.Conventions.AllowAnonymousToPage("/Patient/Enroll");
     pages.Conventions.AllowAnonymousToPage("/Patient/SignIn");
+    pages.Conventions.AuthorizeFolder("/Clinician", CallerManager.ClinicianScheme);
+    pages.Conventions.AllowAnonymousToPage("/Clinician/Index");
+    pages.Conventions.AllowAnonymousToPage("/Clinician/AccessEnded");
 });
 
 WebApplication app = builder.Build();
