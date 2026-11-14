@@ -9,37 +9,40 @@ namespace EZEHR.Services;
 /// </summary>
 public static class OrgDirectory
 {
-    public const string KidneyCheckCn = "kidney-check.apps.ezehr";
+    public const string KidneyCheckCommonName = "kidney-check.apps.ezehr";
 
-    public const string PlatformCn = "platform.ezehr";
-
-    public static readonly IReadOnlyDictionary<string, Party> Known = new Dictionary<string, Party>(
-        StringComparer.OrdinalIgnoreCase
-    )
+    public static readonly IReadOnlyDictionary<string, Party> KnownOrganizations = new Dictionary<
+        string,
+        Party
+    >(StringComparer.OrdinalIgnoreCase)
     {
-        [ProviderCn("lakeside")] = Provider("lakeside", "Lakeside Urgent Care"),
-        [ProviderCn("northwind")] = Provider("northwind", "Northwind Workplace Health"),
-        [ProviderCn("maple")] = Provider("maple", "Maple Street Family Medicine"),
-        [KidneyCheckCn] = Org(PartyKind.App, "urn:app:kidney-check", "Kidney Check"),
-        [PlatformCn] = Org(PartyKind.Platform, "urn:platform:ezehr", "EZEHR"),
+        [ProviderCommonName("lakeside")] = Provider("lakeside", "Lakeside Urgent Care"),
+        [ProviderCommonName("northwind")] = Provider("northwind", "Northwind Workplace Health"),
+        [ProviderCommonName("maple")] = Provider("maple", "Maple Street Family Medicine"),
+        [ProviderCommonName("riverside")] = Provider("riverside", "Riverside Primary Care"),
+        [KidneyCheckCommonName] = Organization(
+            PartyKind.App,
+            "urn:app:kidney-check",
+            "Kidney Check"
+        ),
     };
 
-    public static Party? Resolve(X509Certificate2 leaf)
+    public static Party? FindByCertificate(X509Certificate2 leaf)
     {
         string subjectName = leaf.GetNameInfo(X509NameType.SimpleName, false);
-        if (Known.TryGetValue(subjectName, out Party? party))
+        if (KnownOrganizations.TryGetValue(subjectName, out Party? party))
         {
             return party;
         }
         return null;
     }
 
-    public static Party? BySubjectUri(string uri)
+    public static Party? FindBySubjectUri(string uri)
     {
-        return Known.Values.FirstOrDefault(party => party.SubjectUri == uri);
+        return KnownOrganizations.Values.FirstOrDefault(party => party.SubjectUri == uri);
     }
 
-    public static string ProviderCn(string slug)
+    public static string ProviderCommonName(string slug)
     {
         return $"{slug}.providers.ezehr";
     }
@@ -56,10 +59,10 @@ public static class OrgDirectory
 
     private static Party Provider(string slug, string name)
     {
-        return Org(PartyKind.Provider, ProviderUri(slug), name);
+        return Organization(PartyKind.Provider, ProviderUri(slug), name);
     }
 
-    private static Party Org(PartyKind kind, string uri, string name)
+    private static Party Organization(PartyKind kind, string uri, string name)
     {
         return new Party(kind, uri, name, name);
     }

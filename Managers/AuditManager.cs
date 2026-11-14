@@ -10,7 +10,7 @@ namespace EZEHR.Managers;
 public sealed class AuditManager(Db db, TimeProvider time)
 {
     /// <summary>Longest claimed purpose kept. The broker chooses it, so it's cut to fit the column.</summary>
-    public const int MaxPurposeLength = 200;
+    public const int MaxClaimedPurposeLength = 200;
 
     public async Task<AuditEvent> AppendAsync(
         Guid patientId,
@@ -47,8 +47,8 @@ public sealed class AuditManager(Db db, TimeProvider time)
     )
     {
         DateTimeOffset at = time.GetUtcNow();
-        string? purpose = claimedPurpose is { Length: > MaxPurposeLength }
-            ? claimedPurpose[..MaxPurposeLength]
+        string? purpose = claimedPurpose is { Length: > MaxClaimedPurposeLength }
+            ? claimedPurpose[..MaxClaimedPurposeLength]
             : claimedPurpose;
         long id = await connection.ExecuteScalarAsync<long>(
             """
@@ -76,7 +76,10 @@ public sealed class AuditManager(Db db, TimeProvider time)
     }
 
     /// <summary>Events for one patient, oldest first, after the given id (for htmx polling).</summary>
-    public async Task<IReadOnlyList<AuditEvent>> ListAsync(Guid patientId, long afterId = 0)
+    public async Task<IReadOnlyList<AuditEvent>> ListForPatientAsync(
+        Guid patientId,
+        long afterId = 0
+    )
     {
         await using SqlConnection connection = await db.OpenAsync();
         IEnumerable<AuditRow> rows = await connection.QueryAsync<AuditRow>(

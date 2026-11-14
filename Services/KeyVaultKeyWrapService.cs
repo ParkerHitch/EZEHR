@@ -21,15 +21,15 @@ public sealed class KeyVaultKeyWrapService(IOptions<AppOptions> options) : IKeyW
         new DefaultAzureCredential()
     );
 
-    public async Task<byte[]> WrapAsync(byte[] dek)
+    public async Task<byte[]> WrapAsync(byte[] dataKey)
     {
-        WrapResult result = await _client.WrapKeyAsync(KeyWrapAlgorithm.RsaOaep256, dek);
+        WrapResult result = await _client.WrapKeyAsync(KeyWrapAlgorithm.RsaOaep256, dataKey);
         return result.EncryptedKey;
     }
 
-    public async Task<byte[]> UnwrapAsync(byte[] wrapped)
+    public async Task<byte[]> UnwrapAsync(byte[] wrappedKey)
     {
-        UnwrapResult result = await _client.UnwrapKeyAsync(KeyWrapAlgorithm.RsaOaep256, wrapped);
+        UnwrapResult result = await _client.UnwrapKeyAsync(KeyWrapAlgorithm.RsaOaep256, wrappedKey);
         return result.Key;
     }
 }

@@ -20,19 +20,19 @@ public class NetworkAccessTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _app = new EzehrFactory(await SqlServer.CreateDatabaseAsync());
-        _maple = _app.Pki.Issue(OrgDirectory.ProviderCn("maple"));
-        _kidney = _app.Pki.Issue(OrgDirectory.KidneyCheckCn);
+        _maple = _app.Pki.Issue(OrgDirectory.ProviderCommonName("maple"));
+        _kidney = _app.Pki.Issue(OrgDirectory.KidneyCheckCommonName);
         _sam = await _app.WithAsync(async services =>
         {
             RecordManager records = services.GetRequiredService<RecordManager>();
             Guid patientId = await records.CreatePatientAsync("Sam Taylor");
-            await records.PutAsync(
+            await records.StoreEntryAsync(
                 patientId,
                 "urn:provider:maple|Observation/egfr-1",
                 "Observation",
                 Sign(_maple, Lab("egfr-1", "98979-8", 96))
             );
-            await records.PutAsync(
+            await records.StoreEntryAsync(
                 patientId,
                 "urn:provider:maple|Observation/bp-1",
                 "Observation",
@@ -41,7 +41,7 @@ public class NetworkAccessTests : IAsyncLifetime
             JsonElement condition = JsonSerializer.SerializeToElement(
                 new { resourceType = "Condition", id = "htn" }
             );
-            await records.PutAsync(
+            await records.StoreEntryAsync(
                 patientId,
                 "urn:provider:maple|Condition/htn",
                 "Condition",
@@ -93,7 +93,7 @@ public class NetworkAccessTests : IAsyncLifetime
     private Task<IReadOnlyList<AuditEvent>> EventsAsync()
     {
         return _app.WithAsync(services =>
-            services.GetRequiredService<AuditManager>().ListAsync(_sam)
+            services.GetRequiredService<AuditManager>().ListForPatientAsync(_sam)
         );
     }
 
@@ -102,7 +102,10 @@ public class NetworkAccessTests : IAsyncLifetime
         return _app.WithAsync(services =>
             services
                 .GetRequiredService<GrantManager>()
-                .CreateAppGrantAsync(_sam, OrgDirectory.Known[OrgDirectory.KidneyCheckCn])
+                .CreateAppGrantAsync(
+                    _sam,
+                    OrgDirectory.KnownOrganizations[OrgDirectory.KidneyCheckCommonName]
+                )
         );
     }
 
@@ -110,20 +113,20 @@ public class NetworkAccessTests : IAsyncLifetime
     public async Task Broker_no_cert_on_record_endpoint_logs_blocked_event()
     {
         HttpResponseMessage response = await _app.Client()
-            .GetAsync($"/api/network/patients/{_sam}/record?purpose=treatment");
+            .GetAsync($"/api/network/patients/{_sam}/read-full-record?purpose=treatment");
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         AuditEvent logged = Assert.Single(await EventsAsync());
         Assert.Null(logged.Actor);
         Assert.Equal("treatment", logged.ClaimedPurpose);
         Assert.Equal(DenyReason.NoCertificate, logged.Reason);
-        Assert.Equal("ReadRecord", logged.Action);
+        Assert.Equal("ReadFullRecord", logged.Action);
 
         X509Certificate2 broker = TestPki.SelfSigned(
             "exchange.broker.example",
             _app.Pki.Clock.GetUtcNow()
         );
         response = await _app.Client(broker)
-            .GetAsync($"/api/network/patients/{_sam}/record?purpose=treatment");
+            .GetAsync($"/api/network/patients/{_sam}/read-full-record?purpose=treatment");
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         AuditEvent blocked = (await EventsAsync())[^1];
         Assert.Equal(DenyReason.UntrustedCertificate, blocked.Reason);
@@ -134,7 +137,7 @@ public class NetworkAccessTests : IAsyncLifetime
     public async Task App_without_grant_403_and_logged()
     {
         HttpResponseMessage response = await _app.Client(_kidney)
-            .GetAsync($"/api/network/patients/{_sam}/labs");
+            .GetAsync($"/api/network/patients/{_sam}/read-egfr-labs");
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("NoGrant", body.GetProperty("error").GetString());
@@ -148,7 +151,7 @@ public class NetworkAccessTests : IAsyncLifetime
     {
         await GrantKidneyCheckAsync();
         HttpResponseMessage response = await _app.Client(_kidney)
-            .GetAsync($"/api/network/patients/{_sam}/labs");
+            .GetAsync($"/api/network/patients/{_sam}/read-egfr-labs");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
         JsonElement entry = Assert.Single(body.GetProperty("entries").EnumerateArray());
@@ -161,7 +164,7 @@ public class NetworkAccessTests : IAsyncLifetime
         Assert.True(Assert.Single(await EventsAsync()).Granted);
 
         HttpResponseMessage record = await _app.Client(_kidney)
-            .GetAsync($"/api/network/patients/{_sam}/record");
+            .GetAsync($"/api/network/patients/{_sam}/read-full-record");
         Assert.Equal(HttpStatusCode.Forbidden, record.StatusCode);
         Assert.Equal(DenyReason.ScopeDenied, (await EventsAsync())[^1].Reason);
     }
@@ -171,7 +174,7 @@ public class NetworkAccessTests : IAsyncLifetime
     {
         await GrantKidneyCheckAsync();
         HttpClient client = _app.Client(_kidney);
-        string notesUrl = $"/api/network/patients/{_sam}/notes";
+        string notesUrl = $"/api/network/patients/{_sam}/write-signed-note";
 
         HttpResponseMessage first = await client.PostAsJsonAsync(
             notesUrl,
@@ -179,14 +182,14 @@ public class NetworkAccessTests : IAsyncLifetime
         );
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         JsonElement firstBody = await first.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.True(firstBody.GetProperty("inserted").GetBoolean());
+        Assert.True(firstBody.GetProperty("stored").GetBoolean());
 
         HttpResponseMessage second = await client.PostAsJsonAsync(
             notesUrl,
             new { jws = Sign(_kidney, Note("kidney-note-1")) }
         );
         JsonElement secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.False(secondBody.GetProperty("inserted").GetBoolean());
+        Assert.False(secondBody.GetProperty("stored").GetBoolean());
 
         HttpResponseMessage forged = await client.PostAsJsonAsync(
             notesUrl,
@@ -200,10 +203,10 @@ public class NetworkAccessTests : IAsyncLifetime
         );
         Assert.Equal(HttpStatusCode.BadRequest, notNote.StatusCode);
 
-        IReadOnlyList<StoredEntry> notes = await _app.WithAsync(services =>
+        IReadOnlyList<DecryptedEntry> notes = await _app.WithAsync(services =>
             services
                 .GetRequiredService<RecordManager>()
-                .ReadAsync(_sam, resourceType => resourceType == "Communication")
+                .DecryptEntriesAsync(_sam, resourceType => resourceType == "Communication")
         );
         Assert.Single(notes);
     }
@@ -212,7 +215,7 @@ public class NetworkAccessTests : IAsyncLifetime
     public async Task Provider_without_grant_cannot_read_record()
     {
         HttpResponseMessage response = await _app.Client(_maple)
-            .GetAsync($"/api/network/patients/{_sam}/record?purpose=treatment");
+            .GetAsync($"/api/network/patients/{_sam}/read-full-record?purpose=treatment");
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(DenyReason.NoGrant, Assert.Single(await EventsAsync()).Reason);
     }
@@ -221,7 +224,7 @@ public class NetworkAccessTests : IAsyncLifetime
     public async Task Malformed_patient_id_is_404_not_logged()
     {
         HttpResponseMessage response = await _app.Client(_kidney)
-            .GetAsync("/api/network/patients/not-a-guid/labs");
+            .GetAsync("/api/network/patients/not-a-guid/read-egfr-labs");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }

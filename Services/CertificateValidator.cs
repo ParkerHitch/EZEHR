@@ -10,11 +10,11 @@ namespace EZEHR.Services;
 /// </summary>
 public static class CertificateValidator
 {
-    public const string ClientAuthOid = "1.3.6.1.5.5.7.3.2";
+    public const string ClientAuthenticationOid = "1.3.6.1.5.5.7.3.2";
 
-    public static readonly TimeSpan Skew = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan AllowedClockSkew = TimeSpan.FromMinutes(2);
 
-    public static CertCheck Validate(
+    public static CertificateCheck Validate(
         X509Certificate2 leaf,
         IEnumerable<X509Certificate2>? extra,
         DateTimeOffset at,
@@ -23,11 +23,11 @@ public static class CertificateValidator
     {
         if (trustAnchors.Roots.Count == 0)
         {
-            return new CertCheck(false, DenyReason.UntrustedCertificate);
+            return new CertificateCheck(false, DenyReason.UntrustedCertificate);
         }
-        if (!HasClientAuth(leaf))
+        if (!HasClientAuthenticationUsage(leaf))
         {
-            return new CertCheck(false, DenyReason.UntrustedCertificate);
+            return new CertificateCheck(false, DenyReason.UntrustedCertificate);
         }
 
         using X509Chain chain = new();
@@ -44,13 +44,13 @@ public static class CertificateValidator
         }
         policy.RevocationMode = X509RevocationMode.NoCheck;
         policy.DisableCertificateDownloads = true;
-        policy.ApplicationPolicy.Add(new Oid(ClientAuthOid));
-        policy.VerificationTime = (at + Skew).UtcDateTime;
+        policy.ApplicationPolicy.Add(new Oid(ClientAuthenticationOid));
+        policy.VerificationTime = (at + AllowedClockSkew).UtcDateTime;
         policy.VerificationTimeIgnored = false;
 
         if (chain.Build(leaf))
         {
-            return new CertCheck(true, null);
+            return new CertificateCheck(true, null);
         }
 
         X509ChainStatusFlags flags = X509ChainStatusFlags.NoError;
@@ -70,21 +70,21 @@ public static class CertificateValidator
             X509ChainStatusFlags.NotTimeValid | X509ChainStatusFlags.NotTimeNested;
         if ((flags & ~timeFlags) != X509ChainStatusFlags.NoError)
         {
-            return new CertCheck(false, DenyReason.UntrustedCertificate);
+            return new CertificateCheck(false, DenyReason.UntrustedCertificate);
         }
-        return new CertCheck(false, DenyReason.CertificateExpired);
+        return new CertificateCheck(false, DenyReason.CertificateExpired);
     }
 
     /// <summary>Loads the trust anchors and intermediates named in AppOptions. A missing file yields none, so nothing is trusted.</summary>
     public static TrustAnchors LoadTrustAnchors(AppOptions options)
     {
         return new TrustAnchors(
-            LoadPem(options.TrustAnchorsPemPath),
-            LoadPem(options.IntermediatesPemPath)
+            LoadCertificatesFromPem(options.TrustAnchorsPemPath),
+            LoadCertificatesFromPem(options.IntermediatesPemPath)
         );
     }
 
-    private static IReadOnlyList<X509Certificate2> LoadPem(string path)
+    private static IReadOnlyList<X509Certificate2> LoadCertificatesFromPem(string path)
     {
         if (!File.Exists(path))
         {
@@ -95,12 +95,14 @@ public static class CertificateValidator
         return collection.ToArray();
     }
 
-    private static bool HasClientAuth(X509Certificate2 certificate)
+    private static bool HasClientAuthenticationUsage(X509Certificate2 certificate)
     {
         return certificate
             .Extensions.OfType<X509EnhancedKeyUsageExtension>()
             .Any(extension =>
-                extension.EnhancedKeyUsages.Cast<Oid>().Any(oid => oid.Value == ClientAuthOid)
+                extension
+                    .EnhancedKeyUsages.Cast<Oid>()
+                    .Any(oid => oid.Value == ClientAuthenticationOid)
             );
     }
 }

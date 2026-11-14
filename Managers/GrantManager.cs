@@ -20,7 +20,7 @@ public sealed class GrantManager(
     IOptions<AppOptions> options
 )
 {
-    public static readonly TimeSpan OfferLifetime = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan ShareOfferLifetime = TimeSpan.FromMinutes(10);
 
     public const string TreatmentPurpose = "treatment";
 
@@ -41,7 +41,7 @@ public sealed class GrantManager(
     );
 
     /// <summary>A new opaque code for a share offer or an invite.</summary>
-    public static string NewCode()
+    public static string GenerateCode()
     {
         return new string(RandomNumberGenerator.GetItems<char>(CodeAlphabet, 8));
     }
@@ -64,14 +64,14 @@ public sealed class GrantManager(
         return $"{code[..4]}-{code[4..]}";
     }
 
-    public async Task<ShareOffer> CreateOfferAsync(Guid patientId, ShareDuration duration)
+    public async Task<ShareOffer> CreateShareOfferAsync(Guid patientId, ShareDuration duration)
     {
         ShareOffer offer = new(
             Guid.NewGuid(),
             patientId,
-            NewCode(),
+            GenerateCode(),
             duration,
-            time.GetUtcNow() + OfferLifetime,
+            time.GetUtcNow() + ShareOfferLifetime,
             null
         );
         await using SqlConnection connection = await db.OpenAsync();
@@ -92,7 +92,7 @@ public sealed class GrantManager(
         return offer;
     }
 
-    public async Task<ShareOffer?> FindOfferAsync(Guid offerId)
+    public async Task<ShareOffer?> FindShareOfferAsync(Guid offerId)
     {
         await using SqlConnection connection = await db.OpenAsync();
         return await connection.QuerySingleOrDefaultAsync<ShareOffer>(
@@ -107,7 +107,7 @@ public sealed class GrantManager(
     }
 
     /// <summary>A clinician enters the patient's code. Creates one Pending grant; a code works once and for 10 minutes.</summary>
-    public async Task<GrantResult> RedeemAsync(string code, Party clinician)
+    public async Task<GrantResult> RedeemShareCodeAsync(string code, Party clinician)
     {
         string normalizedCode = NormalizeCode(code);
         DateTimeOffset now = time.GetUtcNow();
@@ -160,7 +160,7 @@ public sealed class GrantManager(
             GrantScope.Full,
             TreatmentPurpose,
             GrantStatus.Pending,
-            Minutes(claimed.Duration),
+            ToDurationMinutes(claimed.Duration),
             now,
             null,
             null,
@@ -172,7 +172,7 @@ public sealed class GrantManager(
             transaction,
             grant.PatientId,
             clinician,
-            "RedeemOffer",
+            "RedeemShareCode",
             TreatmentPurpose,
             true,
             null
@@ -182,7 +182,7 @@ public sealed class GrantManager(
     }
 
     /// <summary>The patient approves or denies a pending request. Approval starts the clock for the chosen duration.</summary>
-    public async Task<GrantResult> DecideAsync(Guid patientId, Guid grantId, bool approve)
+    public async Task<GrantResult> ApproveOrDenyAsync(Guid patientId, Guid grantId, bool approve)
     {
         Grant? grant = await FindAsync(grantId);
         if (grant is null || grant.PatientId != patientId)
@@ -200,7 +200,7 @@ public sealed class GrantManager(
             {
                 Status = GrantStatus.Active,
                 ApprovedAt = now,
-                ExpiresAt = ExpiresAt(grant.DurationMinutes, now),
+                ExpiresAt = CalculateExpiresAt(grant.DurationMinutes, now),
             }
             : grant with
             {
@@ -255,7 +255,7 @@ public sealed class GrantManager(
     /// <summary>An app the patient turned on: lab results and notes only, ongoing until revoked. Idempotent.</summary>
     public async Task<Grant> CreateAppGrantAsync(Guid patientId, Party app)
     {
-        IReadOnlyList<Grant> existing = await ForGranteeAsync(patientId, app.SubjectUri);
+        IReadOnlyList<Grant> existing = await ListForGranteeAsync(patientId, app.SubjectUri);
         Grant? active = existing.FirstOrDefault(grant => grant.Status == GrantStatus.Active);
         if (active is not null)
         {
@@ -291,7 +291,7 @@ public sealed class GrantManager(
         );
     }
 
-    public async Task<IReadOnlyList<Grant>> ForPatientAsync(Guid patientId)
+    public async Task<IReadOnlyList<Grant>> ListForPatientAsync(Guid patientId)
     {
         await using SqlConnection connection = await db.OpenAsync();
         IEnumerable<GrantRow> rows = await connection.QueryAsync<GrantRow>(
@@ -306,7 +306,7 @@ public sealed class GrantManager(
     }
 
     /// <summary>One grantee's grants for a patient, newest first.</summary>
-    public async Task<IReadOnlyList<Grant>> ForGranteeAsync(Guid patientId, string subjectUri)
+    public async Task<IReadOnlyList<Grant>> ListForGranteeAsync(Guid patientId, string subjectUri)
     {
         await using SqlConnection connection = await db.OpenAsync();
         IEnumerable<GrantRow> rows = await connection.QueryAsync<GrantRow>(
@@ -334,7 +334,7 @@ public sealed class GrantManager(
     }
 
     /// <summary>When a grant approved at <paramref name="now"/> ends. No minutes means end of day: 23:59:59 in AppOptions.TimeZone.</summary>
-    public DateTimeOffset ExpiresAt(int? durationMinutes, DateTimeOffset now)
+    public DateTimeOffset CalculateExpiresAt(int? durationMinutes, DateTimeOffset now)
     {
         if (durationMinutes is int minutes)
         {
@@ -353,7 +353,7 @@ public sealed class GrantManager(
         return new DateTimeOffset(endLocal, _timeZone.GetUtcOffset(endLocal)).ToUniversalTime();
     }
 
-    private static int? Minutes(ShareDuration duration)
+    private static int? ToDurationMinutes(ShareDuration duration)
     {
         return duration switch
         {

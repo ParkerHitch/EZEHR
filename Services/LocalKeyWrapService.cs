@@ -8,36 +8,50 @@ namespace EZEHR.Services;
 public sealed class LocalKeyWrapService(IOptions<AppOptions> options, IHostEnvironment environment)
     : IKeyWrapService
 {
-    private const string Aad = "ezehr-local-kek";
+    private const string AssociatedData = "ezehr-local-kek";
 
-    private readonly byte[] _kek = LoadKek(options.Value, environment);
+    private readonly byte[] _keyEncryptionKey = LoadKeyEncryptionKey(options.Value, environment);
 
-    public Task<byte[]> WrapAsync(byte[] dek)
+    public Task<byte[]> WrapAsync(byte[] dataKey)
     {
-        (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(_kek, Aad, dek);
+        (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(
+            _keyEncryptionKey,
+            AssociatedData,
+            dataKey
+        );
         return Task.FromResult(iv.Concat(ciphertext).ToArray());
     }
 
-    public Task<byte[]> UnwrapAsync(byte[] wrapped)
+    public Task<byte[]> UnwrapAsync(byte[] wrappedKey)
     {
-        if (wrapped.Length < 12 + 16)
+        if (wrappedKey.Length < 12 + 16)
         {
             throw new CryptographicException("Wrapped key is too short.");
         }
-        return Task.FromResult(RecordCipher.DecryptBytes(_kek, Aad, wrapped[..12], wrapped[12..]));
+        return Task.FromResult(
+            RecordCipher.DecryptBytes(
+                _keyEncryptionKey,
+                AssociatedData,
+                wrappedKey[..12],
+                wrappedKey[12..]
+            )
+        );
     }
 
-    private static byte[] LoadKek(AppOptions options, IHostEnvironment environment)
+    private static byte[] LoadKeyEncryptionKey(AppOptions options, IHostEnvironment environment)
     {
-        byte[] kek = ReadOrCreateKek(options, environment);
-        if (kek.Length != 32)
+        byte[] keyEncryptionKey = ReadOrCreateKeyEncryptionKey(options, environment);
+        if (keyEncryptionKey.Length != 32)
         {
             throw new InvalidOperationException("The key-encryption key must be 32 bytes.");
         }
-        return kek;
+        return keyEncryptionKey;
     }
 
-    private static byte[] ReadOrCreateKek(AppOptions options, IHostEnvironment environment)
+    private static byte[] ReadOrCreateKeyEncryptionKey(
+        AppOptions options,
+        IHostEnvironment environment
+    )
     {
         if (!string.IsNullOrEmpty(options.LocalKekBase64))
         {
@@ -57,8 +71,8 @@ public sealed class LocalKeyWrapService(IOptions<AppOptions> options, IHostEnvir
             return File.ReadAllBytes(path);
         }
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        byte[] kek = RandomNumberGenerator.GetBytes(32);
-        File.WriteAllBytes(path, kek);
-        return kek;
+        byte[] keyEncryptionKey = RandomNumberGenerator.GetBytes(32);
+        File.WriteAllBytes(path, keyEncryptionKey);
+        return keyEncryptionKey;
     }
 }

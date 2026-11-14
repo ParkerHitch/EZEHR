@@ -33,7 +33,7 @@ public class PkiTests
             .Extensions.OfType<X509EnhancedKeyUsageExtension>()
             .Single();
         Assert.Contains(eku.EnhancedKeyUsages.Cast<Oid>(), oid =>
-            oid.Value == CertificateValidator.ClientAuthOid
+            oid.Value == CertificateValidator.ClientAuthenticationOid
         );
         Assert.DoesNotContain("Mallory", leaf.Subject);
     }
@@ -60,7 +60,7 @@ public class PkiTests
     public void Validator_ok_for_local_chain()
     {
         X509Certificate2 leaf = _pki.Issue("lakeside.providers.ezehr");
-        Assert.Equal(new CertCheck(true, null), Validate(leaf, Now));
+        Assert.Equal(new CertificateCheck(true, null), Validate(leaf, Now));
     }
 
     [Fact]
@@ -68,10 +68,13 @@ public class PkiTests
     {
         TestPki other = new();
         X509Certificate2 leaf = other.Issue("lakeside.providers.ezehr");
-        Assert.Equal(new CertCheck(false, DenyReason.UntrustedCertificate), Validate(leaf, Now));
+        Assert.Equal(
+            new CertificateCheck(false, DenyReason.UntrustedCertificate),
+            Validate(leaf, Now)
+        );
         X509Certificate2 selfSigned = TestPki.SelfSigned("exchange.broker.example", Now);
         Assert.Equal(
-            new CertCheck(false, DenyReason.UntrustedCertificate),
+            new CertificateCheck(false, DenyReason.UntrustedCertificate),
             Validate(selfSigned, Now)
         );
     }
@@ -81,7 +84,10 @@ public class PkiTests
     {
         X509Certificate2 leaf = _pki.Issue("lakeside.providers.ezehr", validityDays: 30);
         DateTimeOffset at = new DateTimeOffset(leaf.NotAfter.ToUniversalTime()).AddSeconds(1);
-        Assert.Equal(new CertCheck(false, DenyReason.CertificateExpired), Validate(leaf, at));
+        Assert.Equal(
+            new CertificateCheck(false, DenyReason.CertificateExpired),
+            Validate(leaf, at)
+        );
     }
 
     [Fact] // Review Focus 1
@@ -89,9 +95,9 @@ public class PkiTests
     {
         X509Certificate2 leaf = _pki.Issue("lakeside.providers.ezehr");
         DateTimeOffset notBefore = new(leaf.NotBefore.ToUniversalTime());
-        Assert.True(Validate(leaf, notBefore.AddMinutes(-2)).Ok);
+        Assert.True(Validate(leaf, notBefore.AddMinutes(-2)).Valid);
         Assert.Equal(
-            new CertCheck(false, DenyReason.CertificateExpired),
+            new CertificateCheck(false, DenyReason.CertificateExpired),
             Validate(leaf, notBefore.AddMinutes(-3))
         );
     }
@@ -115,21 +121,29 @@ public class PkiTests
             Now.AddDays(10),
             [1, 2, 3, 4]
         );
-        Assert.Equal(new CertCheck(false, DenyReason.UntrustedCertificate), Validate(leaf, Now));
+        Assert.Equal(
+            new CertificateCheck(false, DenyReason.UntrustedCertificate),
+            Validate(leaf, Now)
+        );
     }
 
     [Fact]
     public void Validator_trusts_nothing_without_anchors()
     {
         X509Certificate2 leaf = _pki.Issue("lakeside.providers.ezehr");
-        CertCheck check = CertificateValidator.Validate(leaf, null, Now, new TrustAnchors([], []));
-        Assert.Equal(new CertCheck(false, DenyReason.UntrustedCertificate), check);
+        CertificateCheck check = CertificateValidator.Validate(
+            leaf,
+            null,
+            Now,
+            new TrustAnchors([], [])
+        );
+        Assert.Equal(new CertificateCheck(false, DenyReason.UntrustedCertificate), check);
     }
 
     [Fact]
     public void OrgDirectory_resolves_known_and_rejects_unknown()
     {
-        Party? lakeside = OrgDirectory.Resolve(_pki.Issue("lakeside.providers.ezehr"));
+        Party? lakeside = OrgDirectory.FindByCertificate(_pki.Issue("lakeside.providers.ezehr"));
         Assert.Equal(
             new Party(
                 PartyKind.Provider,
@@ -141,10 +155,14 @@ public class PkiTests
         );
         Assert.Equal(
             "urn:app:kidney-check",
-            OrgDirectory.Resolve(_pki.Issue("kidney-check.apps.ezehr"))!.SubjectUri
+            OrgDirectory.FindByCertificate(_pki.Issue("kidney-check.apps.ezehr"))!.SubjectUri
         );
-        Assert.Equal(PartyKind.Platform, OrgDirectory.Resolve(_pki.Issue("platform.ezehr"))!.Kind);
-        Assert.Null(OrgDirectory.Resolve(_pki.Issue("mallory.providers.ezehr")));
+        Assert.Equal(
+            "urn:provider:riverside",
+            OrgDirectory.FindByCertificate(_pki.Issue("riverside.providers.ezehr"))!.SubjectUri
+        );
+        Assert.Null(OrgDirectory.FindByCertificate(_pki.Issue("platform.ezehr")));
+        Assert.Null(OrgDirectory.FindByCertificate(_pki.Issue("mallory.providers.ezehr")));
     }
 
     [Theory]
@@ -226,7 +244,7 @@ public class PkiTests
         );
         string jws = RecordSigner.Sign(Egfr, leaf, [attackerRoot], Now);
         Assert.Throws<RecordSignatureException>(() => Verify(Guid.NewGuid(), jws));
-        CertCheck check = CertificateValidator.Validate(
+        CertificateCheck check = CertificateValidator.Validate(
             leaf,
             [attackerRoot],
             Now,
@@ -247,21 +265,22 @@ public class PkiTests
     }
 
     [Fact]
-    public void Platform_signed_communication_has_written_by()
+    public void Provider_signed_communication_has_written_by()
     {
-        X509Certificate2 platform = _pki.Issue("platform.ezehr");
+        X509Certificate2 riverside = _pki.Issue("riverside.providers.ezehr");
         JsonElement note = Resource(
             """
             {"resourceType":"Communication","id":"n1","status":"completed",
-             "sender":{"display":"Dr. Rivera, Riverside Primary Care"},
+             "sender":{"display":"Dr. Rivera"},
              "payload":[{"contentString":"Reviewed labs."}]}
             """
         );
-        VerifiedEntry entry = Verify(Guid.NewGuid(), RecordSigner.Sign(note, platform, [], Now));
-        Assert.Equal("Dr. Rivera, Riverside Primary Care", entry.WrittenBy);
+        VerifiedEntry entry = Verify(Guid.NewGuid(), RecordSigner.Sign(note, riverside, [], Now));
+        Assert.Equal("Dr. Rivera", entry.WrittenBy);
+        Assert.Equal("urn:provider:riverside", entry.Signer.SubjectUri);
     }
 
-    private CertCheck Validate(X509Certificate2 leaf, DateTimeOffset at)
+    private CertificateCheck Validate(X509Certificate2 leaf, DateTimeOffset at)
     {
         return CertificateValidator.Validate(leaf, null, at, _pki.TrustAnchors);
     }

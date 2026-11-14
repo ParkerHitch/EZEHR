@@ -8,34 +8,38 @@ public sealed record ProviderLink(string ProviderUri, string ProviderPatientId);
 
 public sealed record InviteResult(bool Succeeded, ProviderLink? Link, InviteError? Error);
 
-public sealed record CreateInviteResult(
+public sealed record CreateEnrollmentInviteResult(
     bool Allowed,
     DenyReason? Reason,
-    string? Code,
-    string? Url
+    string? InviteCode,
+    string? EnrollmentUrl
 );
 
 /// <summary>Allowed is the caller check; Error is set when an allowed caller sent records that were refused.</summary>
-public sealed record IngestResult(
+public sealed record PushSignedRecordsResult(
     bool Allowed,
     DenyReason? Reason,
     RecordError? Error,
-    int Inserted,
-    int Skipped
+    int Stored,
+    int AlreadyStored
 );
 
-public sealed record LabsResult(bool Allowed, DenyReason? Reason, IReadOnlyList<SignedEntry> Labs);
+public sealed record ReadEgfrLabsResult(
+    bool Allowed,
+    DenyReason? Reason,
+    IReadOnlyList<SignedEntry> EgfrLabs
+);
 
-public sealed record RecordResult(
+public sealed record ReadFullRecordResult(
     bool Allowed,
     DenyReason? Reason,
     IReadOnlyList<SignedEntry> Entries
 );
 
-public sealed record NoteResult(
+public sealed record WriteSignedNoteResult(
     bool Allowed,
     DenyReason? Reason,
     RecordError? Error,
-    bool Inserted,
+    bool Stored,
     Guid? EntryId
 );

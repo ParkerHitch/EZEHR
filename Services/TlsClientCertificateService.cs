@@ -6,7 +6,7 @@ namespace EZEHR.Services;
 /// Production source: the certificate the TLS layer verified possession of. Locally that is Kestrel's mutual TLS;
 /// on App Service, certificate forwarding (App:ClientCertificateHeader = X-ARR-ClientCert) fills the same property.
 /// </summary>
-public sealed class ConnectionClientCertificateService : IClientCertificateService
+public sealed class TlsClientCertificateService : IClientCertificateService
 {
     public async Task<X509Certificate2?> GetAsync(HttpContext httpContext)
     {

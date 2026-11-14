@@ -19,12 +19,14 @@ public sealed class NetworkController(
     RecordManager recordManager
 ) : ControllerBase
 {
-    [HttpPost("invites")]
-    public async Task<IActionResult> CreateInviteAsync(InviteRequest request)
+    [HttpPost("create-enrollment-invite")]
+    public async Task<IActionResult> CreateEnrollmentInviteAsync(
+        CreateEnrollmentInviteRequest request
+    )
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
         Caller caller = callerManager.FromCertificate(certificate);
-        CreateInviteResult result = await inviteManager.CreateAsync(
+        CreateEnrollmentInviteResult result = await inviteManager.CreateEnrollmentInviteAsync(
             caller,
             request.ProviderPatientId
         );
@@ -34,19 +36,19 @@ public sealed class NetworkController(
         }
         return StatusCode(
             StatusCodes.Status201Created,
-            new InviteResponse(result.Code!, result.Url!)
+            new CreateEnrollmentInviteResponse(result.InviteCode!, result.EnrollmentUrl!)
         );
     }
 
-    [HttpPost("records")]
-    public async Task<IActionResult> IngestAsync(IngestRequest request)
+    [HttpPost("push-signed-records")]
+    public async Task<IActionResult> PushSignedRecordsAsync(PushSignedRecordsRequest request)
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
         Caller caller = callerManager.FromCertificate(certificate);
-        IngestResult result = await recordManager.IngestAsync(
+        PushSignedRecordsResult result = await recordManager.PushSignedRecordsAsync(
             caller,
             request.ProviderPatientId,
-            request.Entries
+            request.SignedEntries
         );
         if (!result.Allowed)
         {
@@ -56,41 +58,55 @@ public sealed class NetworkController(
         {
             return RecordErrorResult(error);
         }
-        return Ok(new IngestResponse(result.Inserted, result.Skipped));
+        return Ok(new PushSignedRecordsResponse(result.Stored, result.AlreadyStored));
     }
 
-    [HttpGet("patients/{patientId:guid}/labs")]
-    public async Task<IActionResult> ReadLabsAsync(Guid patientId)
+    [HttpGet("patients/{patientId:guid}/read-egfr-labs")]
+    public async Task<IActionResult> ReadEgfrLabsAsync(Guid patientId)
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
         Caller caller = callerManager.FromCertificate(certificate);
-        LabsResult result = await recordManager.ReadLabsAsync(patientId, caller);
+        ReadEgfrLabsResult result = await recordManager.ReadEgfrLabsAsync(patientId, caller);
         if (!result.Allowed)
         {
             return DenialResult(result.Reason);
         }
-        return Ok(new EntriesResponse(result.Labs));
+        return Ok(new SignedEntriesResponse(result.EgfrLabs));
     }
 
-    [HttpGet("patients/{patientId:guid}/record")]
-    public async Task<IActionResult> ReadRecordAsync(Guid patientId, string? purpose)
+    [HttpGet("patients/{patientId:guid}/read-full-record")]
+    public async Task<IActionResult> ReadFullRecordAsync(
+        Guid patientId,
+        [FromQuery(Name = "purpose")] string? claimedPurpose
+    )
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
         Caller caller = callerManager.FromCertificate(certificate);
-        RecordResult result = await recordManager.ReadRecordAsync(patientId, caller, purpose);
+        ReadFullRecordResult result = await recordManager.ReadFullRecordAsync(
+            patientId,
+            caller,
+            claimedPurpose
+        );
         if (!result.Allowed)
         {
             return DenialResult(result.Reason);
         }
-        return Ok(new EntriesResponse(result.Entries));
+        return Ok(new SignedEntriesResponse(result.Entries));
     }
 
-    [HttpPost("patients/{patientId:guid}/notes")]
-    public async Task<IActionResult> WriteNoteAsync(Guid patientId, NoteRequest request)
+    [HttpPost("patients/{patientId:guid}/write-signed-note")]
+    public async Task<IActionResult> WriteSignedNoteAsync(
+        Guid patientId,
+        WriteSignedNoteRequest request
+    )
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
         Caller caller = callerManager.FromCertificate(certificate);
-        NoteResult result = await recordManager.WriteNoteAsync(patientId, caller, request.Jws);
+        WriteSignedNoteResult result = await recordManager.WriteSignedNoteAsync(
+            patientId,
+            caller,
+            request.Jws
+        );
         if (!result.Allowed)
         {
             return DenialResult(result.Reason);
@@ -99,7 +115,7 @@ public sealed class NetworkController(
         {
             return RecordErrorResult(error);
         }
-        return Ok(new NoteResponse(result.Inserted, result.EntryId));
+        return Ok(new WriteSignedNoteResponse(result.Stored, result.EntryId));
     }
 
     /// <summary>401 for certificate problems; 403 for everything else a verified caller is refused.</summary>

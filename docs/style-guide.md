@@ -74,12 +74,33 @@ Never `new` up a dependency that DI could give you.
 | Locals, parameters | camelCase, meaningful | `wrappedKey`, not `data`, `tmp` or `res` |
 | Async methods | `Async` suffix | `UnwrapAsync`, `OnPostApproveAsync` |
 | Controllers | `<Area>Controller` | `NetworkController` |
+| Endpoints | kebab-case verb phrase that says what it does | `read-egfr-labs`, not `labs` |
+| Controller actions | the endpoint in PascalCase + `Async` | `read-egfr-labs` → `ReadEgfrLabsAsync` |
+| Request, response, result types | the action's name + `Request` / `Response` / `Result` | `ReadEgfrLabsResult` |
 | Managers | `<Area>Manager` | `GrantManager` |
 | Services | `I<Thing>Service`, implementation named for its backend | `IKeyWrapService`, `KeyVaultKeyWrapService` |
 | Identifiers | `Id`, as in the plan | `PatientId`, `GrantId` |
 
 Write `Id`, never `ID`: the plan's contracts already use `Id`, and one spelling across the repo
 beats either one.
+
+Prefer the longer, more descriptive name: `ReadEgfrLabsAsync` over `ReadLabsAsync`,
+`wrappedDataKey` over `wrapped`, `CertificateCheck` over `CertCheck`. A name should say what the
+thing does or holds without reading its body. Domain abbreviations everyone on the team uses
+(`Jws`, `Loinc`, `Egfr`, `Iv`) are fine; private shorthand (`dek`, `kek`, `ctx`, `res`) is not.
+
+Every endpoint gets its own descriptive route, and the action that serves it has the same name.
+The manager method it calls usually shares that name too, so one word search finds the route,
+the action, the manager method and its result type:
+
+```csharp
+[HttpGet("patients/{patientId:guid}/read-egfr-labs")]
+public async Task<IActionResult> ReadEgfrLabsAsync(Guid patientId)
+// calls RecordManager.ReadEgfrLabsAsync, which returns ReadEgfrLabsResult
+```
+
+A query-string name that callers already depend on can stay short; bind it to a descriptive
+parameter: `[FromQuery(Name = "purpose")] string? claimedPurpose`.
 
 ## 3. Controllers, managers, services
 
@@ -126,17 +147,17 @@ public sealed class NetworkController(
     RecordManager recordManager
 ) : ControllerBase
 {
-    [HttpGet("patients/{patientId:guid}/labs")]
-    public async Task<IActionResult> ReadLabsAsync(Guid patientId)
+    [HttpGet("patients/{patientId:guid}/read-egfr-labs")]
+    public async Task<IActionResult> ReadEgfrLabsAsync(Guid patientId)
     {
         X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
         Caller caller = callerManager.FromCertificate(certificate);
-        LabsResult result = await recordManager.ReadLabsAsync(patientId, caller);
+        ReadEgfrLabsResult result = await recordManager.ReadEgfrLabsAsync(patientId, caller);
         if (!result.Allowed)
         {
             return DenialResult(result.Reason);
         }
-        return Ok(result.Labs);
+        return Ok(new SignedEntriesResponse(result.EgfrLabs));
     }
 }
 ```
@@ -150,7 +171,7 @@ public sealed class RecordModel(CallerManager callerManager, RecordManager recor
     public async Task<IActionResult> OnGetAsync(Guid patientId)
     {
         Caller caller = callerManager.FromClinician(User);
-        RecordResult result = await recordManager.ReadRecordAsync(patientId, caller);
+        ReadFullRecordResult result = await recordManager.ReadFullRecordAsync(patientId, caller, null);
         if (!result.Allowed)
         {
             return RedirectToPage("/Clinician/AccessEnded");

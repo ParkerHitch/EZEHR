@@ -2,21 +2,21 @@ using System.ComponentModel.DataAnnotations;
 
 namespace EZEHR.Models;
 
-public sealed record InviteRequest([Required] string ProviderPatientId);
+public sealed record CreateEnrollmentInviteRequest([Required] string ProviderPatientId);
 
-public sealed record IngestRequest(
+public sealed record PushSignedRecordsRequest(
     [Required] string ProviderPatientId,
-    [Required] string[] Entries
+    [Required] string[] SignedEntries
 );
 
-public sealed record NoteRequest([Required] string Jws);
+public sealed record WriteSignedNoteRequest([Required] string Jws);
 
-public sealed record InviteResponse(string Code, string Url);
+public sealed record CreateEnrollmentInviteResponse(string InviteCode, string EnrollmentUrl);
 
-public sealed record IngestResponse(int Inserted, int Skipped);
+public sealed record PushSignedRecordsResponse(int Stored, int AlreadyStored);
 
-public sealed record NoteResponse(bool Inserted, Guid? Id);
+public sealed record WriteSignedNoteResponse(bool Stored, Guid? EntryId);
 
-public sealed record EntriesResponse(IReadOnlyList<SignedEntry> Entries);
+public sealed record SignedEntriesResponse(IReadOnlyList<SignedEntry> Entries);
 
 public sealed record ErrorResponse(string Error);

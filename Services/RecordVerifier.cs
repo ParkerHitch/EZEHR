@@ -76,13 +76,18 @@ public static class RecordVerifier
             throw new RecordSignatureException("Signature does not verify.");
         }
 
-        CertCheck check = CertificateValidator.Validate(leaf, x5c.Skip(1), issuedAt, trustAnchors);
-        if (!check.Ok)
+        CertificateCheck check = CertificateValidator.Validate(
+            leaf,
+            x5c.Skip(1),
+            issuedAt,
+            trustAnchors
+        );
+        if (!check.Valid)
         {
             throw new RecordSignatureException($"Signer certificate rejected: {check.Reason}.");
         }
 
-        Party signer = OrgDirectory.Resolve(leaf)
+        Party signer = OrgDirectory.FindByCertificate(leaf)
             ?? throw new RecordSignatureException("Signer is not a known organization.");
 
         using JsonDocument payload = JsonDocument.Parse(Base64Url.Decode(parts[1]));
@@ -92,8 +97,7 @@ public static class RecordVerifier
 
         string? writtenBy = null;
         if (
-            signer.Kind == PartyKind.Platform
-            && resourceType == "Communication"
+            resourceType == "Communication"
             && resource.TryGetProperty("sender", out JsonElement sender)
             && sender.TryGetProperty("display", out JsonElement display)
         )

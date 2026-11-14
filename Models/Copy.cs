@@ -24,7 +24,7 @@ public static class Copy
 
     public static string WrittenBy(string name, string org)
     {
-        return $"Written by {name}, {org} · signed by EZEHR ✓";
+        return $"Written by {name} · signed by {org} ✓";
     }
 
     public static string ApprovePrompt(string name, string org, string time)

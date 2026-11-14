@@ -17,7 +17,7 @@ public class CopyTests
             Copy.BrokerBlocked("treatment")
         );
         Assert.Equal(
-            "Written by Dr. Rivera, Riverside Primary Care · signed by EZEHR ✓",
+            "Written by Dr. Rivera · signed by Riverside Primary Care ✓",
             Copy.WrittenBy("Dr. Rivera", "Riverside Primary Care")
         );
         Assert.Equal(

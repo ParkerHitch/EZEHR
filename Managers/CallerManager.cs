@@ -18,17 +18,17 @@ public sealed class CallerManager(TimeProvider time, IOptions<AppOptions> option
         {
             return new UnverifiedCaller(DenyReason.NoCertificate);
         }
-        CertCheck check = CertificateValidator.Validate(
+        CertificateCheck check = CertificateValidator.Validate(
             certificate,
             null,
             time.GetUtcNow(),
             _trustAnchors
         );
-        if (!check.Ok)
+        if (!check.Valid)
         {
             return new UnverifiedCaller(check.Reason ?? DenyReason.UntrustedCertificate);
         }
-        Party? party = OrgDirectory.Resolve(certificate);
+        Party? party = OrgDirectory.FindByCertificate(certificate);
         if (party is null)
         {
             return new UnverifiedCaller(DenyReason.UntrustedCertificate);

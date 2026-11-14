@@ -22,7 +22,7 @@ public sealed class AccessManager(
         string? claimedPurpose
     )
     {
-        AccessDecision decision = await DecideAsync(patientId, action, caller);
+        AccessDecision decision = await DecideAccessAsync(patientId, action, caller);
         Party? actor = caller is VerifiedCaller verified ? verified.Party : null;
         await auditManager.AppendAsync(
             patientId,
@@ -35,7 +35,7 @@ public sealed class AccessManager(
         return decision;
     }
 
-    private async Task<AccessDecision> DecideAsync(
+    private async Task<AccessDecision> DecideAccessAsync(
         Guid patientId,
         AccessAction action,
         Caller caller
@@ -60,7 +60,7 @@ public sealed class AccessManager(
             }
         }
 
-        IReadOnlyList<Grant> grants = await grantManager.ForGranteeAsync(
+        IReadOnlyList<Grant> grants = await grantManager.ListForGranteeAsync(
             patientId,
             verified.Party.SubjectUri
         );
@@ -102,11 +102,24 @@ public sealed class AccessManager(
             return Deny(reason, newest);
         }
 
-        if (active.Scope == GrantScope.LabsAndNotes && action == AccessAction.ReadRecord)
+        if (!ScopeAllows(active.Scope, action))
         {
             return Deny(DenyReason.ScopeDenied, active);
         }
         return new AccessDecision(true, active, null);
+    }
+
+    /// <summary>People read; writes come only from certificate-holding apps (and providers, through ingest).</summary>
+    private static bool ScopeAllows(GrantScope scope, AccessAction action)
+    {
+        return scope switch
+        {
+            GrantScope.Full => action is AccessAction.ReadFullRecord or AccessAction.ReadEgfrLabs,
+            GrantScope.LabsAndNotes => action
+                is AccessAction.ReadEgfrLabs
+                    or AccessAction.WriteSignedNote,
+            _ => false,
+        };
     }
 
     private static AccessDecision Deny(DenyReason reason, Grant? grant = null)

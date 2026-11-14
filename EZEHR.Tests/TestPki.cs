@@ -60,7 +60,10 @@ public sealed class TestPki
         using ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         CertificateRequest request = new($"CN={commonName}", key, HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(
-            new X509EnhancedKeyUsageExtension([new Oid(CertificateValidator.ClientAuthOid)], false)
+            new X509EnhancedKeyUsageExtension(
+                [new Oid(CertificateValidator.ClientAuthenticationOid)],
+                false
+            )
         );
         return request.CreateSelfSigned(now.AddMinutes(-5), now.AddDays(365));
     }

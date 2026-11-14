@@ -12,7 +12,7 @@ namespace EZEHR.Managers;
 /// <summary>
 /// Patients' signed records, encrypted under each patient's own key (envelope encryption). The patient key is
 /// unwrapped on every call, so every read is a Key Vault operation. Reads and notes from other parties go through
-/// AccessManager; PutAsync and ReadAsync are the raw store underneath and check nothing.
+/// AccessManager; StoreEntryAsync and DecryptEntriesAsync are the raw store underneath and check nothing.
 /// </summary>
 public sealed class RecordManager(
     Db db,
@@ -25,95 +25,99 @@ public sealed class RecordManager(
     ILogger<RecordManager> logger
 )
 {
-    public const string EgfrLoinc = "98979-8";
+    public const string EgfrLoincCode = "98979-8";
 
     private readonly TrustAnchors _trustAnchors = CertificateValidator.LoadTrustAnchors(
         options.Value
     );
 
     /// <summary>A provider pushes signed records for one of its patients. Everything is verified before anything is stored.</summary>
-    public async Task<IngestResult> IngestAsync(
+    public async Task<PushSignedRecordsResult> PushSignedRecordsAsync(
         Caller caller,
         string providerPatientId,
-        IReadOnlyList<string> entries
+        IReadOnlyList<string> signedEntries
     )
     {
         if (caller is UnverifiedCaller unverified)
         {
-            return new IngestResult(false, unverified.Reason, null, 0, 0);
+            return new PushSignedRecordsResult(false, unverified.Reason, null, 0, 0);
         }
         if (caller is not VerifiedCaller { Party.Kind: PartyKind.Provider } verified)
         {
-            return new IngestResult(false, DenyReason.WrongPartyKind, null, 0, 0);
+            return new PushSignedRecordsResult(false, DenyReason.WrongPartyKind, null, 0, 0);
         }
         Party provider = verified.Party;
 
-        Guid? linkedPatient = await inviteManager.LinkedPatientAsync(
+        Guid? linkedPatient = await inviteManager.FindLinkedPatientAsync(
             provider.SubjectUri,
             providerPatientId
         );
         if (linkedPatient is not Guid patientId)
         {
-            return IngestRefused(RecordError.PatientNotLinked);
+            return PushRefused(RecordError.PatientNotLinked);
         }
 
         // Verify everything before storing anything, so a bad batch stores nothing.
         List<(string SourceKey, VerifiedEntry Entry, string Jws)> checkedEntries = [];
-        foreach (string jws in entries)
+        foreach (string jws in signedEntries)
         {
-            (VerifiedEntry? entry, string? sourceKey, RecordError? error) = CheckSigned(
-                jws,
-                provider
-            );
+            (VerifiedEntry? entry, string? sourceKey, RecordError? error) =
+                VerifyEntrySignedByCaller(jws, provider);
             if (error is RecordError refused)
             {
-                return IngestRefused(refused);
+                return PushRefused(refused);
             }
             checkedEntries.Add((sourceKey!, entry!, jws));
         }
 
-        int inserted = 0;
-        int skipped = 0;
+        int stored = 0;
+        int alreadyStored = 0;
         foreach ((string sourceKey, VerifiedEntry entry, string jws) in checkedEntries)
         {
-            (bool added, Guid _) = await PutAsync(patientId, sourceKey, entry.ResourceType, jws);
-            if (added)
+            (bool newlyStored, Guid _) = await StoreEntryAsync(
+                patientId,
+                sourceKey,
+                entry.ResourceType,
+                jws
+            );
+            if (newlyStored)
             {
-                inserted++;
+                stored++;
             }
             else
             {
-                skipped++;
+                alreadyStored++;
             }
         }
-        await auditManager.AppendAsync(patientId, provider, "Ingest", null, true, null);
-        return new IngestResult(true, null, null, inserted, skipped);
+        await auditManager.AppendAsync(patientId, provider, "PushSignedRecords", null, true, null);
+        return new PushSignedRecordsResult(true, null, null, stored, alreadyStored);
     }
 
     /// <summary>The patient's eGFR lab results, for an app with a grant. Logged by the access check.</summary>
-    public async Task<LabsResult> ReadLabsAsync(Guid patientId, Caller caller)
+    public async Task<ReadEgfrLabsResult> ReadEgfrLabsAsync(Guid patientId, Caller caller)
     {
         AccessDecision decision = await accessManager.AuthorizeAsync(
             patientId,
-            AccessAction.ReadLabs,
+            AccessAction.ReadEgfrLabs,
             caller,
             null
         );
         if (!decision.Allowed)
         {
-            return new LabsResult(false, decision.Reason, []);
+            return new ReadEgfrLabsResult(false, decision.Reason, []);
         }
-        IReadOnlyList<SignedEntry> observations = await ReadVerifiedAsync(patientId, resourceType =>
-            resourceType == "Observation"
+        IReadOnlyList<SignedEntry> observations = await ReadVerifiedEntriesAsync(
+            patientId,
+            resourceType => resourceType == "Observation"
         );
         List<SignedEntry> labs = observations
-            .Where(entry => HasLoinc(entry.Resource, EgfrLoinc))
+            .Where(entry => HasLoincCode(entry.Resource, EgfrLoincCode))
             .ToList();
-        return new LabsResult(true, null, labs);
+        return new ReadEgfrLabsResult(true, null, labs);
     }
 
     /// <summary>The whole record. Logged by the access check, with the purpose the caller claimed.</summary>
-    public async Task<RecordResult> ReadRecordAsync(
+    public async Task<ReadFullRecordResult> ReadFullRecordAsync(
         Guid patientId,
         Caller caller,
         string? claimedPurpose
@@ -121,59 +125,78 @@ public sealed class RecordManager(
     {
         AccessDecision decision = await accessManager.AuthorizeAsync(
             patientId,
-            AccessAction.ReadRecord,
+            AccessAction.ReadFullRecord,
             caller,
             claimedPurpose
         );
         if (!decision.Allowed)
         {
-            return new RecordResult(false, decision.Reason, []);
+            return new ReadFullRecordResult(false, decision.Reason, []);
         }
-        return new RecordResult(true, null, await ReadVerifiedAsync(patientId, null));
+        return new ReadFullRecordResult(
+            true,
+            null,
+            await ReadVerifiedEntriesAsync(patientId, null)
+        );
     }
 
     /// <summary>A note (a FHIR Communication) signed by the caller itself. Idempotent per note id.</summary>
-    public async Task<NoteResult> WriteNoteAsync(Guid patientId, Caller caller, string jws)
+    public async Task<WriteSignedNoteResult> WriteSignedNoteAsync(
+        Guid patientId,
+        Caller caller,
+        string jws
+    )
     {
         AccessDecision decision = await accessManager.AuthorizeAsync(
             patientId,
-            AccessAction.WriteNote,
+            AccessAction.WriteSignedNote,
             caller,
             null
         );
         if (!decision.Allowed)
         {
-            return new NoteResult(false, decision.Reason, null, false, null);
+            return new WriteSignedNoteResult(false, decision.Reason, null, false, null);
         }
 
-        (VerifiedEntry? note, string? sourceKey, RecordError? error) = CheckSigned(
+        (VerifiedEntry? note, string? sourceKey, RecordError? error) = VerifyEntrySignedByCaller(
             jws,
             ((VerifiedCaller)caller).Party
         );
         if (error is RecordError refused)
         {
-            return new NoteResult(true, null, refused, false, null);
+            return new WriteSignedNoteResult(true, null, refused, false, null);
         }
         if (note!.ResourceType != "Communication")
         {
-            return new NoteResult(true, null, RecordError.NotACommunication, false, null);
+            return new WriteSignedNoteResult(
+                true,
+                null,
+                RecordError.NotACommunication,
+                false,
+                null
+            );
         }
 
-        (bool inserted, Guid entryId) = await PutAsync(patientId, sourceKey!, "Communication", jws);
-        return new NoteResult(true, null, null, inserted, entryId);
+        (bool stored, Guid entryId) = await StoreEntryAsync(
+            patientId,
+            sourceKey!,
+            "Communication",
+            jws
+        );
+        return new WriteSignedNoteResult(true, null, null, stored, entryId);
     }
 
-    /// <summary>Generates a new patient data key and returns it wrapped. The plaintext key is erased.</summary>
+    /// <summary>Generates a new patient data key and returns it wrappedKey. The plaintext key is erased.</summary>
     public async Task<byte[]> CreatePatientKeyAsync()
     {
-        byte[] dek = RandomNumberGenerator.GetBytes(32);
+        byte[] dataKey = RandomNumberGenerator.GetBytes(32);
         try
         {
-            return await keyWrapService.WrapAsync(dek);
+            return await keyWrapService.WrapAsync(dataKey);
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(dek);
+            CryptographicOperations.ZeroMemory(dataKey);
         }
     }
 
@@ -181,18 +204,18 @@ public sealed class RecordManager(
     public async Task<Guid> CreatePatientAsync(string displayName)
     {
         Guid patientId = Guid.NewGuid();
-        byte[] wrappedDek = await CreatePatientKeyAsync();
+        byte[] wrappedDataKey = await CreatePatientKeyAsync();
         await using SqlConnection connection = await db.OpenAsync();
         await connection.ExecuteAsync(
             """
             INSERT INTO patients(id, display_name, wrapped_dek, created_at)
-            VALUES (@patientId, @displayName, @wrappedDek, @createdAt)
+            VALUES (@patientId, @displayName, @wrappedDataKey, @createdAt)
             """,
             new
             {
                 patientId,
                 displayName,
-                wrappedDek,
+                wrappedDataKey,
                 createdAt = time.GetUtcNow(),
             }
         );
@@ -211,9 +234,9 @@ public sealed class RecordManager(
 
     /// <summary>
     /// Stores a signed record once per (patient, sourceKey). A repeat returns the existing id with
-    /// Inserted = false. Checks no access: callers must have.
+    /// Stored = false. Checks no access: callers must have.
     /// </summary>
-    public async Task<(bool Inserted, Guid Id)> PutAsync(
+    public async Task<(bool Stored, Guid EntryId)> StoreEntryAsync(
         Guid patientId,
         string sourceKey,
         string resourceType,
@@ -221,19 +244,19 @@ public sealed class RecordManager(
     )
     {
         await using SqlConnection connection = await db.OpenAsync();
-        Guid? existing = await ExistingAsync(connection, patientId, sourceKey);
+        Guid? existing = await FindEntryIdAsync(connection, patientId, sourceKey);
         if (existing is Guid found)
         {
             return (false, found);
         }
 
-        byte[] dek = await UnwrapAsync(connection, patientId);
+        byte[] dataKey = await UnwrapPatientKeyAsync(connection, patientId);
         try
         {
             Guid entryId = Guid.NewGuid();
             (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(
-                dek,
-                Aad(patientId, entryId),
+                dataKey,
+                AssociatedData(patientId, entryId),
                 jws
             );
             int rows = await connection.ExecuteAsync(
@@ -265,19 +288,19 @@ public sealed class RecordManager(
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(dek);
+            CryptographicOperations.ZeroMemory(dataKey);
         }
-        return (false, (await ExistingAsync(connection, patientId, sourceKey))!.Value);
+        return (false, (await FindEntryIdAsync(connection, patientId, sourceKey))!.Value);
     }
 
     /// <summary>Decrypts a patient's entries, oldest first. Checks no access: callers must have.</summary>
-    public async Task<IReadOnlyList<StoredEntry>> ReadAsync(
+    public async Task<IReadOnlyList<DecryptedEntry>> DecryptEntriesAsync(
         Guid patientId,
         Func<string, bool>? resourceTypeFilter
     )
     {
         await using SqlConnection connection = await db.OpenAsync();
-        byte[] dek = await UnwrapAsync(connection, patientId);
+        byte[] dataKey = await UnwrapPatientKeyAsync(connection, patientId);
         try
         {
             IEnumerable<EntryRow> rows = await connection.QueryAsync<EntryRow>(
@@ -289,7 +312,7 @@ public sealed class RecordManager(
                 """,
                 new { patientId }
             );
-            List<StoredEntry> entries = [];
+            List<DecryptedEntry> entries = [];
             foreach (EntryRow row in rows)
             {
                 if (resourceTypeFilter is not null && !resourceTypeFilter(row.ResourceType))
@@ -297,22 +320,22 @@ public sealed class RecordManager(
                     continue;
                 }
                 string jws = RecordCipher.Decrypt(
-                    dek,
-                    Aad(patientId, row.Id),
+                    dataKey,
+                    AssociatedData(patientId, row.Id),
                     row.Iv,
                     row.Ciphertext
                 );
-                entries.Add(new StoredEntry(row.Id, row.ResourceType, jws));
+                entries.Add(new DecryptedEntry(row.Id, row.ResourceType, jws));
             }
             return entries;
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(dek);
+            CryptographicOperations.ZeroMemory(dataKey);
         }
     }
 
-    public static bool HasLoinc(JsonElement resource, string loinc)
+    public static bool HasLoincCode(JsonElement resource, string loinc)
     {
         return resource.TryGetProperty("code", out JsonElement code)
             && code.TryGetProperty("coding", out JsonElement coding)
@@ -328,7 +351,7 @@ public sealed class RecordManager(
     /// Verifies a JWS from a caller: a good signature, signed by the caller itself, and a resource id.
     /// Returns the entry and its source key ({signerUri}|{resourceType}/{id}), or why it was refused.
     /// </summary>
-    private (VerifiedEntry? Entry, string? SourceKey, RecordError? Error) CheckSigned(
+    private (VerifiedEntry? Entry, string? SourceKey, RecordError? Error) VerifyEntrySignedByCaller(
         string jws,
         Party caller
     )
@@ -353,24 +376,26 @@ public sealed class RecordManager(
             || id.GetString() is not { Length: > 0 and <= 64 } resourceId
         )
         {
-            return (null, null, RecordError.ResourceIdRequired);
+            return (null, null, RecordError.MissingOrInvalidResourceId);
         }
         return (entry, $"{entry.Signer.SubjectUri}|{entry.ResourceType}/{resourceId}", null);
     }
 
-    private async Task<IReadOnlyList<SignedEntry>> ReadVerifiedAsync(
+    private async Task<IReadOnlyList<SignedEntry>> ReadVerifiedEntriesAsync(
         Guid patientId,
         Func<string, bool>? resourceTypeFilter
     )
     {
         List<SignedEntry> entries = [];
-        foreach (StoredEntry stored in await ReadAsync(patientId, resourceTypeFilter))
+        foreach (
+            DecryptedEntry decrypted in await DecryptEntriesAsync(patientId, resourceTypeFilter)
+        )
         {
             try
             {
                 VerifiedEntry verified = RecordVerifier.Verify(
-                    stored.Id,
-                    stored.Jws,
+                    decrypted.Id,
+                    decrypted.Jws,
                     _trustAnchors
                 );
                 entries.Add(
@@ -381,7 +406,7 @@ public sealed class RecordManager(
                         verified.Signer,
                         verified.SignedAt,
                         verified.WrittenBy,
-                        stored.Jws
+                        decrypted.Jws
                     )
                 );
             }
@@ -390,19 +415,19 @@ public sealed class RecordManager(
                 logger.LogWarning(
                     exception,
                     "Entry {EntryId} failed verification and was not shown.",
-                    stored.Id
+                    decrypted.Id
                 );
             }
         }
         return entries;
     }
 
-    private static IngestResult IngestRefused(RecordError error)
+    private static PushSignedRecordsResult PushRefused(RecordError error)
     {
-        return new IngestResult(true, null, error, 0, 0);
+        return new PushSignedRecordsResult(true, null, error, 0, 0);
     }
 
-    private static async Task<Guid?> ExistingAsync(
+    private static async Task<Guid?> FindEntryIdAsync(
         SqlConnection connection,
         Guid patientId,
         string sourceKey
@@ -414,16 +439,16 @@ public sealed class RecordManager(
         );
     }
 
-    private async Task<byte[]> UnwrapAsync(SqlConnection connection, Guid patientId)
+    private async Task<byte[]> UnwrapPatientKeyAsync(SqlConnection connection, Guid patientId)
     {
-        byte[] wrappedDek = await connection.QuerySingleOrDefaultAsync<byte[]>(
+        byte[] wrappedDataKey = await connection.QuerySingleOrDefaultAsync<byte[]>(
             "SELECT wrapped_dek FROM patients WHERE id = @patientId",
             new { patientId }
         ) ?? throw new InvalidOperationException("Unknown patient.");
-        return await keyWrapService.UnwrapAsync(wrappedDek);
+        return await keyWrapService.UnwrapAsync(wrappedDataKey);
     }
 
-    private static string Aad(Guid patientId, Guid entryId)
+    private static string AssociatedData(Guid patientId, Guid entryId)
     {
         return $"{patientId}:{entryId}";
     }

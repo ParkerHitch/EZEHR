@@ -24,4 +24,4 @@ public sealed record SignedEntry(
 );
 
 /// <summary>A decrypted entry, not yet verified.</summary>
-public sealed record StoredEntry(Guid Id, string ResourceType, string Jws);
+public sealed record DecryptedEntry(Guid Id, string ResourceType, string Jws);

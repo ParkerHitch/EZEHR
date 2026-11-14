@@ -67,7 +67,10 @@ public sealed class LocalCertificateAuthorityService(X509Certificate2 root, Time
             )
         );
         request.CertificateExtensions.Add(
-            new X509EnhancedKeyUsageExtension([new Oid(CertificateValidator.ClientAuthOid)], false)
+            new X509EnhancedKeyUsageExtension(
+                [new Oid(CertificateValidator.ClientAuthenticationOid)],
+                false
+            )
         );
         request.CertificateExtensions.Add(
             new X509SubjectKeyIdentifierExtension(request.PublicKey, false)

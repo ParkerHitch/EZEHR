@@ -11,32 +11,50 @@ public static class RecordCipher
 {
     private const int TagSize = 16;
 
-    public static (byte[] Iv, byte[] Ciphertext) Encrypt(byte[] dek, string aad, string plaintext)
+    public static (byte[] Iv, byte[] Ciphertext) Encrypt(
+        byte[] dataKey,
+        string associatedData,
+        string plaintext
+    )
     {
-        return Encrypt(dek, aad, Encoding.UTF8.GetBytes(plaintext));
+        return Encrypt(dataKey, associatedData, Encoding.UTF8.GetBytes(plaintext));
     }
 
-    public static (byte[] Iv, byte[] Ciphertext) Encrypt(byte[] dek, string aad, byte[] plaintext)
+    public static (byte[] Iv, byte[] Ciphertext) Encrypt(
+        byte[] dataKey,
+        string associatedData,
+        byte[] plaintext
+    )
     {
         byte[] iv = RandomNumberGenerator.GetBytes(12);
         byte[] output = new byte[plaintext.Length + TagSize];
-        using AesGcm aes = new(dek, TagSize);
+        using AesGcm aes = new(dataKey, TagSize);
         aes.Encrypt(
             iv,
             plaintext,
             output.AsSpan(0, plaintext.Length),
             output.AsSpan(plaintext.Length),
-            Encoding.UTF8.GetBytes(aad)
+            Encoding.UTF8.GetBytes(associatedData)
         );
         return (iv, output);
     }
 
-    public static string Decrypt(byte[] dek, string aad, byte[] iv, byte[] ciphertext)
+    public static string Decrypt(
+        byte[] dataKey,
+        string associatedData,
+        byte[] iv,
+        byte[] ciphertext
+    )
     {
-        return Encoding.UTF8.GetString(DecryptBytes(dek, aad, iv, ciphertext));
+        return Encoding.UTF8.GetString(DecryptBytes(dataKey, associatedData, iv, ciphertext));
     }
 
-    public static byte[] DecryptBytes(byte[] dek, string aad, byte[] iv, byte[] ciphertext)
+    public static byte[] DecryptBytes(
+        byte[] dataKey,
+        string associatedData,
+        byte[] iv,
+        byte[] ciphertext
+    )
     {
         if (ciphertext.Length < TagSize)
         {
@@ -44,13 +62,13 @@ public static class RecordCipher
         }
         int length = ciphertext.Length - TagSize;
         byte[] plaintext = new byte[length];
-        using AesGcm aes = new(dek, TagSize);
+        using AesGcm aes = new(dataKey, TagSize);
         aes.Decrypt(
             iv,
             ciphertext.AsSpan(0, length),
             ciphertext.AsSpan(length),
             plaintext,
-            Encoding.UTF8.GetBytes(aad)
+            Encoding.UTF8.GetBytes(associatedData)
         );
         return plaintext;
     }

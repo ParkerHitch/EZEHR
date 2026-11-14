@@ -38,21 +38,21 @@ public class RecordManagerTests : IAsyncLifetime
     public async Task Put_is_idempotent()
     {
         Guid patient = await _records.CreatePatientAsync("Sam Taylor");
-        (bool Inserted, Guid Id) first = await _records.PutAsync(
+        (bool Stored, Guid EntryId) first = await _records.StoreEntryAsync(
             patient,
             "urn:provider:maple|Observation/egfr-1",
             "Observation",
             Jws
         );
-        (bool Inserted, Guid Id) second = await _records.PutAsync(
+        (bool Stored, Guid EntryId) second = await _records.StoreEntryAsync(
             patient,
             "urn:provider:maple|Observation/egfr-1",
             "Observation",
             Jws
         );
-        Assert.True(first.Inserted);
-        Assert.False(second.Inserted);
-        Assert.Equal(first.Id, second.Id);
+        Assert.True(first.Stored);
+        Assert.False(second.Stored);
+        Assert.Equal(first.EntryId, second.EntryId);
         Assert.Equal(1, await QueryAsync<int>("SELECT COUNT(*) FROM entries"));
     }
 
@@ -60,13 +60,15 @@ public class RecordManagerTests : IAsyncLifetime
     public async Task Concurrent_puts_store_once()
     {
         Guid patient = await _records.CreatePatientAsync("Sam Taylor");
-        (bool Inserted, Guid Id)[] results = await Task.WhenAll(
+        (bool Stored, Guid EntryId)[] results = await Task.WhenAll(
             Enumerable
                 .Range(0, 8)
-                .Select(_ => _records.PutAsync(patient, "a|Observation/1", "Observation", Jws))
+                .Select(_ =>
+                    _records.StoreEntryAsync(patient, "a|Observation/1", "Observation", Jws)
+                )
         );
-        Assert.Single(results, result => result.Inserted);
-        Assert.Single(results.Select(result => result.Id).Distinct());
+        Assert.Single(results, result => result.Stored);
+        Assert.Single(results.Select(result => result.EntryId).Distinct());
         Assert.Equal(1, await QueryAsync<int>("SELECT COUNT(*) FROM entries"));
     }
 
@@ -74,7 +76,7 @@ public class RecordManagerTests : IAsyncLifetime
     public async Task Ciphertext_has_no_plaintext()
     {
         Guid patient = await _records.CreatePatientAsync("Sam Taylor");
-        await _records.PutAsync(
+        await _records.StoreEntryAsync(
             patient,
             "urn:provider:maple|Observation/egfr-1",
             "Observation",
@@ -85,23 +87,24 @@ public class RecordManagerTests : IAsyncLifetime
         );
         Assert.DoesNotContain("resourceType", text);
         Assert.DoesNotContain("eyJ", text);
-        byte[] wrappedDek = await QueryAsync<byte[]>("SELECT wrapped_dek FROM patients");
-        Assert.True(wrappedDek.Length > 32);
+        byte[] wrappedDataKey = await QueryAsync<byte[]>("SELECT wrapped_dek FROM patients");
+        Assert.True(wrappedDataKey.Length > 32);
     }
 
     [Fact]
     public async Task Read_filters_by_type()
     {
         Guid patient = await _records.CreatePatientAsync("Sam Taylor");
-        await _records.PutAsync(patient, "a|Observation/1", "Observation", Jws + "1");
-        await _records.PutAsync(patient, "a|Condition/1", "Condition", Jws + "2");
+        await _records.StoreEntryAsync(patient, "a|Observation/1", "Observation", Jws + "1");
+        await _records.StoreEntryAsync(patient, "a|Condition/1", "Condition", Jws + "2");
         Guid other = await _records.CreatePatientAsync("Someone Else");
-        await _records.PutAsync(other, "a|Observation/1", "Observation", Jws + "3");
+        await _records.StoreEntryAsync(other, "a|Observation/1", "Observation", Jws + "3");
 
-        IReadOnlyList<StoredEntry> all = await _records.ReadAsync(patient, null);
+        IReadOnlyList<DecryptedEntry> all = await _records.DecryptEntriesAsync(patient, null);
         Assert.Equal(2, all.Count);
-        IReadOnlyList<StoredEntry> labs = await _records.ReadAsync(patient, resourceType =>
-            resourceType == "Observation"
+        IReadOnlyList<DecryptedEntry> labs = await _records.DecryptEntriesAsync(
+            patient,
+            resourceType => resourceType == "Observation"
         );
         Assert.Equal(Jws + "1", Assert.Single(labs).Jws);
     }
@@ -110,10 +113,10 @@ public class RecordManagerTests : IAsyncLifetime
     public async Task Read_unwraps_key_every_call()
     {
         Guid patient = await _records.CreatePatientAsync("Sam Taylor");
-        await _records.PutAsync(patient, "a|Observation/1", "Observation", Jws);
+        await _records.StoreEntryAsync(patient, "a|Observation/1", "Observation", Jws);
         int before = _keyWrap.Unwraps;
-        await _records.ReadAsync(patient, null);
-        await _records.ReadAsync(patient, null);
+        await _records.DecryptEntriesAsync(patient, null);
+        await _records.DecryptEntriesAsync(patient, null);
         Assert.Equal(before + 2, _keyWrap.Unwraps);
     }
 
@@ -122,7 +125,7 @@ public class RecordManagerTests : IAsyncLifetime
     {
         Guid first = await _records.CreatePatientAsync("A");
         Guid second = await _records.CreatePatientAsync("B");
-        await _records.PutAsync(first, "a|Observation/1", "Observation", Jws);
+        await _records.StoreEntryAsync(first, "a|Observation/1", "Observation", Jws);
         await using (SqlConnection connection = await _database.Db.OpenAsync())
         {
             await connection.ExecuteAsync(
@@ -130,14 +133,16 @@ public class RecordManagerTests : IAsyncLifetime
                 new { second }
             );
         }
-        await Assert.ThrowsAnyAsync<CryptographicException>(() => _records.ReadAsync(second, null));
+        await Assert.ThrowsAnyAsync<CryptographicException>(() =>
+            _records.DecryptEntriesAsync(second, null)
+        );
     }
 
     [Fact]
     public async Task Unknown_patient_throws()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _records.PutAsync(Guid.NewGuid(), "k", "Observation", Jws)
+            _records.StoreEntryAsync(Guid.NewGuid(), "k", "Observation", Jws)
         );
     }
 
@@ -150,15 +155,15 @@ public class RecordManagerTests : IAsyncLifetime
             get { return _unwraps; }
         }
 
-        public Task<byte[]> WrapAsync(byte[] dek)
+        public Task<byte[]> WrapAsync(byte[] dataKey)
         {
-            return inner.WrapAsync(dek);
+            return inner.WrapAsync(dataKey);
         }
 
-        public Task<byte[]> UnwrapAsync(byte[] wrapped)
+        public Task<byte[]> UnwrapAsync(byte[] wrappedKey)
         {
             Interlocked.Increment(ref _unwraps);
-            return inner.UnwrapAsync(wrapped);
+            return inner.UnwrapAsync(wrappedKey);
         }
     }
 }

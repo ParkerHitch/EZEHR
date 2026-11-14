@@ -5,10 +5,12 @@ public enum PartyKind
     Clinician,
     Provider,
     App,
-    Platform,
 }
 
-/// <summary>Full: clinicians read everything and write notes. LabsAndNotes: apps read lab Observations and write notes.</summary>
+/// <summary>
+/// Full: clinicians read everything, and write nothing (their organization's system writes, signed by it).
+/// LabsAndNotes: apps read lab Observations and write notes.
+/// </summary>
 public enum GrantScope
 {
     Full,
@@ -50,11 +52,12 @@ public enum DenyReason
     WrongPartyKind,
 }
 
+/// <summary>What a caller asked to do with a patient's record. Named after the network endpoints, and logged as-is.</summary>
 public enum AccessAction
 {
-    ReadRecord,
-    ReadLabs,
-    WriteNote,
+    ReadFullRecord,
+    ReadEgfrLabs,
+    WriteSignedNote,
 }
 
 /// <summary>Expected failures when sharing: a share code that can't be used, or a grant that can't be changed.</summary>
@@ -81,6 +84,6 @@ public enum RecordError
     PatientNotLinked,
     BadSignature,
     SignerMismatch,
-    ResourceIdRequired,
+    MissingOrInvalidResourceId,
     NotACommunication,
 }

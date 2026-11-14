@@ -46,15 +46,16 @@ Every read or write goes through **one access check** that writes one audit even
 - **EZCA issues every organization and app certificate.** The broker's certificate is deliberately self-made. `LocalCertificateAuthorityService` is only for tests and the fallback.
 - Cast:
   - patient **Sam Taylor**
-  - clinician **Dr. Rivera** at **Riverside Primary Care**
-  - providers **Lakeside Urgent Care**, **Northwind Workplace Health**, **Maple Street Family Medicine**
+  - clinician **Dr. Rivera** at **Riverside Primary Care**. Riverside is also a provider on the network: its system pushes the visit documentation.
+  - providers **Lakeside Urgent Care**, **Northwind Workplace Health**, **Maple Street Family Medicine**, **Riverside Primary Care**
+- **People read; organizations write, and sign what they write.** Clinician pages are read-only. See `docs/auth-flows.md` section 1, "Who writes, who reads".
   - app **Kidney Check**
 - Exact copy lives in `Models/Copy.cs`:
 
   | Name | Text |
   |---|---|
   | `SignedBy(org)` | `Signed by {org} ✓` |
-  | `WrittenBy(name, org)` | `Written by {name}, {org} · signed by EZEHR ✓` |
+  | `WrittenBy(name, org)` | `Written by {name} · signed by {org} ✓` |
   | `ApprovePrompt(name, org, time)` | `Give {name} at {org} access until {time}?` |
   | `BrokerBlocked(purpose)` | `Blocked: unverified requester claimed {purpose}` |
   | `AppGrantLine(app, what, date)` | `{app} · {what} · you allowed this {date} · Revoke` |
@@ -135,13 +136,12 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - `urn:entra:{tid}:{oid}` for clinicians
   - `urn:provider:{slug}` for providers
   - `urn:app:kidney-check` for the app
-  - `urn:platform:ezehr` for the platform
-- `enum GrantScope { Full, LabsAndNotes }`. `Full` covers clinicians reading everything and writing notes. `LabsAndNotes` covers apps reading lab Observations and writing notes.
+- `enum GrantScope { Full, LabsAndNotes }`. `Full` covers clinicians reading everything; it allows no writes. `LabsAndNotes` covers apps reading lab Observations and writing notes.
 - `enum GrantStatus { Pending, Active, Denied, Revoked, Expired }`
 - `record Grant(Guid Id, Guid PatientId, Party Grantee, GrantScope Scope, string Purpose, GrantStatus Status, int? DurationMinutes, DateTimeOffset CreatedAt, DateTimeOffset? ApprovedAt, DateTimeOffset? ExpiresAt, DateTimeOffset? RevokedAt)`. A `null` `ExpiresAt` means ongoing; only app grants are ongoing.
 - `enum ShareDuration { FiveMinutes, OneHour, FourHours, EndOfDay }` and `record ShareOffer(Guid Id, Guid PatientId, string Code, ShareDuration Duration, DateTimeOffset OfferExpiresAt, Guid? RedeemedGrantId)`
 - `enum DenyReason { NoCertificate, UntrustedCertificate, CertificateExpired, NotSignedIn, ShiftEnded, NoGrant, GrantPending, GrantExpired, GrantRevoked, ScopeDenied, WrongPartyKind }`. `WrongPartyKind` is a verified caller of the wrong kind (an app creating an invite).
-- `enum AccessAction { ReadRecord, ReadLabs, WriteNote }`
+- `enum AccessAction { ReadFullRecord, ReadEgfrLabs, WriteSignedNote }`, named after the network endpoints and logged as-is.
 - `abstract record Caller` with two cases:
   - `sealed record VerifiedCaller(Party Party, DateTimeOffset? SessionStartedAt) : Caller`
   - `sealed record UnverifiedCaller(DenyReason Reason) : Caller`
@@ -168,7 +168,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - **Dapper mapping:** positional records map through their constructor, so `SELECT` with aliases that match the parameter names, in parameter order (`patient_id AS PatientId`). Rows that contain a `Party` are read into a private flat row record, then converted.
   - **Single-use operations are a conditional `UPDATE`, not a read followed by a write.** Redeeming a share offer runs `UPDATE share_offers SET redeemed_grant_id = @grantId WHERE code = @code AND redeemed_grant_id IS NULL AND offer_expires_at > @now`. It must affect exactly 1 row, in the same transaction as the grant insert. Invites work the same way. This is what makes Review Focus 2 hold under a double submit.
   - Open one connection per operation (`await using SqlConnection connection = await db.OpenAsync()`); pooling makes this cheap. Never share a `SqlConnection` between requests. An operation that must commit with its audit event passes its connection and transaction to `AuditManager.AppendAsync`.
-  - Values a caller chooses are bounded before they reach a column: FHIR resource ids over 64 characters are refused (`ResourceIdRequired`), and a claimed purpose is cut to 200 characters.
+  - Values a caller chooses are bounded before they reach a column: FHIR resource ids over 64 characters are refused (`MissingOrInvalidResourceId`), and a claimed purpose is cut to 200 characters.
 
 ---
 
@@ -201,11 +201,11 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - `lakeside.providers.ezehr`
     - `northwind.providers.ezehr`
     - `maple.providers.ezehr`
+    - `riverside.providers.ezehr`
     - `kidney-check.apps.ezehr`
-    - `platform.ezehr`
   - Download the root and issuing CA certificates to `.pki/`.
   - Get `CAID` and `TemplateID` with `az login`, then `curl -H "Authorization: Bearer $(az account get-access-token --query accessToken -o tsv)" https://portal.ezca.io/api/CA/GetAvailableSSLCAs`.
-  - All certificates, including the platform's, are issued from a laptop with Task 3's tool. The server never calls EZCA at runtime, so the managed identity needs no EZCA role.
+  - All certificates are issued from a laptop with Task 3's tool. The server never calls EZCA at runtime, so the managed identity needs no EZCA role.
 - [ ] **EZCA probe (20 min):** with the `EZCAClient` SDK (or curl), request a 1-day certificate for `lakeside.providers.ezehr` from an ECDSA P-256 CSR, with EKU `1.3.6.1.5.5.7.3.2`. Record in `docs/ezca-notes.md`:
   - whether EC was accepted (if not, use RSA 2048 everywhere)
   - the response fields
@@ -247,7 +247,6 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - `TrustedTenants: Dictionary<string,string>`, `AzureAd`
     - `CertificateAuthority.Mode: "Ezca" | "Local"`, `Ezca { CaId, TemplateId }`
     - `TrustAnchorsPemPath`, `IntermediatesPemPath`. These are public CA certificates, committed under `Security/Trust/`.
-    - `PlatformCertPfxBase64`. On App Service it's a Key Vault secret reference, never committed.
     - `KeyWrapper.Mode: "KeyVault" | "Local"`, `KeyVault.KeyId`, `LocalKekBase64`
     - `TimeZone`
   - `sealed class Db(IConfiguration configuration)`, registered as a singleton; it reads `AZURE_SQL_CONNECTIONSTRING` (`AppOptions.ConnectionStringKey`):
@@ -287,8 +286,8 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - Every certificate carries the clientAuth EKU (`1.3.6.1.5.5.7.3.2`).
     - The CSR's own subject is ignored; `subjectName` is used.
   - `sealed class LocalCertificateAuthorityService(X509Certificate2 root, TimeProvider time) : ICertificateAuthorityService`, with `static X509Certificate2 CreateRoot(TimeProvider)`. ECDSA P-256 root; CN = `subjectName`; `notBefore` = now − 5 min. Built with `CertificateRequest.LoadSigningRequestPem` and `CertificateRequest.Create`.
-  - `static class CertificateValidator` with `CertCheck Validate(X509Certificate2 leaf, IEnumerable<X509Certificate2>? extra, DateTimeOffset at, TrustAnchors trustAnchors)` and `TrustAnchors LoadTrustAnchors(AppOptions)`. `record TrustAnchors(IReadOnlyList<X509Certificate2> Roots, IReadOnlyList<X509Certificate2> Intermediates)`; the managers that need it load it into a field from `AppOptions`.
-    - `CertCheck` is `(bool Ok, DenyReason? Reason)`.
+  - `static class CertificateValidator` with `CertificateCheck Validate(X509Certificate2 leaf, IEnumerable<X509Certificate2>? extra, DateTimeOffset at, TrustAnchors trustAnchors)` and `TrustAnchors LoadTrustAnchors(AppOptions)`. `record TrustAnchors(IReadOnlyList<X509Certificate2> Roots, IReadOnlyList<X509Certificate2> Intermediates)`; the managers that need it load it into a field from `AppOptions`.
+    - `CertificateCheck` is `(bool Valid, DenyReason? Reason)`.
     - Uses `X509Chain` with `ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust`, revocation mode `NoCheck`, and `VerificationTime = at + 2 min` so 2 minutes of skew are tolerated.
     - Requires the clientAuth EKU.
     - An unknown root is `UntrustedCertificate`; outside validity is `CertificateExpired`.
@@ -299,10 +298,10 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     | `lakeside.providers.ezehr` | Provider `urn:provider:lakeside` "Lakeside Urgent Care" |
     | `northwind.providers.ezehr` | Provider `urn:provider:northwind` "Northwind Workplace Health" |
     | `maple.providers.ezehr` | Provider `urn:provider:maple` "Maple Street Family Medicine" |
+    | `riverside.providers.ezehr` | Provider `urn:provider:riverside` "Riverside Primary Care" |
     | `kidney-check.apps.ezehr` | App `urn:app:kidney-check` "Kidney Check" |
-    | `platform.ezehr` | Platform `urn:platform:ezehr` "EZEHR" |
 
-    `Party? Resolve(X509Certificate2 leaf)` returns `null` for an unknown CN.
+    `Party? FindByCertificate(X509Certificate2 leaf)` returns `null` for an unknown CN.
   - `static class RecordSigner`, with `string Sign(JsonElement resource, X509Certificate2 certWithKey, IReadOnlyList<X509Certificate2> chain, DateTimeOffset iat)`.
     - Produces a compact JWS (RFC 7515) with protected header `{ "alg": "ES256" | "RS256", "x5c": [...], "iat": unix }`.
     - The payload is the UTF-8 JSON of the resource.
@@ -310,7 +309,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - `static class RecordVerifier`, with `VerifiedEntry Verify(Guid entryId, string jws, TrustAnchors trustAnchors)`.
     - Verifies the signature with the `x5c` leaf, then checks the chain **at the header `iat`**, then resolves the signer.
     - Throws `RecordSignatureException` on any failure.
-    - `WrittenBy` = `sender.display` when the resource is a platform-signed `Communication`.
+    - `WrittenBy` = `sender.display` when the resource is a `Communication` (the author, as the signing organization states it).
 
 - [ ] **Write failing tests:**
   - `LocalCa_uses_subjectName_not_csr_subject`: CSR `CN=Mallory` with subject name `lakeside.providers.ezehr` gives a leaf with CN `lakeside.providers.ezehr` and the clientAuth EKU.
@@ -346,7 +345,6 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - [ ] Run (FAIL), implement, run (PASS).
 - [ ] Run `certs issue --ca ezca`, then check each organization certificate with `openssl verify`. Expected: `OK`.
 - [ ] Copy `anchors.pem` and `intermediates.pem` to `Security/Trust/`. They're public, so commit them.
-- [ ] Store `platform.pfx`, base64-encoded, as Key Vault secret `platform-cert`. Point the App Service setting `PlatformCertPfxBase64` at it with a Key Vault reference, and grant the managed identity **Key Vault Secrets User**.
 - [ ] Commit `feat: EZCA certificate authority and org certificate tool`.
 
 ### Task 4: Encryption at rest and the record store (App lead, 7:30–9:00 PM)
@@ -363,13 +361,13 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - `aad` = `{patientId}:{entryId}`.
   - `sealed class RecordManager` (takes `Db`, `IKeyWrapService` and, from Task 6, `AccessManager`):
     - `Task<byte[]> CreatePatientKeyAsync()`: returns the wrapped key.
-    - `Task<(bool Inserted, Guid Id)> PutAsync(Guid patientId, string sourceKey, string resourceType, string jws)`: idempotent on `sourceKey`. It inserts with `WHERE NOT EXISTS`, and the unique index is the backstop: a race that hits `Db.IsUniqueViolation` also returns `Inserted=false`.
-    - `Task<IReadOnlyList<(Guid Id, string ResourceType, string Jws)>> ReadAsync(Guid patientId, Func<string,bool>? resourceTypeFilter)`: unwraps the patient key **on every call**, so every read is a Key Vault operation. Only `AccessManager`-guarded code in `RecordManager` and the patient's own pages call it.
+    - `Task<(bool Stored, Guid EntryId)> StoreEntryAsync(Guid patientId, string sourceKey, string resourceType, string jws)`: idempotent on `sourceKey`. It inserts with `WHERE NOT EXISTS`, and the unique index is the backstop: a race that hits `Db.IsUniqueViolation` also returns `Stored=false`.
+    - `Task<IReadOnlyList<DecryptedEntry>> DecryptEntriesAsync(Guid patientId, Func<string,bool>? resourceTypeFilter)`: unwraps the patient key **on every call**, so every read is a Key Vault operation. Only `AccessManager`-guarded code in `RecordManager` and the patient's own pages call it.
 
 - [ ] **Write failing tests** (`RecordManagerTests` use `SqlServer`):
   - `Cipher_roundtrip`, `Cipher_wrong_aad_throws`, `Cipher_tamper_throws`.
   - `LocalWrapper_roundtrip`.
-  - **(Review Focus 4)** `Put_is_idempotent`: a second identical put returns `Inserted=false`, with 1 row.
+  - **(Review Focus 4)** `Put_is_idempotent`: a second identical put returns `Stored=false`, with 1 row.
   - `Ciphertext_has_no_plaintext`: the raw column doesn't contain `"resourceType"`.
   - `Read_filters_by_type`.
 - [ ] Run (FAIL), implement, run (PASS). Smoke-test `KeyVaultKeyWrapService` once against the real vault, from a scratch console command.
@@ -390,17 +388,17 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - validation failure → `UnverifiedCaller(reason)`
     - a valid chain but an unknown CN → `UnverifiedCaller(UntrustedCertificate)`
     - otherwise → `VerifiedCaller(party, null)`
-  - Endpoints (`NetworkController`, route `/api/network`). Each action gets the certificate, turns it into a `Caller`, calls one manager method (`InviteManager.CreateAsync` or `RecordManager.IngestAsync`), and maps the result:
-    - `POST /invites { providerPatientId }` returns `201 { code, url }`. Providers only (403 `WrongPartyKind` otherwise). Invites expire in 7 days.
-    - `POST /records { providerPatientId, entries: string[] }` returns `{ inserted, skipped }`. Providers only.
+  - Endpoints (`NetworkController`, route `/api/network`). Each action gets the certificate, turns it into a `Caller`, calls one manager method of the same name (`InviteManager.CreateEnrollmentInviteAsync` or `RecordManager.PushSignedRecordsAsync`), and maps the result:
+    - `POST /create-enrollment-invite { providerPatientId }` (`CreateEnrollmentInviteAsync`) returns `201 { inviteCode, enrollmentUrl }`. Providers only (403 `WrongPartyKind` otherwise). Invites expire in 7 days.
+    - `POST /push-signed-records { providerPatientId, signedEntries: string[] }` (`PushSignedRecordsAsync`) returns `{ stored, alreadyStored }`. Providers only.
       - No `provider_links` row returns 409.
       - Every JWS must verify (Task 2), and its signer must equal the caller; otherwise the request returns 400 and nothing is stored.
-      - It writes one `Ingest` audit event for the patient.
+      - It writes one `PushSignedRecords` audit event for the patient.
     - Request models carry `[Required]`, so a missing field is the automatic 400. Unverified callers get **401 `{ error }`**, and **nothing is logged** for ingest, because there is no target patient yet. Patient-targeted endpoints log through the gate (Task 6).
 
 - [ ] **Write failing tests:**
-  - `Ingest_stores_signed_entries`: 2 entries give `inserted=2`.
-  - **(Review Focus 4)** `Ingest_twice_is_idempotent`: `{inserted:0, skipped:2}`.
+  - `Push_stores_signed_entries`: 2 entries give `stored=2`.
+  - **(Review Focus 4)** `Push_twice_is_idempotent`: `{stored:0, alreadyStored:2}`.
   - `Ingest_rejects_entry_signed_by_other_provider`: 400, nothing stored.
   - `Ingest_unlinked_patient_409`.
   - `No_certificate_401` and `Self_signed_certificate_401` (`broker.pfx`).
@@ -418,14 +416,14 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Produces (all async, because each call goes to Azure SQL over the network; every class takes `Db`):
   - `AuditManager`: `Task<AuditEvent> AppendAsync(Guid patientId, Party? actor, string action, string? claimedPurpose, bool granted, DenyReason? reason)` and `Task<IReadOnlyList<AuditEvent>> ListAsync(Guid patientId, long afterId = 0)`.
   - `GrantManager`:
-    - `Task<ShareOffer> CreateOfferAsync(Guid patientId, ShareDuration d)`: an 8-character code, valid 10 minutes.
-    - `Task<GrantResult> RedeemAsync(string code, Party clinician)`: claims the offer with the conditional `UPDATE` (see Storage rules), creates a `Pending` grant and appends a `RedeemOffer` event, all in one transaction. Fails with `GrantError.OfferUsed | OfferExpired | OfferUnknown`.
-    - `Task<GrantResult> DecideAsync(Guid patientId, Guid grantId, bool approve)` (fails with `GrantUnknown` or `GrantNotPending`): approval sets `ApprovedAt` and `ExpiresAt` from the duration; `EndOfDay` is 23:59:59 in `AppOptions.TimeZone`.
+    - `Task<ShareOffer> CreateShareOfferAsync(Guid patientId, ShareDuration duration)`: an 8-character code, valid 10 minutes.
+    - `Task<GrantResult> RedeemShareCodeAsync(string code, Party clinician)`: claims the offer with the conditional `UPDATE` (see Storage rules), creates a `Pending` grant and appends a `RedeemShareCode` event, all in one transaction. Fails with `GrantError.OfferUsed | OfferExpired | OfferUnknown`.
+    - `Task<GrantResult> ApproveOrDenyAsync(Guid patientId, Guid grantId, bool approve)` (fails with `GrantUnknown` or `GrantNotPending`): approval sets `ApprovedAt` and `ExpiresAt` from the duration; `EndOfDay` is 23:59:59 in `AppOptions.TimeZone`.
     - `Task<GrantResult> RevokeAsync(Guid patientId, Guid grantId)`.
-    - `static NewCode()`, `NormalizeCode(string)` and `FormatCode(string)` (`XXXX-XXXX`): the one place codes are made and shown. Invites use them too.
+    - `static GenerateCode()`, `NormalizeCode(string)` and `FormatCode(string)` (`XXXX-XXXX`): the one place codes are made and shown. Invites use them too.
     - `record GrantResult(bool Succeeded, Grant? Grant, GrantError? Error)`.
     - `Task<Grant> CreateAppGrantAsync(Guid patientId, Party app)`: `LabsAndNotes`, ongoing, `Active`.
-    - `Task<IReadOnlyList<Grant>> ForPatientAsync(Guid patientId)` and `Task<Grant?> FindAsync(Guid grantId)`.
+    - `Task<IReadOnlyList<Grant>> ListForPatientAsync(Guid patientId)` and `Task<Grant?> FindAsync(Guid grantId)`.
   - `AccessManager`: `Task<AccessDecision> AuthorizeAsync(Guid patientId, AccessAction action, Caller caller, string? claimedPurpose)`, where `AccessDecision` is `(bool Allowed, Grant? Grant, DenyReason? Reason)`.
     - It writes **exactly one** audit event, either way.
     - Check order:
@@ -435,12 +433,12 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
       4. `Pending` → `GrantPending`.
       5. `Revoked` → `GrantRevoked`.
       6. Past `ExpiresAt` → mark `Expired`, then `GrantExpired`.
-      7. `LabsAndNotes` used for `ReadRecord` → `ScopeDenied`.
+      7. The scope doesn't cover the action → `ScopeDenied`. `Full` allows `ReadFullRecord` and `ReadEgfrLabs` only (clinicians never write); `LabsAndNotes` allows `ReadEgfrLabs` and `WriteSignedNote`.
       8. Otherwise, allowed.
-  - Network endpoints added here, all through the gate (`RecordManager.ReadLabsAsync`, `ReadRecordAsync`, `WriteNoteAsync`, each returning a result record with `Allowed` and `Reason`):
-    - `GET /patients/{patientId}/labs`, for apps (`ReadLabs`). Returns the verified eGFR Observations, LOINC `98979-8`.
-    - `POST /patients/{patientId}/notes { jws }` (`WriteNote`). The signer must equal the caller. Idempotent by `sourceKey`.
-    - `GET /patients/{patientId}/record?purpose=...` (`ReadRecord`), the broker's target.
+  - Network endpoints added here, all through the gate (`RecordManager.ReadEgfrLabsAsync`, `ReadFullRecordAsync`, `WriteSignedNoteAsync`, each returning a result record with `Allowed` and `Reason`):
+    - `GET /patients/{patientId}/read-egfr-labs` (`ReadEgfrLabsAsync`), for apps (`ReadEgfrLabs`). Returns the verified eGFR Observations, LOINC `98979-8`.
+    - `POST /patients/{patientId}/write-signed-note { jws }` (`WriteSignedNoteAsync`, `WriteSignedNote`). The signer must equal the caller. Idempotent by `sourceKey`.
+    - `GET /patients/{patientId}/read-full-record?purpose=...` (`ReadFullRecordAsync`, `ReadFullRecord`), the broker's target.
     - Denials return 401 for certificate reasons, 403 for grant reasons. That mapping is one private method in `NetworkController`.
 
 - [ ] **Write failing tests** (with a fake `TimeProvider`, and `SqlServer`):
@@ -468,10 +466,10 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Produces:
   - Cookie scheme `"Patient"`: 12 h, HttpOnly, Secure, SameSite=Lax, and the claim `patient_id`. Policy `"Patient"`. `AuthorizeFolder("/Patient", "Patient")`, with Enroll and SignIn anonymous.
   - JSON endpoints (Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`.
-    - `POST /api/patient/passkey/register/options { inviteCode }`. Discoverable credential, `UserVerification = Required`, attestation `none`. An invalid or used invite returns 400.
-    - `POST /api/patient/passkey/register/verify { inviteCode, attestation, kidneyCheckOptIn }`. It creates the patient (with the wrapped key), the credential and the provider link, redeems the invite, creates the Kidney Check grant **only if** opted in, and signs the patient in.
-    - `POST /api/patient/passkey/signin/options` (usernameless) and `/signin/verify`.
-    - `POST /api/patient/invites/redeem { code }` (signed in): adds another provider link.
+    - `POST /api/patient/passkey/create-registration-options { inviteCode }` (`CreateRegistrationOptionsAsync`). Discoverable credential, `UserVerification = Required`, attestation `none`. An invalid or used invite returns 400.
+    - `POST /api/patient/passkey/complete-registration { inviteCode, attestation, kidneyCheckOptIn }` (`CompleteRegistrationAsync`). It creates the patient (with the wrapped key), the credential and the provider link, redeems the invite, creates the Kidney Check grant **only if** opted in, and signs the patient in.
+    - `POST /api/patient/passkey/create-sign-in-options` (usernameless, `CreateSignInOptionsAsync`) and `/complete-sign-in` (`CompleteSignInAsync`).
+    - `POST /api/patient/redeem-invite { inviteCode }` (signed in, `RedeemInviteAsync`): adds another provider link.
   - `passkey.js`: about 40 lines. It uses `PublicKeyCredential.parseCreationOptionsFromJSON`, `parseRequestOptionsFromJSON` and `credential.toJSON()`, with base64url helpers as a fallback for older browsers.
 - The Enroll page shows `Copy.KidneyOptIn` with a checkbox, plus one "Create passkey" button. The SignIn page has one "Sign in with passkey" button.
 
@@ -517,15 +515,15 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 
 ### Task 9: Provider simulator and seed data (App lead, 11:00 PM–1:00 AM)
 
-**Files:** Create `EZEHR.Tools/Commands/ProviderCommand.cs`, `EZEHR.Tools/Net/NetworkClient.cs`, `EZEHR.Tools/seed/{lakeside,northwind,maple}.json`.
+**Files:** Create `EZEHR.Tools/Commands/ProviderCommand.cs`, `EZEHR.Tools/Net/NetworkClient.cs`, `EZEHR.Tools/seed/{lakeside,northwind,maple,riverside}.json`.
 
 **Interfaces:**
 - Consumes: `RecordSigner` (Task 2); the network endpoints (Task 5). Build against the Interfaces block until Task 5 merges.
 - Produces:
   - `NetworkClient.Create(string baseUrl, string pfxPath)`: an `HttpClient` with the client certificate, `SslProtocols = Tls12` (TLS renegotiation needs 1.2), HTTP/1.1, and `Expect100Continue = true`.
-  - `ezehr-tools provider invite <lakeside|northwind|maple> <providerPatientId>` prints the enrollment URL.
+  - `ezehr-tools provider invite <lakeside|northwind|maple|riverside> <providerPatientId>` prints the enrollment URL.
   - `ezehr-tools provider push <provider> <providerPatientId>` signs each resource in `seed/<provider>.json` with `iat` = the resource's clinical date at 12:00 UTC. It POSTs one request per encounter date, so each request stays well under 100 KB.
-- **Seed data** (FHIR R4). Patient Sam Taylor, born 1984-05-17. Provider patient IDs: `LUC-20417`, `NWH-88213`, `MSF-0932`.
+- **Seed data** (FHIR R4). Patient Sam Taylor, born 1984-05-17. Provider patient IDs: `LUC-20417`, `NWH-88213`, `MSF-0932`, and `RPC-1107` for Riverside.
 
   | Provider | Date | Resources |
   |---|---|---|
@@ -536,13 +534,19 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   | Lakeside Urgent Care | 2026-09-15 | Encounter (back pain follow-up); Observation eGFR **63** |
 
   - eGFR uses LOINC `98979-8`, unit `mL/min/1.73m2`, with a reference range whose low is 60. That's 13 resources in total.
+  - **`seed/riverside.json`** is the visit documentation, pushed **after** Dr. Rivera's visit, not at setup. Dated the demo day:
+    - Encounter (new-patient visit)
+    - `Communication` with `sender.display` = "Dr. Rivera" and payload "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed."
+    - `ServiceRequest` "Referral to nephrology", `requester.display` = "Dr. Rivera", status `active`
+    - All 3 are signed with `riverside.pfx`. They are not among the 13 above.
 
 - [ ] Manual check on the deployed site:
-  1. Create three invites.
+  1. Create three invites (plus a Riverside invite for the visit).
   2. Enroll on the phone with the first invite (opt in to Kidney Check), then redeem the other two.
   3. Push all three providers.
+  4. Later, redeem the Riverside invite and push `riverside`: 16 entries, and the plan shows `Copy.WrittenBy("Dr. Rivera", "Riverside Primary Care")`.
 
-  Expected: Sam's record holds 13 entries. **(Review Focus 4)** Pushing again gives `inserted:0`.
+  Expected: Sam's record holds 13 entries. **(Review Focus 4)** Pushing again gives `stored:0`.
 - [ ] Commit `feat: provider simulator and seed data`.
 
 ### Task 10: Kidney Check example app (App lead, 1:00–2:00 AM)
@@ -550,14 +554,14 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 **Files:** Create `EZEHR.Tools/Commands/KidneyCheckCommand.cs` and `Services/KidneyRule.cs`. Test: `EZEHR.Tests/Services/KidneyRuleTests.cs`.
 
 **Interfaces:**
-- Consumes: `NetworkClient` (Task 9); `GET /labs` and `POST /notes` (Task 6); `RecordSigner`.
+- Consumes: `NetworkClient` (Task 9); `GET read-egfr-labs` and `POST write-signed-note` (Task 6); `RecordSigner`.
 - Produces:
   - `static KidneyResult KidneyRule.Evaluate(IReadOnlyList<(DateOnly Date, double Egfr, string Source)> points)`, returning `(bool Flag, int PercentDrop, int ProviderCount)`.
     - It flags when there are at least 2 points from at least 2 sources and the drop from the earliest to the latest point is more than 25%.
     - `PercentDrop` is rounded.
     - **That's the whole rule. No clinical guidelines.**
   - `ezehr-tools kidney-check run <patientId>` connects with `kidney-check.pfx` and GETs the labs.
-    - When the rule flags, it POSTs a FHIR `Flag`: `code.text` = `Copy.KidneyNote(...)`, `id` = `kidney-check`, signed with the app's certificate.
+    - When the rule flags, it POSTs a FHIR `Communication` (the endpoint accepts only that type): `payload[0].contentString` = `Copy.KidneyNote(...)`, `sender.display` = "Kidney Check", `id` = `kidney-check`, signed with the app's certificate.
     - On 403, it prints that access was revoked.
 
 - [ ] **Write failing tests:**
@@ -575,13 +579,13 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 
 These are checked manually on a phone. The UI isn't unit-tested, by choice; testing time goes to the access check and the crypto.
 - [ ] **Home:** the combined timeline grouped by date.
-  - Each entry shows `Copy.SignedBy(org)`, or `Copy.WrittenBy(...)` for clinician notes.
-  - The Kidney Check Flag shows as a card at the top.
+  - Each entry shows `Copy.SignedBy(org)`, or `Copy.WrittenBy(...)` when the entry names an author (Dr. Rivera's plan, signed by Riverside).
+  - The Kidney Check note shows as a card at the top.
   - An "Export my record" button (Task 14).
 - [ ] **Share:**
   - Pick a duration (5 min, 1 h, 4 h, end of day). The page shows the code as `XXXX-XXXX` in large type, with a QRCoder PNG of the code.
   - The page polls `_ActivityPartial` every 2 s with htmx (`hx-get`, `hx-trigger="every 2s"`).
-  - A pending request shows a full-screen `Copy.ApprovePrompt(...)` with Approve and Deny buttons, which post to `GrantManager.Decide`.
+  - A pending request shows a full-screen `Copy.ApprovePrompt(...)` with Approve and Deny buttons, which post to `GrantManager.ApproveOrDenyAsync`.
 - [ ] **Activity:** a live list, in plain language:
   - `"Dr. Rivera, Riverside Primary Care, viewed your record · 2:14 PM"`
   - `"Kidney Check read your lab results"`
@@ -608,10 +612,10 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 - [ ] **Redeem:** a code field. On submit it calls `GrantManager.Redeem` with the clinician `Party` and goes to Wait.
 - [ ] **Wait:** polls the grant status with htmx every 2 s, showing "Waiting for Sam to approve…", then goes to Record.
 - [ ] **Record:**
-  - Every load calls `AccessManager.AuthorizeAsync(ReadRecord)`.
+  - Every load calls `RecordManager.ReadFullRecordAsync` (`AccessAction.ReadFullRecord`).
   - Header: "Sam Taylor · access until 5:00 PM".
   - The combined timeline with badges, and the Kidney Check note at the top.
-  - A **note form** whose default text is "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed." It saves a FHIR `Communication` (`sender.display` = "Dr. Rivera, Riverside Primary Care", `sender.identifier` = the clinician's `SubjectUri`), signed with the **platform** certificate, through `AccessManager.AuthorizeAsync(WriteNote)`.
+  - **Read-only.** There is no note form: Dr. Rivera's plan and referral arrive from Riverside's system (`provider push riverside`, Task 9).
   - Any `GrantExpired`, `GrantRevoked`, `NoGrant` or `ShiftEnded` result redirects to AccessEnded.
 - [ ] **AccessEnded:** shows `Copy.AccessEnded`. A `ShiftEnded` result also shows a "Sign in again" link.
 - [ ] Commit `feat: clinician pages and share flow`.
@@ -620,7 +624,7 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 
 **Files:** Create `EZEHR.Tools/Commands/BrokerCommand.cs`.
 
-- [ ] `ezehr-tools broker request <patientId> --cert none|self` calls `GET /api/network/patients/{id}/record?purpose=treatment`. With `self` it uses `.pki/broker.pfx`. It prints the status code and body verbatim, in large console text for the video.
+- [ ] `ezehr-tools broker request <patientId> --cert none|self` calls `GET /api/network/patients/{id}/read-full-record?purpose=treatment`. With `self` it uses `.pki/broker.pfx`. It prints the status code and body verbatim, in large console text for the video.
 - [ ] Manual check: run both modes. Expected: two 401s, and two red `Copy.BrokerBlocked("treatment")` lines appear live on Sam's phone. The integration test from Task 6 covers the server side.
 - [ ] Commit `feat: unverified broker demo`.
 
@@ -645,7 +649,7 @@ The download is named `sam-taylor-record.json`.
 - [ ] **Demo reset script** (`EZEHR.Tools`, command `demo reset`):
   1. Clear the production database with `Db.DeleteAllDataAsync()`. The tool connects straight to Azure SQL as the teammate running it (`az login`, then `Authentication=Active Directory Default`), so that laptop's IP must be in the server firewall. The site has no reset endpoint.
   2. Create 3 invites and print the URLs.
-  3. After phone enrollment, push all 3 providers and run Kidney Check.
+  3. After phone enrollment, push all 3 providers and run Kidney Check. Riverside's invite is redeemed and its push run live, after the visit scene.
 
   Rehearse it twice. It must take under 5 minutes.
 - [ ] **Video plan (about 5:00):**
@@ -654,7 +658,7 @@ The download is named `sam-taylor-record.json`.
   |---|---|
   | 0:00–0:35 | The problem: records are scattered, so slow problems are missed, and Epic blocked "treatment" requests it couldn't trust (Particle, 2024). Pitch line. |
   | 0:35–1:20 | Sam's phone: passkey sign-in; the combined timeline with "Signed by" badges; the Kidney Check note and its revocable grant ("apps on an open platform"). |
-  | 1:20–2:30 | Share: Sam's code; Dr. Rivera signs in to Entra by **tapping the security key**; enters the code; Sam approves; the combined record; Dr. Rivera writes a note. |
+  | 1:20–2:30 | Share: Sam's code; Dr. Rivera signs in to Entra by **tapping the security key**; enters the code; Sam approves; the combined record (read-only). Then Riverside's system pushes the plan and referral: "Written by Dr. Rivera · signed by Riverside Primary Care ✓" appears on Sam's phone. |
   | 2:30–3:10 | The broker: no certificate, then a self-made certificate; both blocked; red lines appear live on Sam's phone. |
   | 3:10–3:40 | Sam revokes; the doctor's page shows "access ended"; the export shows signed provenance. |
   | 3:40–4:40 | Architecture slide: people use passkeys and security keys; organizations and apps use **EZCA certificates** over mutual TLS; one access check; Key Vault envelope encryption; no standing access, every attempt logged. |

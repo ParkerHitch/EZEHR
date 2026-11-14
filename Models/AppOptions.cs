@@ -24,9 +24,6 @@ public sealed class AppOptions
     /// <summary>Public EZCA issuing certificate(s), PEM, committed under Security/Trust/.</summary>
     public string IntermediatesPemPath { get; set; } = "Security/Trust/intermediates.pem";
 
-    /// <summary>The platform's own certificate with key (signs clinician notes). On App Service: a Key Vault reference.</summary>
-    public string? PlatformCertPfxBase64 { get; set; }
-
     /// <summary>
     /// Header that carries the TLS client certificate from a fronting proxy ("X-ARR-ClientCert" on App Service).
     /// Leave unset unless a proxy that terminates mutual TLS and overwrites this header sits in front of the app:

@@ -13,21 +13,24 @@ namespace EZEHR.Managers;
 /// </summary>
 public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions> options)
 {
-    public static readonly TimeSpan Lifetime = TimeSpan.FromDays(7);
+    public static readonly TimeSpan InviteLifetime = TimeSpan.FromDays(7);
 
     /// <summary>A provider asks for an invite for one of its patients. Only verified providers may.</summary>
-    public async Task<CreateInviteResult> CreateAsync(Caller caller, string providerPatientId)
+    public async Task<CreateEnrollmentInviteResult> CreateEnrollmentInviteAsync(
+        Caller caller,
+        string providerPatientId
+    )
     {
         if (caller is UnverifiedCaller unverified)
         {
-            return new CreateInviteResult(false, unverified.Reason, null, null);
+            return new CreateEnrollmentInviteResult(false, unverified.Reason, null, null);
         }
         if (caller is not VerifiedCaller { Party.Kind: PartyKind.Provider } provider)
         {
-            return new CreateInviteResult(false, DenyReason.WrongPartyKind, null, null);
+            return new CreateEnrollmentInviteResult(false, DenyReason.WrongPartyKind, null, null);
         }
 
-        string code = GrantManager.NewCode();
+        string code = GrantManager.GenerateCode();
         await using SqlConnection connection = await db.OpenAsync();
         await connection.ExecuteAsync(
             """
@@ -39,19 +42,19 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
                 code,
                 providerUri = provider.Party.SubjectUri,
                 providerPatientId,
-                expiresAt = time.GetUtcNow() + Lifetime,
+                expiresAt = time.GetUtcNow() + InviteLifetime,
             }
         );
-        string url = $"{options.Value.Origin.TrimEnd('/')}/Patient/Enroll?invite={code}";
-        return new CreateInviteResult(true, null, code, url);
+        string enrollmentUrl = $"{options.Value.Origin.TrimEnd('/')}/Patient/Enroll?invite={code}";
+        return new CreateEnrollmentInviteResult(true, null, code, enrollmentUrl);
     }
 
     /// <summary>Checks an invite without using it (enrollment shows who invited the patient before the passkey is made).</summary>
-    public async Task<InviteResult> PeekAsync(string code)
+    public async Task<InviteResult> CheckInviteAsync(string code)
     {
         await using SqlConnection connection = await db.OpenAsync();
         InviteRow? invite = await FindAsync(connection, null, GrantManager.NormalizeCode(code));
-        if (Unusable(invite) is InviteError error)
+        if (WhyUnusable(invite) is InviteError error)
         {
             return Failed(error);
         }
@@ -59,7 +62,7 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
     }
 
     /// <summary>Links the invite's provider record to the patient and marks the invite used. Single use.</summary>
-    public async Task<InviteResult> RedeemAsync(string code, Guid patientId)
+    public async Task<InviteResult> RedeemInviteAsync(string code, Guid patientId)
     {
         string normalizedCode = GrantManager.NormalizeCode(code);
         DateTimeOffset now = time.GetUtcNow();
@@ -80,10 +83,10 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
         if (link is null)
         {
             InviteRow? invite = await FindAsync(connection, transaction, normalizedCode);
-            return Failed(Unusable(invite) ?? InviteError.InviteUsed);
+            return Failed(WhyUnusable(invite) ?? InviteError.InviteUsed);
         }
 
-        Guid? linkedTo = await LinkedPatientAsync(connection, transaction, link);
+        Guid? linkedTo = await FindLinkedPatientAsync(connection, transaction, link);
         if (linkedTo is not null && linkedTo != patientId)
         {
             return Failed(InviteError.InviteLinkedElsewhere);
@@ -109,17 +112,17 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
     }
 
     /// <summary>The EZEHR patient linked to a provider's own patient id, if any.</summary>
-    public async Task<Guid?> LinkedPatientAsync(string providerUri, string providerPatientId)
+    public async Task<Guid?> FindLinkedPatientAsync(string providerUri, string providerPatientId)
     {
         await using SqlConnection connection = await db.OpenAsync();
-        return await LinkedPatientAsync(
+        return await FindLinkedPatientAsync(
             connection,
             null,
             new ProviderLink(providerUri, providerPatientId)
         );
     }
 
-    private static async Task<Guid?> LinkedPatientAsync(
+    private static async Task<Guid?> FindLinkedPatientAsync(
         SqlConnection connection,
         DbTransaction? transaction,
         ProviderLink link
@@ -154,7 +157,7 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
     }
 
     /// <summary>Why an invite can't be used, or null when it can.</summary>
-    private InviteError? Unusable(InviteRow? invite)
+    private InviteError? WhyUnusable(InviteRow? invite)
     {
         if (invite is null)
         {

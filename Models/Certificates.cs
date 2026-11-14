@@ -2,7 +2,7 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace EZEHR.Models;
 
-public sealed record CertCheck(bool Ok, DenyReason? Reason);
+public sealed record CertificateCheck(bool Valid, DenyReason? Reason);
 
 /// <summary>The issued leaf (public only) and its chain up to and including the root.</summary>
 public sealed record IssuedCertificate(

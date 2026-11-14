@@ -36,7 +36,7 @@ else
 }
 
 // The network door's client certificate. Only trust a forwarded header when a proxy that verifies mutual TLS sets it.
-builder.Services.AddSingleton<IClientCertificateService, ConnectionClientCertificateService>();
+builder.Services.AddSingleton<IClientCertificateService, TlsClientCertificateService>();
 if (!string.IsNullOrEmpty(appOptions.ClientCertificateHeader))
 {
     builder.Services.AddCertificateForwarding(forwarding =>
