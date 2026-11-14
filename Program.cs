@@ -14,6 +14,16 @@ AppOptions appOptions = builder.Configuration.GetSection(AppOptions.Section).Get
     ?? new AppOptions();
 
 builder.Services.Configure<AppOptions>(builder.Configuration.GetSection(AppOptions.Section));
+builder.Services.PostConfigure<AppOptions>(app =>
+{
+    // App Service rejects hyphens in setting names, so a tenant id is configured with underscores
+    // (App__TrustedTenants__aaaa_bbbb_...). Turn them back into the hyphenated, lowercase id that Entra puts in `tid`.
+    app.TrustedTenants = app.TrustedTenants.ToDictionary(
+        tenant => tenant.Key.Replace('_', '-').ToLowerInvariant(),
+        tenant => tenant.Value
+    );
+});
+
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<Db>();
 
