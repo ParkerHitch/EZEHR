@@ -1,0 +1,53 @@
+﻿@page
+@model DbTestModel
+@{
+    ViewData["Title"] = "DB Test";
+}
+<h1>@ViewData["Title"]</h1>
+
+<p>Queries <code>sys.tables</code> using the <code>AZURE_SQL_CONNECTIONSTRING</code> app setting.</p>
+
+@if (Model.ErrorMessage is not null)
+{
+    <div class="alert alert-danger">
+        <strong>Error:</strong> @Model.ErrorMessage
+    </div>
+}
+else
+{
+    <dl class="row">
+        <dt class="col-sm-3">Server</dt>
+        <dd class="col-sm-9">@Model.ServerName</dd>
+        <dt class="col-sm-3">Database</dt>
+        <dd class="col-sm-9">@Model.DatabaseName</dd>
+        <dt class="col-sm-3">Tables</dt>
+        <dd class="col-sm-9">@Model.Tables.Count</dd>
+    </dl>
+
+    @if (Model.Tables.Count == 0)
+    {
+        <p><em>Connection succeeded, but no user tables were found in this database.</em></p>
+    }
+    else
+    {
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Schema</th>
+                    <th>Table</th>
+                    <th>Created (UTC)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var table in Model.Tables)
+                {
+                    <tr>
+                        <td>@table.Schema</td>
+                        <td>@table.Name</td>
+                        <td>@table.Created.ToString("u")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
