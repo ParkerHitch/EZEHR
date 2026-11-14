@@ -1,0 +1,18 @@
+@page
+@model EZEHR.Pages.Clinician.AccessEndedModel
+@using EZEHR.Models
+@{
+  ViewData["Title"] = "Access ended";
+}
+
+<div class="clinician-page">
+  <p class="lead">@Copy.AccessEnded</p>
+  @if (Model.ShiftEnded)
+  {
+    <a class="btn btn-primary" asp-page="/Clinician/Index" asp-page-handler="SignIn">Sign in again</a>
+  }
+  else
+  {
+    <a class="btn btn-outline-primary" asp-page="/Clinician/Redeem">Enter a new share code</a>
+  }
+</div>

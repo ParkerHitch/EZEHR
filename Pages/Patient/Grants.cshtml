@@ -1,0 +1,37 @@
+@page
+@using EZEHR.Models
+@model EZEHR.Pages.Patient.GrantsModel
+@{
+    ViewData["Title"] = "Access";
+}
+
+<div class="patient-page">
+    <partial name="_PatientNav"/>
+    <h1 class="h4">Who can see your record</h1>
+    @if (!Model.Lines.Any(line => line.CanRevoke))
+    {
+        <p class="text-muted">Nobody. Share a code when you want a clinician to see it.</p>
+    }
+    <ul class="list-group mb-4">
+        @foreach (AccessLine line in Model.Lines.Where(line => line.CanRevoke))
+        {
+            <li class="list-group-item d-flex justify-content-between align-items-center gap-2">
+                <span>@line.Text</span>
+                <form method="post" asp-page-handler="Revoke">
+                    <input type="hidden" name="grantId" value="@line.GrantId"/>
+                    <button class="btn btn-outline-danger btn-tap">Revoke</button>
+                </form>
+            </li>
+        }
+    </ul>
+    @if (Model.Lines.Any(line => !line.CanRevoke))
+    {
+        <h2 class="h6 text-muted">Ended</h2>
+        <ul class="list-group">
+            @foreach (AccessLine line in Model.Lines.Where(line => !line.CanRevoke))
+            {
+                <li class="list-group-item text-muted">@line.Text</li>
+            }
+        </ul>
+    }
+</div>

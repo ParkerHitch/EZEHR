@@ -1,20 +1,20 @@
 using EZEHR.Managers;
+using EZEHR.Models;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace EZEHR.Pages.Patient;
 
-/// <summary>The signed-in patient's home. Task 11 adds the timeline, sharing and activity.</summary>
-public sealed class HomeModel(CallerManager callerManager, EnrollmentManager enrollmentManager)
-    : PageModel
+/// <summary>The patient's combined record: app notes on top, then every provider's entries by visit date.</summary>
+public sealed class HomeModel(CallerManager callerManager, RecordManager recordManager) : PageModel
 {
-    public string PatientName { get; private set; } = "";
+    public PatientHome Home { get; private set; } = new("", new Timeline([], []));
 
     public async Task<IActionResult> OnGetAsync()
     {
         Guid patientId = callerManager.PatientIdFrom(User)!.Value;
-        PatientName = await enrollmentManager.FindPatientNameAsync(patientId) ?? "";
+        Home = await recordManager.ReadPatientHomeAsync(patientId);
         return Page();
     }
 

@@ -1,0 +1,19 @@
+@page
+@model EZEHR.Pages.Clinician.RedeemModel
+@{
+  ViewData["Title"] = "Enter a share code";
+}
+
+<div class="clinician-page">
+  <h1 class="h3">Enter the patient's share code</h1>
+  @if (Model.ErrorCopy is not null)
+  {
+    <div class="alert alert-warning" role="alert">@Model.ErrorCopy</div>
+  }
+  <form method="post" class="d-flex gap-2 align-items-start">
+    <input asp-for="Code" class="form-control form-control-lg w-auto text-uppercase font-monospace"
+           placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false"
+           maxlength="12" autofocus/>
+    <button type="submit" class="btn btn-primary btn-lg">Continue</button>
+  </form>
+</div>

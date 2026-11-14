@@ -76,6 +76,12 @@ public sealed class EzehrFactory(TestDatabase database) : WebApplicationFactory<
         File.WriteAllText(anchorsPath, Pki.Ca.Root.ExportCertificatePem());
 
         builder.UseEnvironment("Testing");
+        // Development checks these at startup; tests should too.
+        builder.UseDefaultServiceProvider(provider =>
+        {
+            provider.ValidateScopes = true;
+            provider.ValidateOnBuild = true;
+        });
         builder.UseSetting(AppOptions.ConnectionStringKey, Database.ConnectionString);
         builder.UseSetting("App:KeyWrapper:Mode", "Local");
         builder.UseSetting(

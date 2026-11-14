@@ -1,0 +1,25 @@
+@page
+@using EZEHR.Models
+@model EZEHR.Pages.Patient.ShareModel
+@{
+    ViewData["Title"] = "Share";
+}
+
+<div class="patient-page">
+    <partial name="_PatientNav"/>
+    @if (Model.Status is null)
+    {
+        <h1 class="h4">Share with a clinician</h1>
+        <p>How long should they be able to see your record?</p>
+        <form method="post" asp-page-handler="Create" class="d-grid gap-2">
+            <button class="btn btn-outline-primary btn-tap" name="duration" value="@ShareDuration.FiveMinutes">5 minutes (demo)</button>
+            <button class="btn btn-outline-primary btn-tap" name="duration" value="@ShareDuration.OneHour">1 hour</button>
+            <button class="btn btn-outline-primary btn-tap" name="duration" value="@ShareDuration.FourHours">4 hours</button>
+            <button class="btn btn-outline-primary btn-tap" name="duration" value="@ShareDuration.EndOfDay">Until the end of today</button>
+        </form>
+    }
+    else
+    {
+        <partial name="_ShareStatus" model="Model.Status"/>
+    }
+</div>
