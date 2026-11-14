@@ -2,6 +2,7 @@ using System.Data.Common;
 using Dapper;
 using EZEHR.Data;
 using EZEHR.Models;
+using EZEHR.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 
@@ -9,11 +10,16 @@ namespace EZEHR.Managers;
 
 /// <summary>
 /// Provider-issued enrollment invites, like a patient-portal activation code. Redeeming one links the provider's
-/// patient id to the EZEHR patient, which is what lets that provider push records.
+/// patient id to the EZEHR patient, which is what lets that provider push records. A link lets the provider write,
+/// never read; the patient can see their links on the Access page and disconnect one.
 /// </summary>
 public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions> options)
 {
     public static readonly TimeSpan InviteLifetime = TimeSpan.FromDays(7);
+
+    private readonly TimeZoneInfo _timeZone = TimeZoneInfo.FindSystemTimeZoneById(
+        options.Value.TimeZone
+    );
 
     /// <summary>A provider asks for an invite for one of its patients. Only verified providers may.</summary>
     public async Task<CreateEnrollmentInviteResult> CreateEnrollmentInviteAsync(
@@ -114,19 +120,61 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
         {
             await connection.ExecuteAsync(
                 """
-                INSERT INTO provider_links(patient_id, provider_uri, provider_patient_id)
-                VALUES (@patientId, @ProviderUri, @ProviderPatientId)
+                INSERT INTO provider_links(patient_id, provider_uri, provider_patient_id, linked_at)
+                VALUES (@patientId, @ProviderUri, @ProviderPatientId, @now)
                 """,
                 new
                 {
                     patientId,
                     link.ProviderUri,
                     link.ProviderPatientId,
+                    now,
                 },
                 transaction
             );
         }
         return Succeeded(link);
+    }
+
+    /// <summary>The providers that can push records for the patient, oldest link first, as the Access page lists them.</summary>
+    public async Task<IReadOnlyList<ConnectedProviderLine>> ListConnectedProvidersAsync(
+        Guid patientId
+    )
+    {
+        await using SqlConnection connection = await db.OpenAsync();
+        IEnumerable<LinkRow> rows = await connection.QueryAsync<LinkRow>(
+            """
+            SELECT provider_uri AS ProviderUri, MIN(linked_at) AS LinkedAt
+            FROM provider_links
+            WHERE patient_id = @patientId
+            GROUP BY provider_uri
+            ORDER BY MIN(linked_at), provider_uri
+            """,
+            new { patientId }
+        );
+        return rows.Select(row => new ConnectedProviderLine(
+                row.ProviderUri,
+                Copy.ConnectedProviderLine(
+                    OrgDirectory.FindBySubjectUri(row.ProviderUri)?.DisplayName ?? row.ProviderUri,
+                    row.LinkedAt is DateTimeOffset linkedAt
+                        ? LocalTime.Day(linkedAt, _timeZone)
+                        : null
+                )
+            ))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Removes the patient's links to a provider, so it can no longer push records. Records it already sent stay.
+    /// Linking again takes a new invite. Another patient's links are untouched.
+    /// </summary>
+    public async Task DisconnectProviderAsync(Guid patientId, string providerUri)
+    {
+        await using SqlConnection connection = await db.OpenAsync();
+        await connection.ExecuteAsync(
+            "DELETE FROM provider_links WHERE patient_id = @patientId AND provider_uri = @providerUri",
+            new { patientId, providerUri }
+        );
     }
 
     /// <summary>The EZEHR patient linked to a provider's own patient id, if any.</summary>
@@ -201,6 +249,8 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
     {
         return new InviteResult(false, null, error);
     }
+
+    private sealed record LinkRow(string ProviderUri, DateTimeOffset? LinkedAt);
 
     private sealed record InviteRow(
         string ProviderUri,

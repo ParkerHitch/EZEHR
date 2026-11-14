@@ -27,11 +27,30 @@
     @if (Model.Lines.Any(line => !line.CanRevoke))
     {
         <h2 class="h6 text-muted">Ended</h2>
-        <ul class="list-group">
+        <ul class="list-group mb-4">
             @foreach (AccessLine line in Model.Lines.Where(line => !line.CanRevoke))
             {
                 <li class="list-group-item text-muted">@line.Text</li>
             }
         </ul>
     }
+
+    <h2 class="h5">Connected clinics</h2>
+    <p class="text-muted small">@Copy.ConnectedProvidersHint</p>
+    @if (!Model.ConnectedProviders.Any())
+    {
+        <p class="text-muted">@Copy.NoConnectedProviders</p>
+    }
+    <ul class="list-group">
+        @foreach (ConnectedProviderLine provider in Model.ConnectedProviders)
+        {
+            <li class="list-group-item d-flex justify-content-between align-items-center gap-2">
+                <span>@provider.Text</span>
+                <form method="post" asp-page-handler="Disconnect">
+                    <input type="hidden" name="providerUri" value="@provider.ProviderUri"/>
+                    <button class="btn btn-outline-secondary btn-tap">Disconnect</button>
+                </form>
+            </li>
+        }
+    </ul>
 </div>

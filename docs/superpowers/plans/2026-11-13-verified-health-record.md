@@ -151,7 +151,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - `patients(id, display_name, wrapped_dek, created_at)`
   - `patient_credentials(credential_id, patient_id, public_key, sign_count, user_handle)`
   - `invites(code, provider_uri, provider_patient_id, expires_at, redeemed_at)`
-  - `provider_links(patient_id, provider_uri, provider_patient_id)`, unique on (`provider_uri`, `provider_patient_id`)
+  - `provider_links(patient_id, provider_uri, provider_patient_id, linked_at)`, unique on (`provider_uri`, `provider_patient_id`); `linked_at` is nullable because it was added after the first deploy
   - `entries(id, patient_id, source_key, resource_type, iv, ciphertext, created_at)`, unique on (`patient_id`, `source_key`). `source_key` = `{signerUri}|{resourceType}/{resource.id}`.
   - `share_offers`, `grants` and `audit_events`, matching the records
   - `local_clinicians`, used by Task 8b only

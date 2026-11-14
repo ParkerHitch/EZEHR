@@ -23,7 +23,7 @@ A sign-in only proves **who** someone is. Whether they may read Sam's record is 
 | | Reads | Writes |
 |---|---|---|
 | **Clinician** (clinician pages) | the combined record, under Sam's grant | **nothing** |
-| **Provider system** (network API) | nothing | records for its own linked patients, each signed with its EZCA key |
+| **Provider system** (network API) | nothing | records for its own linked patients, each signed with its EZCA key. The patient sees these links under "Connected clinics" on the Access page and can disconnect one; linking again takes a new invite |
 | **App** (network API) | what its grant allows (Kidney Check: lab results) | signed notes, if its grant allows |
 
 This mirrors how care is really documented. A clinician charts in **their own organization's system**, which is the legal custodian of that record: history taken at the visit, diagnoses, medication changes, referrals. That system then pushes the result to EZEHR like any other provider. So Dr. Rivera's plan and the nephrology referral reach Sam's record from **Riverside's** system, signed by Riverside, with Dr. Rivera as author. The clinician pages exist for the gap no single system can fill: seeing what *other* organizations hold, with the patient's consent.

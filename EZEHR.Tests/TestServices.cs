@@ -17,9 +17,9 @@ public sealed class TestServices
     {
         IOptions<AppOptions> options = Options.Create(new AppOptions());
         Audit = new AuditManager(db, clock);
-        Grants = new GrantManager(db, Audit, clock, options);
-        Access = new AccessManager(Grants, Audit, clock);
         Invites = new InviteManager(db, clock, options);
+        Grants = new GrantManager(db, Audit, Invites, clock, options);
+        Access = new AccessManager(Grants, Audit, clock);
         Records = new RecordManager(
             db,
             keyWrapService ?? LocalKeyWrapService(),

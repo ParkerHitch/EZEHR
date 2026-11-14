@@ -35,5 +35,14 @@ public sealed record ShareStatus(
 /// <summary>One line of the patient's Access page.</summary>
 public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke);
 
+/// <summary>A provider that can add records for the patient (a provider link). It can't read the record.</summary>
+public sealed record ConnectedProviderLine(string ProviderUri, string Text);
+
+/// <summary>The Access page: who can see the record (grants), and which providers can add to it (links).</summary>
+public sealed record AccessOverview(
+    IReadOnlyList<AccessLine> Lines,
+    IReadOnlyList<ConnectedProviderLine> ConnectedProviders
+);
+
 /// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>
 public sealed record ActivityLine(long Id, string Text, string Time, bool Blocked);

@@ -224,6 +224,69 @@ public class PatientPasskeyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Connected_providers_lists_each_link_oldest_first_with_its_day()
+    {
+        EnrollmentResult sam = await EnrollAsync(await InviteAsync("lakeside", "LUC-20417"), false);
+        _clock.Advance(TimeSpan.FromDays(1));
+        await _enrollment.LinkInviteAsync(
+            sam.PatientId!.Value,
+            await InviteAsync("northwind", "NWH-88213")
+        );
+
+        IReadOnlyList<ConnectedProviderLine> providers =
+            await _services.Invites.ListConnectedProvidersAsync(sam.PatientId!.Value);
+
+        TimeZoneInfo zone = TimeZoneInfo.FindSystemTimeZoneById(new AppOptions().TimeZone);
+        Assert.Equal(
+            [
+                new ConnectedProviderLine(
+                    "urn:provider:lakeside",
+                    Copy.ConnectedProviderLine(
+                        "Lakeside Urgent Care",
+                        LocalTime.Day(TestPki.Start, zone)
+                    )
+                ),
+                new ConnectedProviderLine(
+                    "urn:provider:northwind",
+                    Copy.ConnectedProviderLine(
+                        "Northwind Workplace Health",
+                        LocalTime.Day(TestPki.Start.AddDays(1), zone)
+                    )
+                ),
+            ],
+            providers
+        );
+    }
+
+    [Fact]
+    public async Task Disconnect_removes_only_the_patients_own_link()
+    {
+        EnrollmentResult sam = await EnrollAsync(await InviteAsync("lakeside", "LUC-20417"), false);
+        EnrollmentResult other = await EnrollAsync(
+            await InviteAsync("northwind", "NWH-11111"),
+            false
+        );
+
+        await _services.Invites.DisconnectProviderAsync(
+            other.PatientId!.Value,
+            "urn:provider:lakeside"
+        );
+        Assert.Equal(
+            sam.PatientId,
+            await _services.Invites.FindLinkedPatientAsync("urn:provider:lakeside", "LUC-20417")
+        );
+
+        await _services.Invites.DisconnectProviderAsync(
+            sam.PatientId!.Value,
+            "urn:provider:lakeside"
+        );
+        Assert.Null(
+            await _services.Invites.FindLinkedPatientAsync("urn:provider:lakeside", "LUC-20417")
+        );
+        Assert.Empty(await _services.Invites.ListConnectedProvidersAsync(sam.PatientId!.Value));
+    }
+
+    [Fact]
     public async Task Invite_check_names_the_provider()
     {
         string code = await InviteAsync("maple", "MSF-0932");

@@ -90,7 +90,12 @@ public sealed class Db(IConfiguration configuration)
             patient_id UNIQUEIDENTIFIER NOT NULL INDEX ix_provider_links_patient,
             provider_uri NVARCHAR(200) COLLATE Latin1_General_100_BIN2 NOT NULL,
             provider_patient_id NVARCHAR(100) COLLATE Latin1_General_100_BIN2 NOT NULL,
+            linked_at DATETIMEOFFSET NULL,
             CONSTRAINT pk_provider_links PRIMARY KEY (provider_uri, provider_patient_id));
+
+        -- Added after the table was first deployed; links made before then have no date.
+        IF COL_LENGTH(N'dbo.provider_links', N'linked_at') IS NULL
+        ALTER TABLE dbo.provider_links ADD linked_at DATETIMEOFFSET NULL;
 
         IF OBJECT_ID(N'dbo.entries') IS NULL
         CREATE TABLE dbo.entries(

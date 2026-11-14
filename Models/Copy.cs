@@ -93,6 +93,19 @@ public static class Copy
         return line[..line.LastIndexOf(" · ", StringComparison.Ordinal)];
     }
 
+    public const string ConnectedProvidersHint =
+        "These clinics can add records to your EZEHR record. They can't see it. To reconnect one, ask it for a new invite.";
+
+    public const string NoConnectedProviders = "No clinics are connected.";
+
+    /// <summary>"Lakeside Urgent Care · can add records · linked Nov 14". Links made before dates were kept have none.</summary>
+    public static string ConnectedProviderLine(string provider, string? date)
+    {
+        return date is null
+            ? $"{provider} · can add records"
+            : $"{provider} · can add records · linked {date}";
+    }
+
     public static string ClinicianAccessUntil(string name, string org, string time)
     {
         return $"{name}, {org} · until {time}";

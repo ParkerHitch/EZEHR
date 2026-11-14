@@ -194,6 +194,25 @@ public class PatientPagesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Access_lists_connected_clinics_and_disconnect_removes_one()
+    {
+        string access = await ReadAsync("/Patient/Grants");
+        Assert.Contains("Lakeside Urgent Care · can add records · linked ", access);
+
+        HttpResponseMessage disconnected = await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=Disconnect",
+            new() { ["providerUri"] = "urn:provider:lakeside" }
+        );
+
+        Assert.Equal(HttpStatusCode.Redirect, disconnected.StatusCode);
+        string after = await ReadAsync("/Patient/Grants");
+        Assert.DoesNotContain("Lakeside Urgent Care · can add records", after);
+        Assert.Contains(Copy.NoConnectedProviders, after);
+        Assert.Contains("Kidney Check · lab results only · you allowed this", after);
+    }
+
+    [Fact]
     public async Task Someone_elses_offer_is_not_found()
     {
         HttpResponseMessage status = await _phone.GetAsync(

@@ -182,6 +182,7 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
      - the approval prompt
      - live activity, including denied attempts
      - active grants with Revoke
+     - connected clinics (provider links: they can add records, not read them), with Disconnect
      - Export
    - **Clinician area** (laptop):
      - sign in with Entra ID (security key)

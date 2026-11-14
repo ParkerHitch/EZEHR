@@ -17,6 +17,7 @@ namespace EZEHR.Managers;
 public sealed class GrantManager(
     Db db,
     AuditManager auditManager,
+    InviteManager inviteManager,
     TimeProvider time,
     IOptions<AppOptions> options
 )
@@ -135,15 +136,21 @@ public sealed class GrantManager(
         );
     }
 
-    /// <summary>Everyone who has or had access, newest first, as the Access page lists them.</summary>
-    public async Task<IReadOnlyList<AccessLine>> ListAccessAsync(Guid patientId)
+    /// <summary>
+    /// Everyone who has or had access, newest first, and the providers that can add records, as the Access page
+    /// lists them.
+    /// </summary>
+    public async Task<AccessOverview> ListAccessAsync(Guid patientId)
     {
         DateTimeOffset now = time.GetUtcNow();
         IReadOnlyList<Grant> grants = await ListForPatientAsync(patientId);
-        return grants
+        List<AccessLine> lines = grants
             .OrderByDescending(grant => grant.CreatedAt)
             .Select(grant => ToAccessLine(grant, now))
             .ToList();
+        IReadOnlyList<ConnectedProviderLine> connectedProviders =
+            await inviteManager.ListConnectedProvidersAsync(patientId);
+        return new AccessOverview(lines, connectedProviders);
     }
 
     private AccessLine ToAccessLine(Grant grant, DateTimeOffset now)
