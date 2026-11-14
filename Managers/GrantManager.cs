@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Dapper;
 using EZEHR.Data;
 using EZEHR.Models;
+using EZEHR.Services;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 
@@ -103,6 +104,86 @@ public sealed class GrantManager(
             WHERE id = @offerId
             """,
             new { offerId }
+        );
+    }
+
+    /// <summary>The patient's own offer and the request made with it, if any. Null for someone else's offer.</summary>
+    public async Task<ShareStatus?> ReadShareStatusAsync(Guid patientId, Guid offerId)
+    {
+        ShareOffer? offer = await FindShareOfferAsync(offerId);
+        if (offer is null || offer.PatientId != patientId)
+        {
+            return null;
+        }
+        Grant? grant = offer.RedeemedGrantId is Guid grantId ? await FindAsync(grantId) : null;
+        DateTimeOffset now = time.GetUtcNow();
+        string? untilIfApprovedNow = grant is { Status: GrantStatus.Pending }
+            ? LocalTime.Clock(CalculateExpiresAt(grant.DurationMinutes, now), _timeZone)
+            : null;
+        string? until = grant?.ExpiresAt is DateTimeOffset expiresAt
+            ? LocalTime.Clock(expiresAt, _timeZone)
+            : null;
+        string formattedCode = FormatCode(offer.Code);
+        return new ShareStatus(
+            offer.Id,
+            formattedCode,
+            ShareCodeQr.PngDataUri(formattedCode),
+            grant is null && offer.OfferExpiresAt < now,
+            grant,
+            untilIfApprovedNow,
+            until
+        );
+    }
+
+    /// <summary>Everyone who has or had access, newest first, as the Access page lists them.</summary>
+    public async Task<IReadOnlyList<AccessLine>> ListAccessAsync(Guid patientId)
+    {
+        DateTimeOffset now = time.GetUtcNow();
+        IReadOnlyList<Grant> grants = await ListForPatientAsync(patientId);
+        return grants
+            .OrderByDescending(grant => grant.CreatedAt)
+            .Select(grant => ToAccessLine(grant, now))
+            .ToList();
+    }
+
+    private AccessLine ToAccessLine(Grant grant, DateTimeOffset now)
+    {
+        Party grantee = grant.Grantee;
+        bool expired = grant.ExpiresAt is DateTimeOffset expiresAt && expiresAt <= now;
+        if (grant.Status == GrantStatus.Active && !expired)
+        {
+            string text =
+                grantee.Kind == PartyKind.App
+                    ? Copy.AppGrantSummary(
+                        grantee.DisplayName,
+                        Copy.AppGrantWhat,
+                        LocalTime.Day(grant.ApprovedAt ?? grant.CreatedAt, _timeZone)
+                    )
+                    : Copy.ClinicianAccessUntil(
+                        grantee.DisplayName,
+                        grantee.OrgName,
+                        LocalTime.Clock(grant.ExpiresAt!.Value, _timeZone)
+                    );
+            return new AccessLine(grant.Id, text, true);
+        }
+        if (grant.Status == GrantStatus.Pending)
+        {
+            return new AccessLine(
+                grant.Id,
+                Copy.ClinicianAccessPending(grantee.DisplayName, grantee.OrgName),
+                true
+            );
+        }
+        GrantStatus ended = expired ? GrantStatus.Expired : grant.Status;
+        return new AccessLine(
+            grant.Id,
+            Copy.AccessEndedLine(
+                grantee.Kind == PartyKind.App
+                    ? grantee.DisplayName
+                    : $"{grantee.DisplayName}, {grantee.OrgName}",
+                ended
+            ),
+            false
         );
     }
 

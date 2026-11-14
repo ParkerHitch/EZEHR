@@ -1,0 +1,13 @@
+@page
+@model EZEHR.Pages.Patient.ActivityModel
+@{
+    ViewData["Title"] = "Activity";
+}
+
+<div class="patient-page">
+    <partial name="_PatientNav"/>
+    <h1 class="h4">Who tried to see your record</h1>
+    <div hx-get="/Patient/Activity?handler=List" hx-trigger="every 2s" hx-swap="innerHTML">
+        <partial name="_ActivityPartial" model="Model.Lines"/>
+    </div>
+</div>

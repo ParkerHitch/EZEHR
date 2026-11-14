@@ -21,6 +21,7 @@ builder.Services.AddScoped<AccessManager>();
 builder.Services.AddScoped<InviteManager>();
 builder.Services.AddScoped<RecordManager>();
 builder.Services.AddScoped<EnrollmentManager>();
+builder.Services.AddScoped<ActivityManager>();
 
 // Patient passkeys. The relying party is the site's public origin, so passkeys only work on the real site.
 Uri origin = new(appOptions.Origin);
@@ -30,6 +31,7 @@ builder.Services.AddFido2(fido2 =>
     fido2.ServerName = "EZEHR";
     fido2.Origins = new HashSet<string> { origin.GetLeftPart(UriPartial.Authority) };
 });
+
 // Scoped, because AddFido2 registers IFido2 as scoped.
 builder.Services.AddScoped<IFido2Service, Fido2Service>();
 

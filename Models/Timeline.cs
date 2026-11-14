@@ -20,3 +20,20 @@ public sealed record Timeline(
 
 /// <summary>What the patient's home page shows.</summary>
 public sealed record PatientHome(string PatientName, Timeline Timeline);
+
+/// <summary>A share offer as the Share page shows it, and what became of it.</summary>
+public sealed record ShareStatus(
+    Guid OfferId,
+    string FormattedCode,
+    string QrPngDataUri,
+    bool OfferExpired,
+    Grant? Grant,
+    string? UntilIfApprovedNow,
+    string? Until
+);
+
+/// <summary>One line of the patient's Access page.</summary>
+public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke);
+
+/// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>
+public sealed record ActivityLine(long Id, string Text, string Time, bool Blocked);

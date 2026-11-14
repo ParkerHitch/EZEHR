@@ -1,0 +1,48 @@
+@using EZEHR.Models
+@model ShareStatus
+
+@* Polls itself every 2 s while waiting; once there is a request or an outcome it stops, so buttons stay put. *@
+@if (Model.Grant is null)
+{
+    <div hx-get="/Patient/Share?handler=Status&offerId=@Model.OfferId" hx-trigger="every 2s" hx-swap="outerHTML">
+        @if (Model.OfferExpired)
+        {
+            <p>@Copy.ShareExpired</p>
+            <a class="btn btn-primary btn-tap w-100" asp-page="/Patient/Share">New code</a>
+        }
+        else
+        {
+            <p class="text-center">@Copy.ShareWaiting</p>
+            <p class="share-code text-center">@Model.FormattedCode</p>
+            <img class="d-block mx-auto share-qr" src="@Model.QrPngDataUri" alt="QR code for @Model.FormattedCode"/>
+        }
+    </div>
+}
+else if (Model.Grant.Status == GrantStatus.Pending)
+{
+    <div class="approve-prompt">
+        <p class="h4 text-center mb-4">
+            @Copy.ApprovePrompt(Model.Grant.Grantee.DisplayName, Model.Grant.Grantee.OrgName, Model.UntilIfApprovedNow!)
+        </p>
+        <form method="post" action="/Patient/Share?handler=Decide" class="d-grid gap-3">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="offerId" value="@Model.OfferId"/>
+            <input type="hidden" name="grantId" value="@Model.Grant.Id"/>
+            <button class="btn btn-success btn-lg btn-tap" name="approve" value="true">Approve</button>
+            <button class="btn btn-outline-danger btn-lg btn-tap" name="approve" value="false">Deny</button>
+        </form>
+    </div>
+}
+else if (Model.Grant.Status == GrantStatus.Active)
+{
+    <p class="h5">@Copy.ShareApproved(Model.Grant.Grantee.DisplayName, Model.Grant.Grantee.OrgName, Model.Until!)</p>
+    <a class="btn btn-outline-secondary btn-tap" asp-page="/Patient/Grants">Manage access</a>
+}
+else if (Model.Grant.Status == GrantStatus.Denied)
+{
+    <p class="h5">@Copy.ShareDenied</p>
+}
+else
+{
+    <p class="h5">@Copy.AccessEndedLine($"{Model.Grant.Grantee.DisplayName}, {Model.Grant.Grantee.OrgName}", Model.Grant.Status)</p>
+}
