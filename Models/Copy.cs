@@ -11,6 +11,11 @@ public static class Copy
 
     public const string TurnOnKidneyCheck = "Turn on Kidney Check";
 
+    public const string TurnOffKidneyCheck = "Turn off Kidney Check";
+
+    public const string AppsHint =
+        "Apps see only what you allow, and every time one reads your record it shows in Activity.";
+
     public const string AccessEnded =
         "Your access to this record has ended. Ask the patient to share again.";
 

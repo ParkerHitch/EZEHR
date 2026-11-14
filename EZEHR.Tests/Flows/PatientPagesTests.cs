@@ -218,19 +218,27 @@ public class PatientPagesTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Kidney_check_can_be_turned_back_on_after_revoke()
+    public async Task Apps_section_turns_kidney_check_off_and_back_on()
     {
+        string on = await ReadAsync("/Patient/Grants");
         string kidneyGrantId = Regex
-            .Match(await ReadAsync("/Patient/Grants"), "name=\"grantId\" value=\"([0-9a-f-]+)\"")
+            .Match(on, "name=\"grantId\" value=\"([0-9a-f-]+)\"")
             .Groups[1]
             .Value;
-        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, await ReadAsync("/Patient/Grants"));
+        Assert.Contains(Copy.TurnOffKidneyCheck, on);
+        Assert.Contains(">On<", on);
+        Assert.Contains("No clinicians.", on);
+        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, on);
+
         await PostFormAsync(
             "/Patient/Grants",
             "/Patient/Grants?handler=Revoke",
             new() { ["grantId"] = kidneyGrantId }
         );
-        Assert.Contains(Copy.TurnOnKidneyCheck, await ReadAsync("/Patient/Grants"));
+        string off = await ReadAsync("/Patient/Grants");
+        Assert.Contains(Copy.TurnOnKidneyCheck, off);
+        Assert.Contains(Copy.KidneyOptIn, off);
+        Assert.Contains(">Off<", off);
 
         HttpResponseMessage turnedOn = await PostFormAsync(
             "/Patient/Grants",
@@ -241,6 +249,7 @@ public class PatientPagesTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
         string access = await ReadAsync("/Patient/Grants");
         Assert.Contains("Kidney Check · lab results only · you allowed this", access);
+        Assert.Contains(Copy.TurnOffKidneyCheck, access);
         Assert.DoesNotContain(Copy.TurnOnKidneyCheck, access);
     }
 
