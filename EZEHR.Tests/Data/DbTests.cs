@@ -185,4 +185,37 @@ public class DbTests : IAsyncLifetime
             )
         );
     }
+
+    [Fact]
+    public async Task EnsureSchema_adds_org_columns_to_existing_tables()
+    {
+        await using SqlConnection connection = await _database.Db.OpenAsync();
+        // Shape the tables as a database deployed before these columns existed.
+        await connection.ExecuteAsync("ALTER TABLE dbo.grants DROP COLUMN grantee_org_uri");
+        await connection.ExecuteAsync("DROP INDEX ix_audit_events_actor_org ON dbo.audit_events");
+        await connection.ExecuteAsync("ALTER TABLE dbo.audit_events DROP COLUMN actor_org_uri");
+
+        await _database.Db.EnsureSchemaAsync();
+        await _database.Db.EnsureSchemaAsync();
+
+        Assert.NotNull(
+            await connection.ExecuteScalarAsync<int?>(
+                "SELECT COL_LENGTH('dbo.grants', 'grantee_org_uri')"
+            )
+        );
+        Assert.NotNull(
+            await connection.ExecuteScalarAsync<int?>(
+                "SELECT COL_LENGTH('dbo.audit_events', 'actor_org_uri')"
+            )
+        );
+        Assert.Equal(
+            1,
+            await connection.ExecuteScalarAsync<int>(
+                """
+                SELECT COUNT(*) FROM sys.indexes
+                WHERE name = 'ix_audit_events_actor_org' AND object_id = OBJECT_ID('dbo.audit_events')
+                """
+            )
+        );
+    }
 }

@@ -57,9 +57,10 @@ public sealed class AuditManager(Db db, TimeProvider time)
         long? id = await connection.ExecuteScalarAsync<long?>(
             """
             INSERT INTO audit_events(patient_id, at, actor_kind, actor_uri, actor_name, actor_org,
-                                     action, claimed_purpose, granted, reason)
+                                     actor_org_uri, action, claimed_purpose, granted, reason)
             OUTPUT inserted.id
-            SELECT @patientId, @at, @kind, @uri, @name, @org, @action, @purpose, @granted, @reason
+            SELECT @patientId, @at, @kind, @uri, @name, @org, @orgUri, @action, @purpose, @granted,
+                   @reason
             WHERE EXISTS (SELECT 1 FROM patients WHERE id = @patientId)
             """,
             new
@@ -70,6 +71,7 @@ public sealed class AuditManager(Db db, TimeProvider time)
                 uri = actor?.SubjectUri,
                 name = actor?.DisplayName,
                 org = actor?.OrgName,
+                orgUri = actor?.OrgUri,
                 action,
                 purpose,
                 granted,
@@ -94,7 +96,7 @@ public sealed class AuditManager(Db db, TimeProvider time)
         IEnumerable<AuditRow> rows = await connection.QueryAsync<AuditRow>(
             """
             SELECT id AS Id, patient_id AS PatientId, at AS At, actor_kind AS ActorKind,
-                   actor_uri AS ActorUri, actor_name AS ActorName, actor_org AS ActorOrg,
+                   actor_uri AS ActorUri, actor_name AS ActorName, actor_org AS ActorOrg, actor_org_uri AS ActorOrgUri,
                    action AS Action, claimed_purpose AS ClaimedPurpose, granted AS Granted,
                    reason AS Reason
             FROM audit_events
@@ -114,6 +116,7 @@ public sealed class AuditManager(Db db, TimeProvider time)
         string? ActorUri,
         string? ActorName,
         string? ActorOrg,
+        string? ActorOrgUri,
         string Action,
         string? ClaimedPurpose,
         bool Granted,
@@ -124,7 +127,14 @@ public sealed class AuditManager(Db db, TimeProvider time)
         {
             Party? actor = ActorUri is null
                 ? null
-                : new Party(Enum.Parse<PartyKind>(ActorKind!), ActorUri, ActorName!, ActorOrg!);
+                // Rows written before actor_org_uri existed fall back to the actor itself.
+                : new Party(
+                    Enum.Parse<PartyKind>(ActorKind!),
+                    ActorUri,
+                    ActorName!,
+                    ActorOrg!,
+                    ActorOrgUri ?? ActorUri
+                );
             DenyReason? reason = Reason is null ? null : Enum.Parse<DenyReason>(Reason);
             return new AuditEvent(
                 Id,

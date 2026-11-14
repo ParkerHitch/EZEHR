@@ -78,7 +78,8 @@ public class ClinicianAuthTests : IAsyncLifetime
                 PartyKind.Clinician,
                 $"urn:entra:{RiversideTenant}:{RiveraObjectId}",
                 "Dr. Rivera",
-                "Riverside Primary Care"
+                "Riverside Primary Care",
+                "urn:provider:riverside"
             ),
             check.Party
         );

@@ -33,7 +33,7 @@ public sealed class GrantManager(
     private const string GrantSelect = """
         SELECT id AS Id, patient_id AS PatientId, grantee_kind AS GranteeKind,
                grantee_uri AS GranteeUri, grantee_name AS GranteeName, grantee_org AS GranteeOrg,
-               scope AS Scope, purpose AS Purpose, status AS Status,
+               grantee_org_uri AS GranteeOrgUri, scope AS Scope, purpose AS Purpose, status AS Status,
                duration_minutes AS DurationMinutes, created_at AS CreatedAt,
                approved_at AS ApprovedAt, expires_at AS ExpiresAt, revoked_at AS RevokedAt
         FROM grants
@@ -497,9 +497,9 @@ public sealed class GrantManager(
         await connection.ExecuteAsync(
             """
             INSERT INTO grants(id, patient_id, grantee_kind, grantee_uri, grantee_name, grantee_org,
-                               scope, purpose, status, duration_minutes, created_at, approved_at,
-                               expires_at, revoked_at)
-            VALUES (@Id, @PatientId, @kind, @uri, @name, @org, @scope, @Purpose, @status,
+                               grantee_org_uri, scope, purpose, status, duration_minutes, created_at,
+                               approved_at, expires_at, revoked_at)
+            VALUES (@Id, @PatientId, @kind, @uri, @name, @org, @orgUri, @scope, @Purpose, @status,
                     @DurationMinutes, @CreatedAt, @ApprovedAt, @ExpiresAt, NULL)
             """,
             new
@@ -510,6 +510,7 @@ public sealed class GrantManager(
                 uri = grant.Grantee.SubjectUri,
                 name = grant.Grantee.DisplayName,
                 org = grant.Grantee.OrgName,
+                orgUri = grant.Grantee.OrgUri,
                 scope = grant.Scope.ToString(),
                 grant.Purpose,
                 status = grant.Status.ToString(),
@@ -531,6 +532,7 @@ public sealed class GrantManager(
         string GranteeUri,
         string GranteeName,
         string GranteeOrg,
+        string? GranteeOrgUri,
         GrantScope Scope,
         string Purpose,
         GrantStatus Status,
@@ -546,7 +548,14 @@ public sealed class GrantManager(
             return new Grant(
                 Id,
                 PatientId,
-                new Party(GranteeKind, GranteeUri, GranteeName, GranteeOrg),
+                // Rows written before grantee_org_uri existed fall back to the grantee itself.
+                new Party(
+                    GranteeKind,
+                    GranteeUri,
+                    GranteeName,
+                    GranteeOrg,
+                    GranteeOrgUri ?? GranteeUri
+                ),
                 Scope,
                 Purpose,
                 Status,

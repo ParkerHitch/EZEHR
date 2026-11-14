@@ -15,6 +15,6 @@ public sealed record Organization(
 {
     public Party ToParty()
     {
-        return new Party(Kind, Uri, DisplayName, DisplayName);
+        return new Party(Kind, Uri, DisplayName, DisplayName, Uri);
     }
 }

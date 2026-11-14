@@ -119,7 +119,8 @@ public sealed class CallerManager(
             PartyKind.Clinician,
             OrgDirectory.ClinicianUri(tenantId, objectId),
             displayName,
-            provider.DisplayName
+            provider.DisplayName,
+            provider.SubjectUri
         );
         return new ClinicianCheck(true, party, SessionStartedAt(user), null);
     }

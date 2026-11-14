@@ -151,7 +151,8 @@ public class PkiTests
                 PartyKind.Provider,
                 "urn:provider:lakeside",
                 "Lakeside Urgent Care",
-                "Lakeside Urgent Care"
+                "Lakeside Urgent Care",
+                "urn:provider:lakeside"
             ),
             lakeside
         );

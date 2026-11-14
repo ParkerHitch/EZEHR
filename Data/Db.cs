@@ -55,6 +55,11 @@ public sealed class Db(IConfiguration configuration)
                 )
             );
         }
+        foreach (string migration in Migrations)
+        {
+            await using SqlCommand command = new(migration, connection);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     /// <summary>
@@ -85,6 +90,26 @@ public sealed class Db(IConfiguration configuration)
     {
         return exception.Number is 2601 or 2627;
     }
+
+    // Changes to tables that already exist in deployed databases, run in order after Schema. New columns and indexes
+    // go here, never into the CREATE TABLE text, so fresh and deployed databases take the same path. One command per
+    // entry: SQL Server compiles a whole batch first, so a statement can't use a column added earlier in its batch.
+    private static readonly string[] Migrations =
+    [
+        """
+            IF COL_LENGTH(N'dbo.grants', N'grantee_org_uri') IS NULL
+            ALTER TABLE dbo.grants ADD grantee_org_uri NVARCHAR(200) COLLATE Latin1_General_100_BIN2 NULL;
+            """,
+        """
+            IF COL_LENGTH(N'dbo.audit_events', N'actor_org_uri') IS NULL
+            ALTER TABLE dbo.audit_events ADD actor_org_uri NVARCHAR(200) COLLATE Latin1_General_100_BIN2 NULL;
+            """,
+        """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                           WHERE name = N'ix_audit_events_actor_org' AND object_id = OBJECT_ID(N'dbo.audit_events'))
+            CREATE INDEX ix_audit_events_actor_org ON dbo.audit_events(actor_org_uri, id);
+            """,
+    ];
 
     // Identifier columns use a binary collation, because SQL Server's default collation is case-insensitive
     // and would make "Observation/a" and "Observation/A" the same source key.

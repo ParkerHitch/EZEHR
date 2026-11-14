@@ -1,4 +1,5 @@
 using EZEHR.Models;
+using EZEHR.Services;
 
 namespace EZEHR.Tests.Models;
 
@@ -56,5 +57,14 @@ public class OrganizationDirectoryTests
     {
         Assert.Equal(KidneyCheck.ToParty(), _directory.FindByUri("urn:app:kidney-check"));
         Assert.Null(_directory.FindByUri("urn:app:nope"));
+    }
+
+    [Fact]
+    public void Organizations_vouch_for_themselves()
+    {
+        foreach (Organization organization in OrgDirectory.DemoOrganizations)
+        {
+            Assert.Equal(organization.Uri, organization.ToParty().OrgUri);
+        }
     }
 }

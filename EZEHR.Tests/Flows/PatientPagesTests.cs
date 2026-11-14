@@ -20,7 +20,8 @@ public class PatientPagesTests : IAsyncLifetime
         PartyKind.Clinician,
         "urn:entra:tenant:rivera",
         "Dr. Rivera",
-        "Riverside Primary Care"
+        "Riverside Primary Care",
+        "urn:provider:riverside"
     );
 
     private EzehrFactory _app = null!;

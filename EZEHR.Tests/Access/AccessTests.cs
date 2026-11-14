@@ -14,21 +14,24 @@ public class AccessTests : IAsyncLifetime
         PartyKind.Clinician,
         "urn:entra:tid:rivera",
         "Dr. Rivera",
-        "Riverside Primary Care"
+        "Riverside Primary Care",
+        "urn:provider:riverside"
     );
 
     private static readonly Party Other = new(
         PartyKind.Clinician,
         "urn:entra:tid:other",
         "Dr. Other",
-        "Riverside Primary Care"
+        "Riverside Primary Care",
+        "urn:provider:riverside"
     );
 
     private static readonly Party KidneyCheck = new(
         PartyKind.App,
         "urn:app:kidney-check",
         "Kidney Check",
-        "Kidney Check"
+        "Kidney Check",
+        "urn:app:kidney-check"
     );
 
     private readonly FakeTimeProvider _clock = new(Start);
@@ -394,5 +397,34 @@ public class AccessTests : IAsyncLifetime
             GrantError.GrantUnknown,
             (await Grants.RevokeAsync(Guid.NewGuid(), grantId)).Error
         );
+    }
+
+    [Fact]
+    public async Task Grant_keeps_grantee_org_uri()
+    {
+        await ActiveGrantAsync();
+
+        IReadOnlyList<Grant> grants = await Grants.ListForGranteeAsync(_sam, Rivera.SubjectUri);
+
+        Assert.Equal(Rivera, grants[0].Grantee);
+    }
+
+    [Fact]
+    public async Task Audit_event_keeps_actor_org_uri()
+    {
+        await Audit.AppendAsync(_sam, Rivera, "ReadFullRecord", null, true, null);
+        await Audit.AppendAsync(
+            _sam,
+            null,
+            "ReadFullRecord",
+            "treatment",
+            false,
+            DenyReason.NoCertificate
+        );
+
+        IReadOnlyList<AuditEvent> events = await Audit.ListForPatientAsync(_sam);
+
+        Assert.Equal(Rivera, events[0].Actor);
+        Assert.Null(events[1].Actor);
     }
 }
