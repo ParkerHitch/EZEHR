@@ -13,6 +13,12 @@ public static class OrgDirectory
 
     public const string KidneyCheckUri = "urn:app:kidney-check";
 
+    /// <summary>The CN of the platform operator's certificate. The server pins its thumbprint, not this name.</summary>
+    public const string PlatformCommonName = "platform.ezehr";
+
+    /// <summary>A provider slug: one DNS label, lowercase, so it fits both the URI and the certificate CN.</summary>
+    public const string SlugPattern = "^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$";
+
     public static readonly IReadOnlyList<Organization> DemoOrganizations =
     [
         DemoProvider("lakeside", "Lakeside Urgent Care"),

@@ -20,11 +20,43 @@ public sealed class NetworkController(
     CallerManager callerManager,
     InviteManager inviteManager,
     RecordManager recordManager,
-    OrganizationAuditManager organizationAuditManager
+    OrganizationAuditManager organizationAuditManager,
+    OrganizationManager organizationManager
 ) : ControllerBase
 {
     /// <summary>Calls a minute per client address, set up in Program.cs.</summary>
     public const string RateLimitPolicy = "network";
+
+    /// <summary>
+    /// The platform operator adds a provider to the organizations table, with the pinned platform certificate. The
+    /// provider's EZCA certificate (CN {slug}.providers.ezehr) is accepted from the next request.
+    /// </summary>
+    [HttpPost("register-provider")]
+    public async Task<IActionResult> RegisterProviderAsync(RegisterProviderRequest request)
+    {
+        X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
+        Caller caller = callerManager.FromPlatformCertificate(certificate);
+        RegisterProviderResult result = await organizationManager.RegisterProviderAsync(
+            caller,
+            request.Slug,
+            request.DisplayName
+        );
+        if (!result.Allowed)
+        {
+            return DenialResult(result.Reason);
+        }
+        if (result.Error is OrganizationError error)
+        {
+            return Conflict(new ErrorResponse(error.ToString()));
+        }
+        return StatusCode(
+            StatusCodes.Status201Created,
+            new RegisterProviderResponse(
+                result.Organization!.Uri,
+                result.Organization.CertificateCommonName
+            )
+        );
+    }
 
     [HttpPost("create-enrollment-invite")]
     public async Task<IActionResult> CreateEnrollmentInviteAsync(

@@ -12,15 +12,17 @@ namespace EZEHR.Tools.Commands;
 /// <summary>
 /// Stands in for a provider's EHR on the network: asks for an enrollment invite for one of its patients, pushes
 /// that patient's records from seed/{provider}.json, signed with .pki/{provider}.pfx, and reads the provider's own
-/// audit trail (what its clinicians and its system did).
+/// audit trail (what its clinicians and its system did). Works for the demo providers and any onboarded one; only
+/// the demo providers have seed records to push.
 /// </summary>
 public static class ProviderCommand
 {
     public const string Usage = """
-          provider invite <lakeside|northwind|maple|riverside> <providerPatientId>
-          provider push <lakeside|northwind|maple|riverside> <providerPatientId>
-          provider audit <lakeside|northwind|maple|riverside> [--clinician <uri>] [--patient <providerPatientId>]
-          provider clinicians <lakeside|northwind|maple|riverside>
+          provider invite <provider> <providerPatientId>
+          provider push <provider> <providerPatientId>
+          provider audit <provider> [--clinician <uri>] [--patient <providerPatientId>]
+          provider clinicians <provider>
+            <provider>: lakeside, northwind, maple, riverside, or one onboarded with `certs issue --provider`
         """;
 
     public static async Task<int> RunAsync(string[] args)
@@ -112,6 +114,11 @@ public static class ProviderCommand
     {
         const string path = "api/network/push-signed-records";
         PfxFile signingCertificate = PfxFile.Load(ToolPaths.Pki($"{slug}.pfx"));
+        if (!File.Exists(SeedFile.PathFor(slug)))
+        {
+            Console.Error.WriteLine($"{slug} has no seed records to push; only the demo providers do.");
+            return 1;
+        }
         SeedFile seed = SeedFile.Load(slug);
         foreach (SeedVisit visit in seed.Visits)
         {
@@ -232,15 +239,20 @@ public static class ProviderCommand
 
     private static bool IsProvider(string slug)
     {
-        return OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri(slug))?.Kind
+        return ToolOrganizations.Load().FindByUri(OrgDirectory.ProviderUri(slug))?.Kind
             == PartyKind.Provider;
     }
 
     private sealed record SeedFile(string Provider, string Organization, SeedVisit[] Visits)
     {
+        public static string PathFor(string slug)
+        {
+            return Path.Combine(ToolPaths.SeedDirectory, $"{slug}.json");
+        }
+
         public static SeedFile Load(string slug)
         {
-            string path = Path.Combine(ToolPaths.SeedDirectory, $"{slug}.json");
+            string path = PathFor(slug);
             return JsonSerializer.Deserialize<SeedFile>(File.ReadAllText(path), NetworkClient.Json)
                 ?? throw new InvalidDataException($"{path} is empty.");
         }

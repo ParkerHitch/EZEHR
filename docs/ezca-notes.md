@@ -22,3 +22,16 @@ What the EZCA setup on Nov 14 showed. The tenant is `mwpg089outlook.onmicrosoft.
 - The response carries the issuing and root certificates. The tool writes them to `.pki/intermediates.pem` and `.pki/anchors.pem`, and they're committed as `Security/Trust/*.pem`.
 - Check: `openssl verify -CAfile Security/Trust/anchors.pem -untrusted Security/Trust/intermediates.pem -purpose sslclient <leaf>` prints `OK` for all five.
 - The server never calls EZCA. It only trusts `Security/Trust/`, which is copied into the build and publish output, and relative paths are resolved from the app's folder.
+
+## Onboarding a new provider (`certs issue --ca ezca --provider <slug> --name "<name>"`)
+
+- **A new domain works right away.** The tool registers `<slug>.providers.ezehr` on the issuing CA with the SDK's
+  `RegisterDomainAsync`. The signed-in account becomes owner and certificate administrator, and the tool reuses the
+  account entry EZCA already lists on another domain when it finds one. A domain that's already registered is skipped.
+- The tool reads the signed-in account's object id from an ARM token (`az login --allow-no-subscriptions` is
+  enough).
+- Then it issues the certificate and calls `register-provider` with `.pki/platform.pfx`, so that comes first:
+  `certs issue --ca ezca --platform`. That command registers `platform.ezehr` the same way and prints the SHA-256
+  thumbprint to set as `App__PlatformCertificateThumbprint` on App Service. The server only accepts the platform
+  certificate whose thumbprint matches that setting, so re-issuing it means updating the setting.
+- `--invite <providerPatientId>` prints the new provider's first enrollment link at the end.

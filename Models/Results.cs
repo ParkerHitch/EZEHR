@@ -65,6 +65,14 @@ public sealed record ReadOrganizationAuditResult(
     long? NextAfterId
 );
 
+/// <summary>Allowed is the platform check; Error is set when an allowed request couldn't be stored.</summary>
+public sealed record RegisterProviderResult(
+    bool Allowed,
+    DenyReason? Reason,
+    OrganizationError? Error,
+    Organization? Organization
+);
+
 public sealed record ListOrganizationCliniciansResult(
     bool Allowed,
     DenyReason? Reason,

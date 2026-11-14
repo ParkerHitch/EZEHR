@@ -33,8 +33,15 @@ public sealed class TestHeaderCertificateService : IClientCertificateService
 }
 
 /// <summary>Hosts the real app against a test database, a local key wrapper, the test CA and a fake clock.</summary>
-public sealed class EzehrFactory(TestDatabase database) : WebApplicationFactory<Program>
+public sealed class EzehrFactory : WebApplicationFactory<Program>
 {
+    public EzehrFactory(TestDatabase database)
+    {
+        Database = database;
+        Platform = Pki.Issue(OrgDirectory.PlatformCommonName);
+        PlatformThumbprint = Platform.GetCertHashString(HashAlgorithmName.SHA256);
+    }
+
     private readonly string _trustDirectory = Path.Combine(
         Path.GetTempPath(),
         $"ezehr-trust-{Guid.NewGuid():N}"
@@ -42,7 +49,16 @@ public sealed class EzehrFactory(TestDatabase database) : WebApplicationFactory<
 
     public TestPki Pki { get; } = new();
 
-    public TestDatabase Database { get; } = database;
+    /// <summary>The platform operator's certificate, issued by the test CA.</summary>
+    public X509Certificate2 Platform { get; private set; } = null!;
+
+    /// <summary>
+    /// What App:PlatformCertificateThumbprint is set to: the Platform certificate's, unless a test changes it before
+    /// its first request.
+    /// </summary>
+    public string? PlatformThumbprint { get; set; }
+
+    public TestDatabase Database { get; }
 
     /// <summary>Stands in for the phone's authenticator: tests set what the next passkey ceremony verifies to.</summary>
     public FakeFido2Service Fido2 { get; } = new();
@@ -90,6 +106,7 @@ public sealed class EzehrFactory(TestDatabase database) : WebApplicationFactory<
         );
         builder.UseSetting("App:Origin", "https://ezehr.test");
         builder.UseSetting("App:TrustAnchorsPemPath", anchorsPath);
+        builder.UseSetting("App:PlatformCertificateThumbprint", PlatformThumbprint ?? "");
         builder.UseSetting(
             "App:IntermediatesPemPath",
             Path.Combine(_trustDirectory, "intermediates.pem")

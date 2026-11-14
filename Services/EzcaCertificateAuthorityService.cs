@@ -16,6 +16,60 @@ public sealed class CertificateAuthorityException(string message, Exception? inn
 public sealed class EzcaCertificateAuthorityService(IEZCAClient client, AvailableCAModel ca)
     : ICertificateAuthorityService
 {
+    /// <summary>
+    /// EZCA only issues for names registered on the CA. Registers the domain, with the given account as owner and
+    /// certificate administrator, unless it already is. True when it registered it; a new domain works at once.
+    /// </summary>
+    public async Task<bool> EnsureDomainRegisteredAsync(
+        string domain,
+        string administratorObjectId,
+        string administratorName
+    )
+    {
+        List<DomainInformationModel> registered = await client.GetRegisteredDomainsAsync() ?? [];
+        if (
+            registered.Any(candidate =>
+                candidate.CAID == ca.CAID
+                && string.Equals(candidate.Domain, domain, StringComparison.OrdinalIgnoreCase)
+            )
+        )
+        {
+            return false;
+        }
+        // Reuse the account exactly as EZCA lists it on another domain when it can, so its type is EZCA's own.
+        AADObjectModel administrator =
+            registered
+                .SelectMany(candidate => candidate.DomainOwners ?? [])
+                .FirstOrDefault(owner => owner.ObjectId == administratorObjectId)
+            ?? new AADObjectModel(administratorObjectId, administratorName);
+        APIResultModel result;
+        try
+        {
+            result = await client.RegisterDomainAsync(
+                ca,
+                domain,
+                [administrator],
+                [administrator],
+                [],
+                []
+            );
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new CertificateAuthorityException(
+                $"EZCA refused to register {domain}: {exception.Message}",
+                exception
+            );
+        }
+        if (!result.Success)
+        {
+            throw new CertificateAuthorityException(
+                $"EZCA refused to register {domain}: {result.Message}"
+            );
+        }
+        return true;
+    }
+
     public async Task<IssuedCertificate> IssueAsync(
         string csrPem,
         string subjectName,

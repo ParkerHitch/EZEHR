@@ -4,6 +4,7 @@ using EZEHR.Managers;
 using EZEHR.Models;
 using EZEHR.Tests.Data;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -27,7 +28,7 @@ public class ClinicianAuthTests : IAsyncLifetime
         _callerManager = new CallerManager(
             _clock,
             Options.Create(new AppOptions()),
-            new OrganizationManager(_database.Db)
+            new OrganizationManager(_database.Db, NullLogger<OrganizationManager>.Instance)
         );
     }
 

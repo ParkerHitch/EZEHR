@@ -22,3 +22,9 @@ public abstract record Caller;
 public sealed record VerifiedCaller(Party Party, DateTimeOffset? SessionStartedAt) : Caller;
 
 public sealed record UnverifiedCaller(DenyReason Reason) : Caller;
+
+/// <summary>
+/// EZEHR's own operator, proven by the pinned platform certificate. Not a party: it never touches a record, and only
+/// CallerManager.FromPlatformCertificate makes one, so only registration endpoints can see it.
+/// </summary>
+public sealed record PlatformCaller : Caller;

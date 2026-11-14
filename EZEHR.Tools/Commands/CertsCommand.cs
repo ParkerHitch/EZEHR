@@ -1,23 +1,33 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Azure.Core;
 using Azure.Identity;
 using EZCAClient.Managers;
 using EZCAClient.Models;
 using EZEHR.Models;
 using EZEHR.Services;
+using EZEHR.Tools.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EZEHR.Tools.Commands;
 
 /// <summary>
-/// Issues every organization and app certificate in OrgDirectory, and the broker's deliberately self-made one.
-/// Writes .pki/{slug}.pfx plus .pki/anchors.pem and .pki/intermediates.pem, the public trust files the server
-/// loads (copied to Security/Trust/ for the deployed site).
+/// Issues certificates and writes them to .pki/{slug}.pfx, plus .pki/anchors.pem and .pki/intermediates.pem, the
+/// public trust files the server loads (copied to Security/Trust/ for the deployed site):
+/// - with no flag, every demo organization and app in OrgDirectory;
+/// - --platform, the platform operator's certificate, whose thumbprint the server pins;
+/// - --provider, onboards a new provider: registers its name on the EZCA CA, issues its certificate, and adds it to
+///   EZEHR through register-provider with the platform certificate.
+/// Also the broker's deliberately self-made one.
 /// </summary>
 public static class CertsCommand
 {
     public const string Usage = """
           certs issue --ca local|ezca [--key ec|rsa] [--ca-id <id>] [--template-id <id>]
+              [--platform | --provider <slug> --name "<display name>" [--invite <providerPatientId>]]
           certs broker
         """;
 
@@ -26,6 +36,9 @@ public static class CertsCommand
     public const string BrokerCommonName = "exchange.broker.example";
 
     private const string EzcaUrl = "https://portal.ezca.io";
+
+    /// <summary>Any Azure scope gives a token naming the signed-in account; this one works without a subscription.</summary>
+    private const string AccountTokenScope = "https://management.azure.com/.default";
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -45,47 +58,196 @@ public static class CertsCommand
     {
         string? authority = CommandLine.Option(args, "--ca");
         string keyType = CommandLine.Option(args, "--key") ?? "ec";
+        bool platform = args.Contains("--platform");
+        string? providerSlug = CommandLine.Option(args, "--provider");
+        string? providerName = CommandLine.Option(args, "--name");
+        string? inviteFor = CommandLine.Option(args, "--invite");
         if (keyType is not ("ec" or "rsa"))
         {
             Console.Error.WriteLine("--key must be ec or rsa");
             return 1;
         }
-
-        ICertificateAuthorityService? certificateAuthority = authority switch
+        if (authority is not ("local" or "ezca") || (platform && providerSlug is not null))
         {
-            "local" => LocalAuthority(),
-            "ezca" => await EzcaAuthorityAsync(
-                CommandLine.Option(args, "--ca-id"),
-                CommandLine.Option(args, "--template-id")
-            ),
-            _ => null,
-        };
-        if (certificateAuthority is null)
+            Console.Error.WriteLine($"usage:\n{Usage}");
+            return 1;
+        }
+        if (
+            providerSlug is not null
+            && (
+                !Regex.IsMatch(providerSlug, OrgDirectory.SlugPattern)
+                || string.IsNullOrWhiteSpace(providerName)
+            )
+        )
         {
-            if (authority is not ("local" or "ezca"))
-            {
-                Console.Error.WriteLine($"usage:\n{Usage}");
-            }
+            Console.Error.WriteLine(
+                "--provider takes a lowercase slug (letters, digits, hyphens) and needs --name \"<display name>\""
+            );
+            return 1;
+        }
+        if (providerSlug is not null && !File.Exists(PlatformPfxPath))
+        {
+            Console.Error.WriteLine(
+                $"{PlatformPfxPath} not found: run `certs issue --ca {authority} --platform` first."
+            );
             return 1;
         }
 
-        List<X509Certificate2> chainCertificates = [];
-        foreach (
-            string commonName in OrgDirectory.DemoOrganizations.Select(organization =>
-                organization.CertificateCommonName
-            )
+        DefaultAzureCredential credential = new();
+        ICertificateAuthorityService? certificateAuthority = authority switch
+        {
+            "local" => LocalAuthority(),
+            _ => await EzcaAuthorityAsync(
+                credential,
+                CommandLine.Option(args, "--ca-id"),
+                CommandLine.Option(args, "--template-id")
+            ),
+        };
+        if (certificateAuthority is null)
+        {
+            return 1;
+        }
+
+        IReadOnlyList<string> commonNames = platform ? [OrgDirectory.PlatformCommonName]
+            : providerSlug is not null ? [OrgDirectory.ProviderCommonName(providerSlug)]
+            : OrgDirectory
+                .DemoOrganizations.Select(organization => organization.CertificateCommonName)
+                .ToList();
+
+        // The demo names were registered on the CA at setup; a new one is registered here.
+        if (
+            certificateAuthority is EzcaCertificateAuthorityService ezca
+            && (platform || providerSlug is not null)
         )
+        {
+            (string objectId, string name) = await SignedInAccountAsync(credential);
+            foreach (string commonName in commonNames)
+            {
+                bool registered = await ezca.EnsureDomainRegisteredAsync(
+                    commonName,
+                    objectId,
+                    name
+                );
+                Console.WriteLine(
+                    registered
+                        ? $"registered {commonName} on the EZCA CA, owned by {name}"
+                        : $"{commonName} is already registered on the EZCA CA"
+                );
+            }
+        }
+
+        List<X509Certificate2> chainCertificates = [];
+        PfxFile? lastIssued = null;
+        foreach (string commonName in commonNames)
         {
             PfxFile issued = await IssueOneAsync(certificateAuthority, commonName, keyType);
             string path = ToolPaths.Pki($"{Slug(commonName)}.pfx");
             issued.Save(path);
             chainCertificates.AddRange(issued.Chain);
+            lastIssued = issued;
             Console.WriteLine(
                 $"wrote {path}  CN={commonName}  valid until {issued.Certificate.NotAfter:yyyy-MM-dd}"
             );
         }
+        WriteTrustFiles(chainCertificates);
 
-        // Self-signed chain members are the roots we trust; the rest are issuing CAs.
+        if (platform)
+        {
+            string thumbprint = lastIssued!.Certificate.GetCertHashString(HashAlgorithmName.SHA256);
+            Console.WriteLine();
+            Console.WriteLine("Pin it on the server, then restart it:");
+            Console.WriteLine($"  App Service setting:  App__PlatformCertificateThumbprint = {thumbprint}");
+            Console.WriteLine(
+                $"  locally, in the server's shell:  export App__PlatformCertificateThumbprint={thumbprint}"
+            );
+            return 0;
+        }
+        if (providerSlug is not null)
+        {
+            int exitCode = await RegisterProviderAsync(providerSlug, providerName!);
+            if (exitCode != 0 || inviteFor is null)
+            {
+                return exitCode;
+            }
+            Console.WriteLine();
+            return await ProviderCommand.RunAsync(["invite", providerSlug, inviteFor]);
+        }
+        return 0;
+    }
+
+    private static string PlatformPfxPath
+    {
+        get { return ToolPaths.Pki($"{Slug(OrgDirectory.PlatformCommonName)}.pfx"); }
+    }
+
+    /// <summary>Adds the provider to EZEHR with the platform certificate; already there counts as done.</summary>
+    private static async Task<int> RegisterProviderAsync(string slug, string displayName)
+    {
+        using HttpClient client = NetworkClient.Create(NetworkClient.BaseUrl, PlatformPfxPath);
+        using HttpResponseMessage response = await NetworkClient.PostJsonAsync(
+            client,
+            "api/network/register-provider",
+            new RegisterProviderRequest(slug, displayName)
+        );
+        if (response.StatusCode == HttpStatusCode.Created)
+        {
+            Console.WriteLine(
+                $"registered {displayName} on {NetworkClient.BaseUrl} as {OrgDirectory.ProviderUri(slug)}"
+            );
+        }
+        else if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            Console.WriteLine($"{OrgDirectory.ProviderUri(slug)} is already on {NetworkClient.BaseUrl}");
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                $"register-provider: {await NetworkClient.DescribeAsync(response)}"
+            );
+            return 1;
+        }
+        ToolOrganizations.Add(
+            new Organization(
+                OrgDirectory.ProviderUri(slug),
+                PartyKind.Provider,
+                displayName,
+                OrgDirectory.ProviderCommonName(slug),
+                null
+            )
+        );
+        Console.WriteLine($"next: ezehr-tools provider invite {slug} <providerPatientId>");
+        return 0;
+    }
+
+    /// <summary>The object id and name of whoever DefaultAzureCredential signs in as, read from an access token.</summary>
+    private static async Task<(string ObjectId, string Name)> SignedInAccountAsync(
+        TokenCredential credential
+    )
+    {
+        AccessToken token = await credential.GetTokenAsync(
+            new TokenRequestContext([AccountTokenScope]),
+            CancellationToken.None
+        );
+        string payload = token.Token.Split('.')[1].Replace('-', '+').Replace('_', '/');
+        using JsonDocument claims = JsonDocument.Parse(
+            Convert.FromBase64String(payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '='))
+        );
+        string objectId = claims.RootElement.GetProperty("oid").GetString()!;
+        string name = Claim(claims, "upn") ?? Claim(claims, "unique_name") ?? Claim(claims, "name")
+            ?? objectId;
+        return (objectId, name);
+    }
+
+    private static string? Claim(JsonDocument claims, string name)
+    {
+        return claims.RootElement.TryGetProperty(name, out JsonElement value)
+            ? value.GetString()
+            : null;
+    }
+
+    /// <summary>Self-signed chain members are the roots we trust; the rest are issuing CAs.</summary>
+    private static void WriteTrustFiles(IEnumerable<X509Certificate2> chainCertificates)
+    {
         List<X509Certificate2> distinct = chainCertificates
             .DistinctBy(certificate => certificate.Thumbprint)
             .ToList();
@@ -104,7 +266,6 @@ public static class CertsCommand
         Console.WriteLine(
             $"wrote {ToolPaths.Pki("anchors.pem")} and {ToolPaths.Pki("intermediates.pem")}"
         );
-        return 0;
     }
 
     private static async Task<PfxFile> IssueOneAsync(
@@ -170,16 +331,12 @@ public static class CertsCommand
 
     /// <summary>Signs in with DefaultAzureCredential (az login) and picks the issuing CA by id, or the only one offered.</summary>
     private static async Task<EzcaCertificateAuthorityService?> EzcaAuthorityAsync(
+        TokenCredential credential,
         string? caId,
         string? templateId
     )
     {
-        EZCAClientClass client = new(
-            new HttpClient(),
-            NullLogger.Instance,
-            EzcaUrl,
-            new DefaultAzureCredential()
-        );
+        EZCAClientClass client = new(new HttpClient(), NullLogger.Instance, EzcaUrl, credential);
         AvailableCAModel[] available = await client.GetAvailableCAsAsync() ?? [];
         List<AvailableCAModel> matching = available
             .Where(ca => caId is null || ca.CAID == caId)
