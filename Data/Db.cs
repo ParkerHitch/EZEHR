@@ -15,7 +15,8 @@ public static class Db
         conn.Open();
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = path == ":memory:" ? Schema : "PRAGMA journal_mode=WAL;" + Schema;
+            // Default rollback journal, not WAL: App Service's /home is a network share, where WAL's shared memory is unreliable.
+            cmd.CommandText = Schema;
             cmd.ExecuteNonQuery();
         }
         return conn;
