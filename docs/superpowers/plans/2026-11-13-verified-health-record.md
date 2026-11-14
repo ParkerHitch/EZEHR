@@ -350,7 +350,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - `Ezca_error_throws_with_message`.
 - [x] Run (FAIL), implement, run (PASS).
 - [ ] Run `certs issue --ca ezca`, then check each organization certificate with `openssl verify`. Expected: `OK`. (Blocked on the EZCA admin consent; `certs issue --ca local` verifies `OK` with `openssl verify -CAfile .pki/anchors.pem`.)
-- [ ] Copy `anchors.pem` and `intermediates.pem` to `Security/Trust/`. They're public, so commit them.
+- [x] Copy `anchors.pem` and `intermediates.pem` to `Security/Trust/`. They're public, so commit them. `EZEHR.csproj` copies them into the build and publish output, and `CertificateValidator` resolves relative paths from the app's folder. See `docs/ezca-notes.md` for how the EZCA setup actually went.
 - [x] Commit `feat: EZCA certificate authority and org certificate tool`.
 
 ### Task 4: Encryption at rest and the record store (App lead, 7:30–9:00 PM)
