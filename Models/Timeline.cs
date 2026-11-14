@@ -23,7 +23,7 @@ public sealed record Timeline(
 );
 
 /// <summary>What the patient's home page shows.</summary>
-public sealed record PatientHome(string PatientName, Timeline Timeline);
+public sealed record PatientHome(string PatientName, Timeline Timeline, string RecordVersion);
 
 /// <summary>A share offer as the Share page shows it, and what became of it.</summary>
 public sealed record ShareStatus(

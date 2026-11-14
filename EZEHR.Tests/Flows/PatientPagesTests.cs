@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using EZEHR.Managers;
@@ -114,6 +115,53 @@ public class PatientPagesTests : IAsyncLifetime
         Assert.True(token.Success, "no antiforgery token on " + pageUrl);
         fields["__RequestVerificationToken"] = token.Groups[1].Value;
         return await _phone.PostAsync(postUrl, new FormUrlEncodedContent(fields));
+    }
+
+    private static string TimelinePollPath(string page)
+    {
+        return Regex
+            .Match(page, "hx-get=\"(/Patient/Home\\?[^\"]*handler=Timeline[^\"]*)\"")
+            .Groups[1]
+            .Value;
+    }
+
+    [Fact]
+    public async Task Home_timeline_poll_shows_a_pushed_record_without_a_refresh()
+    {
+        string pollPath = TimelinePollPath(await ReadAsync("/Patient/Home"));
+        HttpResponseMessage unchanged = await _phone.GetAsync(pollPath);
+        Assert.Equal(HttpStatusCode.NoContent, unchanged.StatusCode);
+
+        Party lakeside = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri("lakeside"))!;
+        X509Certificate2 certificate = _app.Pki.Issue(OrgDirectory.ProviderCommonName("lakeside"));
+        JsonElement condition = JsonSerializer.SerializeToElement(
+            new
+            {
+                resourceType = "Condition",
+                id = "poll-test",
+                recordedDate = "2026-11-14",
+                code = new { text = "Seasonal allergies" },
+            }
+        );
+        PushSignedRecordsResult pushed = await _app.WithAsync(services =>
+            services
+                .GetRequiredService<RecordManager>()
+                .PushSignedRecordsAsync(
+                    new VerifiedCaller(lakeside, null),
+                    "LUC-20417",
+                    [RecordSigner.Sign(condition, certificate, [], _app.Pki.Clock.GetUtcNow())]
+                )
+        );
+        Assert.True(pushed.Allowed && pushed.Error is null, $"{pushed.Error}");
+
+        HttpResponseMessage changed = await _phone.GetAsync(pollPath);
+        string timeline = WebUtility.HtmlDecode(await changed.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+        Assert.Contains("Seasonal allergies", timeline);
+        string nextPollPath = TimelinePollPath(timeline);
+        Assert.NotEqual(pollPath, nextPollPath);
+        Assert.Equal(HttpStatusCode.NoContent, (await _phone.GetAsync(nextPollPath)).StatusCode);
     }
 
     [Fact]
