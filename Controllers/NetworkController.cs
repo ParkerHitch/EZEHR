@@ -164,6 +164,21 @@ public sealed class NetworkController(
         return Ok(new ReadOrganizationAuditResponse(result.Events, result.NextAfterId));
     }
 
+    /// <summary>The clinicians who have acted for the caller organization, most recently seen first.</summary>
+    [HttpGet("list-organization-clinicians")]
+    public async Task<IActionResult> ListOrganizationCliniciansAsync()
+    {
+        X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
+        ListOrganizationCliniciansResult result =
+            await organizationAuditManager.ListOrganizationCliniciansAsync(caller);
+        if (!result.Allowed)
+        {
+            return DenialResult(result.Reason);
+        }
+        return Ok(new ListOrganizationCliniciansResponse(result.Clinicians));
+    }
+
     /// <summary>401 for certificate problems; 403 for everything else a verified caller is refused.</summary>
     private ObjectResult DenialResult(DenyReason? reason)
     {

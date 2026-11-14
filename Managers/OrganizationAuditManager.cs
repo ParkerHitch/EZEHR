@@ -67,6 +67,42 @@ public sealed class OrganizationAuditManager(Db db)
         return new ReadOrganizationAuditResult(true, null, events, nextAfterId);
     }
 
+    /// <summary>
+    /// Every clinician who has acted for the organization, most recently seen first. Clinicians aren't registered
+    /// anywhere, so this is how an organization finds the clinicianUri values to filter its audit by.
+    /// </summary>
+    public async Task<ListOrganizationCliniciansResult> ListOrganizationCliniciansAsync(
+        Caller caller
+    )
+    {
+        if (RefuseCaller(caller) is DenyReason refused)
+        {
+            return new ListOrganizationCliniciansResult(false, refused, []);
+        }
+        string organizationUri = ((VerifiedCaller)caller).Party.OrgUri;
+
+        await using SqlConnection connection = await db.OpenAsync();
+        IEnumerable<OrganizationClinician> clinicians =
+            await connection.QueryAsync<OrganizationClinician>(
+                """
+                WITH clinician_events AS (
+                    SELECT actor_uri, actor_name, at, granted,
+                           ROW_NUMBER() OVER (PARTITION BY actor_uri ORDER BY id DESC) AS newest
+                    FROM audit_events
+                    WHERE actor_org_uri = @organizationUri AND actor_kind = 'Clinician')
+                SELECT actor_uri AS ClinicianUri,
+                       MAX(CASE WHEN newest = 1 THEN actor_name END) AS DisplayName,
+                       MIN(at) AS FirstSeenAt, MAX(at) AS LastSeenAt, COUNT(*) AS EventCount,
+                       SUM(CASE WHEN granted = 0 THEN 1 ELSE 0 END) AS DeniedCount
+                FROM clinician_events
+                GROUP BY actor_uri
+                ORDER BY MAX(at) DESC, actor_uri
+                """,
+                new { organizationUri }
+            );
+        return new ListOrganizationCliniciansResult(true, null, clinicians.ToList());
+    }
+
     /// <summary>Only a verified organization (provider or app) audits, and only itself.</summary>
     private static DenyReason? RefuseCaller(Caller caller)
     {

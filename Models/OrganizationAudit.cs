@@ -32,3 +32,13 @@ public sealed record OrganizationAuditEvent(
     bool Granted,
     DenyReason? Reason
 );
+
+/// <summary>A clinician seen acting for the organization. DisplayName is the name on their most recent event.</summary>
+public sealed record OrganizationClinician(
+    string ClinicianUri,
+    string DisplayName,
+    DateTimeOffset FirstSeenAt,
+    DateTimeOffset LastSeenAt,
+    int EventCount,
+    int DeniedCount
+);

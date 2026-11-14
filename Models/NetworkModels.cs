@@ -26,3 +26,7 @@ public sealed record ReadOrganizationAuditResponse(
     IReadOnlyList<OrganizationAuditEvent> Events,
     long? NextAfterId
 );
+
+public sealed record ListOrganizationCliniciansResponse(
+    IReadOnlyList<OrganizationClinician> Clinicians
+);

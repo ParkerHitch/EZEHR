@@ -82,4 +82,27 @@ public class OrganizationAuditApiTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Provider_lists_its_clinicians()
+    {
+        HttpResponseMessage response = await _app.Client(_riverside)
+            .GetAsync("/api/network/list-organization-clinicians");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            Rivera.SubjectUri,
+            body.GetProperty("clinicians")[0].GetProperty("clinicianUri").GetString()
+        );
+    }
+
+    [Fact]
+    public async Task Listing_without_certificate_is_401()
+    {
+        HttpResponseMessage response = await _app.Client()
+            .GetAsync("/api/network/list-organization-clinicians");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

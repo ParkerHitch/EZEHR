@@ -324,4 +324,67 @@ public class OrganizationAuditTests : IAsyncLifetime
         Assert.Equal(DenyReason.WrongPartyKind, result.Reason);
         Assert.Empty(result.Events);
     }
+
+    [Fact]
+    public async Task Lists_each_clinician_once_with_latest_name_and_counts()
+    {
+        await LogAsync(Rivera, _sam);
+        _clock.Advance(TimeSpan.FromMinutes(30));
+        await LogAsync(Chen, _sam);
+        await LogAsync(Okafor, _sam);
+        await LogAsync(Riverside, _sam, "PushSignedRecords");
+        _clock.Advance(TimeSpan.FromMinutes(30));
+        await LogAsync(
+            Rivera with
+            {
+                DisplayName = "Dr. Ana Rivera",
+            },
+            _sam,
+            granted: false,
+            reason: DenyReason.GrantExpired
+        );
+
+        ListOrganizationCliniciansResult result =
+            await _services.OrganizationAudit.ListOrganizationCliniciansAsync(
+                Organization(Riverside)
+            );
+
+        Assert.True(result.Allowed);
+        Assert.Equal(
+            [
+                new OrganizationClinician(
+                    Rivera.SubjectUri,
+                    "Dr. Ana Rivera",
+                    Start,
+                    Start.AddHours(1),
+                    2,
+                    1
+                ),
+                new OrganizationClinician(
+                    Chen.SubjectUri,
+                    "Dr. Chen",
+                    Start.AddMinutes(30),
+                    Start.AddMinutes(30),
+                    1,
+                    0
+                ),
+            ],
+            result.Clinicians
+        );
+    }
+
+    [Fact]
+    public async Task Unverified_caller_cannot_list_clinicians()
+    {
+        await LogAsync(Rivera, _sam);
+
+        ListOrganizationCliniciansResult result =
+            await _services.OrganizationAudit.ListOrganizationCliniciansAsync(
+                new UnverifiedCaller(DenyReason.NoCertificate)
+            );
+
+        Assert.False(result.Allowed);
+        Assert.Equal(DenyReason.NoCertificate, result.Reason);
+        Assert.Empty(result.Clinicians);
+    }
 }

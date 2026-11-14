@@ -64,3 +64,9 @@ public sealed record ReadOrganizationAuditResult(
     IReadOnlyList<OrganizationAuditEvent> Events,
     long? NextAfterId
 );
+
+public sealed record ListOrganizationCliniciansResult(
+    bool Allowed,
+    DenyReason? Reason,
+    IReadOnlyList<OrganizationClinician> Clinicians
+);
