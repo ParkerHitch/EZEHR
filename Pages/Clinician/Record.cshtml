@@ -1,0 +1,10 @@
+@page
+@model EZEHR.Pages.Clinician.RecordModel
+@{
+  ViewData["Title"] = "Patient record";
+}
+
+<div class="clinician-page">
+  <h1 class="h3 mb-3">@Model.Header</h1>
+  <partial name="_Timeline" model="Model.Timeline"/>
+</div>

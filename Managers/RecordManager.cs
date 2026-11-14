@@ -131,12 +131,19 @@ public sealed class RecordManager(
         );
         if (!decision.Allowed)
         {
-            return new ReadFullRecordResult(false, decision.Reason, []);
+            return new ReadFullRecordResult(false, decision.Reason, [], decision.Grant, null);
         }
+        await using SqlConnection connection = await db.OpenAsync();
+        string? patientName = await connection.QuerySingleOrDefaultAsync<string>(
+            "SELECT display_name FROM patients WHERE id = @patientId",
+            new { patientId }
+        );
         return new ReadFullRecordResult(
             true,
             null,
-            await ReadVerifiedEntriesAsync(patientId, null)
+            await ReadVerifiedEntriesAsync(patientId, null),
+            decision.Grant,
+            patientName
         );
     }
 

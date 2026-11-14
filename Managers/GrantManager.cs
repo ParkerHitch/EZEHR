@@ -401,6 +401,13 @@ public sealed class GrantManager(
         return rows.Select(row => row.ToGrant()).ToList();
     }
 
+    /// <summary>The grantee's most recent grant for a patient: what a waiting clinician's request became.</summary>
+    public async Task<Grant?> FindNewestForGranteeAsync(Guid patientId, Party grantee)
+    {
+        IReadOnlyList<Grant> grants = await ListForGranteeAsync(patientId, grantee.SubjectUri);
+        return grants.FirstOrDefault();
+    }
+
     public async Task<Grant?> FindAsync(Guid grantId)
     {
         await using SqlConnection connection = await db.OpenAsync();
