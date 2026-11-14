@@ -5,6 +5,7 @@ using EZEHR.Managers;
 using EZEHR.Models;
 using EZEHR.Services;
 using EZEHR.Tools.Net;
+using QRCoder;
 
 namespace EZEHR.Tools.Commands;
 
@@ -63,16 +64,19 @@ public static class ProviderCommand
         return 1;
     }
 
-    private static async Task<int> InviteAsync(HttpClient client, string providerPatientId)
+    /// <summary>Prints the invite link with a QR code of it, for the patient's phone to scan.</summary>
+    public static async Task<int> InviteAsync(HttpClient client, string providerPatientId)
     {
+        const string path = "api/network/create-enrollment-invite";
+        NetworkLog.Request("POST", path, $"for its patient {providerPatientId}");
         using HttpResponseMessage response = await NetworkClient.PostJsonAsync(
             client,
-            "api/network/create-enrollment-invite",
+            path,
             new CreateEnrollmentInviteRequest(providerPatientId)
         );
         if (response.StatusCode != HttpStatusCode.Created)
         {
-            Console.Error.WriteLine(await NetworkClient.DescribeAsync(response));
+            await NetworkLog.FailedAsync(response);
             return 1;
         }
         CreateEnrollmentInviteResponse invite = (
@@ -80,8 +84,18 @@ public static class ProviderCommand
                 NetworkClient.Json
             )
         )!;
-        Console.WriteLine($"invite code: {GrantManager.FormatCode(invite.InviteCode)}");
-        Console.WriteLine(invite.EnrollmentUrl);
+        NetworkLog.Succeeded(
+            response,
+            $"invite code {GrantManager.FormatCode(invite.InviteCode)}, single use, valid 7 days"
+        );
+        Console.WriteLine();
+        Console.WriteLine($"  {invite.EnrollmentUrl}");
+        using QRCodeGenerator generator = new();
+        using QRCodeData data = generator.CreateQrCode(
+            invite.EnrollmentUrl,
+            QRCodeGenerator.ECCLevel.L
+        );
+        Console.WriteLine(new AsciiQRCode(data).GetGraphicSmall());
         return 0;
     }
 
@@ -90,17 +104,15 @@ public static class ProviderCommand
     /// now: the server checks the signer's chain at the JWS iat, and a certificate issued today isn't valid on a
     /// 2024 visit date. The clinical date stays in the resource itself (effectiveDateTime, period, ...).
     /// </summary>
-    private static async Task<int> PushAsync(
+    public static async Task<int> PushAsync(
         HttpClient client,
         string slug,
         string providerPatientId
     )
     {
+        const string path = "api/network/push-signed-records";
         PfxFile signingCertificate = PfxFile.Load(ToolPaths.Pki($"{slug}.pfx"));
         SeedFile seed = SeedFile.Load(slug);
-        int stored = 0;
-        int alreadyStored = 0;
-        int replaced = 0;
         foreach (SeedVisit visit in seed.Visits)
         {
             DateTimeOffset issuedAt = DateTimeOffset.UtcNow;
@@ -114,16 +126,19 @@ public static class ProviderCommand
                     )
                 )
                 .ToArray();
+            NetworkLog.Request(
+                "POST",
+                path,
+                $"{providerPatientId} · visit {visit.Date:yyyy-MM-dd} · {signedEntries.Length} records, each signed"
+            );
             using HttpResponseMessage response = await NetworkClient.PostJsonAsync(
                 client,
-                "api/network/push-signed-records",
+                path,
                 new PushSignedRecordsRequest(providerPatientId, signedEntries)
             );
             if (!response.IsSuccessStatusCode)
             {
-                Console.Error.WriteLine(
-                    $"{visit.Date:yyyy-MM-dd}: {await NetworkClient.DescribeAsync(response)}"
-                );
+                await NetworkLog.FailedAsync(response);
                 return 1;
             }
             PushSignedRecordsResponse result = (
@@ -131,21 +146,16 @@ public static class ProviderCommand
                     NetworkClient.Json
                 )
             )!;
-            stored += result.Stored;
-            alreadyStored += result.AlreadyStored;
-            replaced += result.Replaced;
-            Console.WriteLine(
-                $"{visit.Date:yyyy-MM-dd}: stored {result.Stored}, already stored {result.AlreadyStored}, replaced {result.Replaced}"
+            NetworkLog.Succeeded(
+                response,
+                $"stored {result.Stored}, already stored {result.AlreadyStored}, replaced {result.Replaced}"
             );
         }
-        Console.WriteLine(
-            $"{seed.Organization}: stored {stored}, already stored {alreadyStored}, replaced {replaced}"
-        );
         return 0;
     }
 
     /// <summary>Every page of the provider's audit, one line per attempt, oldest first.</summary>
-    private static async Task<int> AuditAsync(
+    public static async Task<int> AuditAsync(
         HttpClient client,
         string? clinicianUri,
         string? providerPatientId
@@ -163,12 +173,12 @@ public static class ProviderCommand
         long afterId = 0;
         while (true)
         {
-            using HttpResponseMessage response = await client.GetAsync(
-                $"api/network/read-organization-audit?afterId={afterId}{filters}"
-            );
+            string path = $"api/network/read-organization-audit?afterId={afterId}{filters}";
+            NetworkLog.Request("GET", path, "");
+            using HttpResponseMessage response = await client.GetAsync(path);
             if (!response.IsSuccessStatusCode)
             {
-                Console.Error.WriteLine(await NetworkClient.DescribeAsync(response));
+                await NetworkLog.FailedAsync(response);
                 return 1;
             }
             ReadOrganizationAuditResponse page = (
@@ -176,12 +186,16 @@ public static class ProviderCommand
                     NetworkClient.Json
                 )
             )!;
+            NetworkLog.Succeeded(
+                response,
+                page.Events.Count == 1 ? "1 event" : $"{page.Events.Count} events"
+            );
             foreach (OrganizationAuditEvent auditEvent in page.Events)
             {
                 string outcome = auditEvent.Granted ? "allowed" : $"refused {auditEvent.Reason}";
                 string patient = auditEvent.ProviderPatientId ?? auditEvent.PatientId.ToString();
                 Console.WriteLine(
-                    $"{auditEvent.At:yyyy-MM-dd HH:mm}  {auditEvent.ActorName, -20}  {auditEvent.Action, -18}  {outcome}  patient {patient}"
+                    $"    {auditEvent.At:yyyy-MM-dd HH:mm}  {auditEvent.ActorName, -20}  {auditEvent.Action, -18}  {outcome}  patient {patient}"
                 );
             }
             if (page.NextAfterId is not long nextAfterId)

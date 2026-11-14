@@ -8,28 +8,17 @@ using Microsoft.Extensions.Configuration;
 namespace EZEHR.Tools.Commands;
 
 /// <summary>
-/// The demo, start to finish. Talks to the site at EZEHR_BASE_URL and, for reset and finding Sam, straight to
-/// the database in AZURE_SQL_CONNECTIONSTRING as whoever is signed in with `az login`. `source scripts/azure.env`
-/// sets both for the deployed site; `scripts/local.sh` sets them for a local run.
+/// Backstage for the demo: empties the database before a run, and reports what Sam's record holds. Talks straight
+/// to the database in AZURE_SQL_CONNECTIONSTRING as whoever is signed in with `az login`, never to the network.
+/// `source scripts/azure.env` sets it for the deployed site; `scripts/local.sh` sets it for a local run. The demo's
+/// network calls are `stage`.
 /// </summary>
 public static class DemoCommand
 {
     public const string Usage = """
-          demo reset [--yes]   empty the database, then print invite links for all four providers
-          demo seed            push Maple, Northwind and Lakeside, then run Kidney Check
-          demo riverside       push Riverside's visit documentation (after the visit scene)
-          demo broker          the data broker: no certificate, then a self-made one
+          demo reset [--yes]   empty the database (organizations stay), before `stage`
           demo status          Sam's patient id, what the record holds, and the latest activity
         """;
-
-    // Sam Taylor's record at each provider. Lakeside's invite is the one Sam enrolls with.
-    private static readonly (string Slug, string ProviderPatientId)[] Providers =
-    [
-        ("lakeside", "LUC-20417"),
-        ("northwind", "NWH-88213"),
-        ("maple", "MSF-0932"),
-        ("riverside", "RPC-1107"),
-    ];
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -37,12 +26,6 @@ public static class DemoCommand
         {
             case "reset":
                 return await ResetAsync(args.Contains("--yes"));
-            case "seed":
-                return await SeedAsync();
-            case "riverside":
-                return await ProviderCommand.RunAsync(["push", "riverside", "RPC-1107"]);
-            case "broker":
-                return await BrokerAsync();
             case "status":
                 return await StatusAsync();
             default:
@@ -72,64 +55,7 @@ public static class DemoCommand
             }
         }
         await db.DeleteAllDataAsync();
-        Console.WriteLine("Database emptied.");
-        Console.WriteLine();
-
-        foreach ((string slug, string providerPatientId) in Providers)
-        {
-            Console.WriteLine(
-                slug switch
-                {
-                    "lakeside" => "1. Sam enrolls with this one (tick Kidney Check):",
-                    "riverside" => "Riverside: link this before the visit scene:",
-                    _ => "Then open this one while signed in, and tap Add:",
-                }
-            );
-            int exitCode = await ProviderCommand.RunAsync(["invite", slug, providerPatientId]);
-            if (exitCode != 0)
-            {
-                return exitCode;
-            }
-            Console.WriteLine();
-        }
-        Console.WriteLine("When Sam has linked Northwind and Maple, run: demo seed");
-        return 0;
-    }
-
-    private static async Task<int> SeedAsync()
-    {
-        Guid? samId = await FindSamAsync();
-        if (samId is null)
-        {
-            return 1;
-        }
-        foreach (string slug in new[] { "maple", "northwind", "lakeside" })
-        {
-            string providerPatientId = Providers
-                .Single(provider => provider.Slug == slug)
-                .ProviderPatientId;
-            int exitCode = await ProviderCommand.RunAsync(["push", slug, providerPatientId]);
-            if (exitCode != 0)
-            {
-                Console.Error.WriteLine(
-                    $"Has Sam linked {slug}? Open its invite link while signed in."
-                );
-                return exitCode;
-            }
-        }
-        return await KidneyCheckCommand.RunAsync(["run", samId.Value.ToString()]);
-    }
-
-    private static async Task<int> BrokerAsync()
-    {
-        Guid? samId = await FindSamAsync();
-        if (samId is null)
-        {
-            return 1;
-        }
-        await BrokerCommand.RunAsync(["request", samId.Value.ToString(), "--cert", "none"]);
-        Console.WriteLine();
-        await BrokerCommand.RunAsync(["request", samId.Value.ToString(), "--cert", "self"]);
+        Console.WriteLine("Database emptied. Next: ezehr-tools stage");
         return 0;
     }
 
@@ -178,7 +104,7 @@ public static class DemoCommand
     }
 
     /// <summary>Sam is whoever enrolled with Lakeside's invite for LUC-20417.</summary>
-    private static async Task<Guid?> FindSamAsync()
+    public static async Task<Guid?> FindSamAsync()
     {
         Db? db = OpenDatabase();
         if (db is null)
@@ -195,7 +121,7 @@ public static class DemoCommand
         if (samId is null)
         {
             Console.Error.WriteLine(
-                "Sam isn't enrolled yet: run `demo reset` and enroll with the Lakeside link."
+                "  Sam isn't enrolled yet: enroll on the phone with Lakeside's invite (stage step 1)."
             );
         }
         return samId;

@@ -31,37 +31,69 @@ public static class KidneyCheckCommand
         }
 
         string pfxPath = ToolPaths.Pki("kidney-check.pfx");
-        PfxFile appCertificate = PfxFile.Load(pfxPath);
         using HttpClient client = NetworkClient.Create(NetworkClient.BaseUrl, pfxPath);
-
-        using HttpResponseMessage labsResponse = await client.GetAsync(
-            $"api/network/patients/{patientId}/read-egfr-labs"
-        );
-        if (labsResponse.StatusCode == HttpStatusCode.Forbidden)
+        KidneyResult? result = await ReadEgfrLabsAsync(client, patientId);
+        if (result is null)
         {
-            Console.WriteLine(
-                $"{AppName} can't read this patient's labs: the patient revoked access or never turned it on."
-            );
-            Console.WriteLine(await NetworkClient.DescribeAsync(labsResponse));
             return 1;
         }
+        return await WriteSignedNoteAsync(client, PfxFile.Load(pfxPath), patientId, result);
+    }
+
+    /// <summary>
+    /// Reads the patient's eGFR labs, checks each lab's signature itself and applies KidneyRule. Null when the
+    /// server refused.
+    /// </summary>
+    public static async Task<KidneyResult?> ReadEgfrLabsAsync(HttpClient client, Guid patientId)
+    {
+        string path = $"api/network/patients/{patientId}/read-egfr-labs";
+        NetworkLog.Request("GET", path, "lab results only, under the grant Sam turned on");
+        using HttpResponseMessage labsResponse = await client.GetAsync(path);
         if (!labsResponse.IsSuccessStatusCode)
         {
-            Console.Error.WriteLine(await NetworkClient.DescribeAsync(labsResponse));
-            return 1;
+            await NetworkLog.FailedAsync(labsResponse);
+            if (labsResponse.StatusCode == HttpStatusCode.Forbidden)
+            {
+                Console.WriteLine(
+                    $"  {AppName} can't read this patient's labs: the patient revoked access or never turned it on."
+                );
+            }
+            return null;
         }
         SignedEntriesResponse labs = (
             await labsResponse.Content.ReadFromJsonAsync<SignedEntriesResponse>(NetworkClient.Json)
         )!;
+        NetworkLog.Succeeded(labsResponse, $"{labs.Entries.Count} signed lab results");
 
+        Console.WriteLine();
+        Console.WriteLine(
+            $"  {AppName} checks every signature itself, against its own trust anchors:"
+        );
         List<(DateOnly Date, double Egfr, string Source)> points = VerifiedPoints(labs.Entries);
         KidneyResult result = KidneyRule.Evaluate(points);
+        Console.WriteLine();
         Console.WriteLine(
-            $"{points.Count} eGFR results from {result.ProviderCount} providers; drop {result.PercentDrop}% from earliest to latest."
+            $"  {points.Count} eGFR results from {result.ProviderCount} providers; drop {result.PercentDrop}% from earliest to latest."
         );
+        Console.WriteLine(
+            result.Flag ? "  The rule flags it: a note goes back." : "  The rule doesn't flag."
+        );
+        return result;
+    }
+
+    /// <summary>
+    /// When the rule flagged, writes one signed note back. Its id is fixed, so writing it twice stores nothing new.
+    /// </summary>
+    public static async Task<int> WriteSignedNoteAsync(
+        HttpClient client,
+        PfxFile appCertificate,
+        Guid patientId,
+        KidneyResult result
+    )
+    {
         if (!result.Flag)
         {
-            Console.WriteLine("No note: the rule didn't flag.");
+            Console.WriteLine("  No note: the rule didn't flag.");
             return 0;
         }
 
@@ -84,14 +116,16 @@ public static class KidneyCheckCommand
             appCertificate.Chain,
             DateTimeOffset.UtcNow
         );
+        string path = $"api/network/patients/{patientId}/write-signed-note";
+        NetworkLog.Request("POST", path, $"one note, signed by {AppName}");
         using HttpResponseMessage noteResponse = await NetworkClient.PostJsonAsync(
             client,
-            $"api/network/patients/{patientId}/write-signed-note",
+            path,
             new WriteSignedNoteRequest(jws)
         );
         if (!noteResponse.IsSuccessStatusCode)
         {
-            Console.Error.WriteLine(await NetworkClient.DescribeAsync(noteResponse));
+            await NetworkLog.FailedAsync(noteResponse);
             return 1;
         }
         WriteSignedNoteResponse written = (
@@ -99,7 +133,8 @@ public static class KidneyCheckCommand
                 NetworkClient.Json
             )
         )!;
-        Console.WriteLine(written.Stored ? $"Wrote note: {note}" : "Note already written.");
+        NetworkLog.Succeeded(noteResponse, written.Stored ? "stored" : "already stored");
+        Console.WriteLine($"  \"{note}\"");
         return 0;
     }
 
@@ -133,7 +168,7 @@ public static class KidneyCheckCommand
             }
             catch (RecordSignatureException exception)
             {
-                Console.Error.WriteLine($"skipped {entry.Id}: {exception.Message}");
+                Console.Error.WriteLine($"    skipped {entry.Id}: {exception.Message}");
                 continue;
             }
             JsonElement resource = verified.Resource;
@@ -143,7 +178,7 @@ public static class KidneyCheckCommand
             double egfr = resource.GetProperty("valueQuantity").GetProperty("value").GetDouble();
             points.Add((date, egfr, verified.Signer.OrgName));
             Console.WriteLine(
-                $"  {date:yyyy-MM-dd}  eGFR {egfr}  {Copy.SignedBy(verified.Signer.OrgName)}"
+                $"    {date:yyyy-MM-dd}  eGFR {egfr}  {Copy.SignedBy(verified.Signer.OrgName)}"
             );
         }
         return points;

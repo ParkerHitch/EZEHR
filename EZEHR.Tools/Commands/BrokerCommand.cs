@@ -4,7 +4,7 @@ namespace EZEHR.Tools.Commands;
 
 /// <summary>
 /// The data broker from the video: asks for a patient's whole record claiming "treatment", with no certificate
-/// or with its own self-made one. Prints the server's answer verbatim, big enough to read on camera.
+/// or with its own self-made one. The server refuses both and logs each attempt for the patient.
 /// </summary>
 public static class BrokerCommand
 {
@@ -27,34 +27,29 @@ public static class BrokerCommand
             Console.Error.WriteLine($"usage:\n{Usage}");
             return 1;
         }
+        await RequestAsync(patientId, certificateMode == "self");
+        return 0;
+    }
 
-        string? pfxPath = certificateMode == "self" ? ToolPaths.Pki("broker.pfx") : null;
+    /// <summary>Asks for the full record. Refused is the expected answer, so this doesn't report failure.</summary>
+    public static async Task RequestAsync(Guid patientId, bool withSelfSignedCertificate)
+    {
+        string? pfxPath = withSelfSignedCertificate ? ToolPaths.Pki("broker.pfx") : null;
         using HttpClient client = NetworkClient.Create(NetworkClient.BaseUrl, pfxPath);
         string path = $"api/network/patients/{patientId}/read-full-record?purpose={ClaimedPurpose}";
-        using HttpResponseMessage response = await client.GetAsync(path);
-        string body = await response.Content.ReadAsStringAsync();
-
-        bool useColor = !Console.IsOutputRedirected;
-        string rule = new('=', 72);
-        Console.WriteLine(rule);
-        Console.WriteLine($"  GET /{path}");
-        Console.WriteLine(
-            certificateMode == "self"
-                ? $"  certificate: self-signed CN={CertsCommand.BrokerCommonName}"
-                : "  certificate: none"
+        NetworkLog.Request(
+            "GET",
+            path,
+            withSelfSignedCertificate
+                ? $"certificate: self-signed CN={CertsCommand.BrokerCommonName}"
+                : "certificate: none"
         );
-        Console.WriteLine();
-        if (useColor && !response.IsSuccessStatusCode)
+        using HttpResponseMessage response = await client.GetAsync(path);
+        if (response.IsSuccessStatusCode)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
+            NetworkLog.Succeeded(response, "the broker got the record");
+            return;
         }
-        Console.WriteLine($"  HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
-        Console.WriteLine($"  {body}");
-        if (useColor)
-        {
-            Console.ResetColor();
-        }
-        Console.WriteLine(rule);
-        return 0;
+        await NetworkLog.FailedAsync(response);
     }
 }
