@@ -574,15 +574,17 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - `ezehr-tools kidney-check run <patientId>` connects with `kidney-check.pfx` and GETs the labs.
     - When the rule flags, it POSTs a FHIR `Communication` (the endpoint accepts only that type): `payload[0].contentString` = `Copy.KidneyNote(...)`, `sender.display` = "Kidney Check", `id` = `kidney-check`, signed with the app's certificate.
     - On 403, it prints that access was revoked.
+    - As built: `KidneyResult` lives next to `KidneyRule` in `Services/KidneyRule.cs`. The app re-verifies every lab's JWS itself against `.pki/anchors.pem` and `.pki/intermediates.pem`, skipping any that fail. It dates each point by the resource's `effectiveDateTime` (not `SignedAt`, see Task 9), and its source is the signing organization.
 
-- [ ] **Write failing tests:**
+- [x] **Write failing tests:**
   - `Seed_series_flags_34_percent_3_providers`.
   - `Single_source_no_flag`.
   - `Drop_25_exactly_no_flag`.
   - `One_point_no_flag`.
-- [ ] Run (FAIL), implement, run (PASS).
+- [x] Run (FAIL), implement, run (PASS).
 - [ ] Manual check: run it twice; there is exactly 1 note **(Review Focus 4)**. Revoke the grant in Sam's app and run again; the result is 403, and Sam's activity shows the denial.
-- [ ] Commit `feat: Kidney Check example app`.
+  - Checked against a local `dotnet run`, with the grant created and revoked by calling `GrantManager` directly (Sam's app isn't merged yet): 403 `NoGrant` before opt-in; then "Wrote note: … dropped 34% across 3 providers …"; then "Note already written"; after revocation, 403 `GrantRevoked`. The audit log holds each read and write, and the denial.
+- [x] Commit `feat: Kidney Check example app`.
 
 ### Task 11: Patient UI (App lead, 2:00–6:00 AM)
 
