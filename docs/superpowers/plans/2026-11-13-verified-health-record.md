@@ -180,7 +180,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Dr. Rivera signing in with a security key.
 - `docs/ezca-notes.md`.
 
-- [ ] **Azure account:** Azure for Students with a **personal Microsoft account**, verified with the Purdue email. Don't use the Purdue account itself, because its tenant belongs to Purdue. Invite the App lead (Entra → Users → Invite external user) as Contributor on the subscription.
+- [ ] **Azure account:** Azure for Students with a **personal Microsoft account**, verified with the Purdue email. Don't use the Purdue account itself, because its tenant belongs to Purdue. Invite the other teammate (Entra → Users → Invite external user) as **Owner on resource group `ezehr`**: Contributor can't assign roles, so it can't grant the managed identity Key Vault access. The other teammate also needs Entra roles for the portal work below: Global Administrator is simplest in a throwaway tenant. Otherwise use Privileged Role Administrator (EZCA consent), Authentication Policy Administrator (passkey and TAP policies), User Administrator (Dr. Rivera) and Application Administrator (app registration and role assignment). Guests can't register apps by default.
 - [ ] **Dr. Rivera:**
   - Create the user, with display name `Dr. Rivera`.
   - Under Authentication methods → Policies, enable **Passkey (FIDO2)** and **Temporary Access Pass**.

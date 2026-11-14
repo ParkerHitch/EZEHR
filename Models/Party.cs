@@ -2,7 +2,9 @@ namespace EZEHR.Models;
 
 /// <summary>
 /// Anyone who can act on a record. SubjectUri values:
-/// urn:entra:{tid}:{oid} (clinician), urn:provider:{slug}, urn:app:kidney-check.
+/// clinician - urn:entra:{tid}:{oid} - Entra tenant ID and the user's object ID
+/// provider - urn:provider:{slug} - slug of the CN of its EZCA client certificate
+/// Third-Party App - urn:app:{slug} - slug of the CN of its EZCA client certificate
 /// </summary>
 public sealed record Party(PartyKind Kind, string SubjectUri, string DisplayName, string OrgName);
 
