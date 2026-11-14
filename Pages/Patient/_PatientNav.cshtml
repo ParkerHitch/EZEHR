@@ -1,6 +1,17 @@
+@{
+  string? currentPage = ViewContext.RouteData.Values["page"] as string;
+  (string Path, string Label)[] tabs =
+  [
+    ("/Patient/Home", "Record"),
+    ("/Patient/Share", "Share"),
+    ("/Patient/Activity", "Activity"),
+    ("/Patient/Grants", "Access"),
+  ];
+}
+
 <nav class="nav nav-pills nav-fill mb-3 patient-nav">
-    <a class="nav-link" asp-page="/Patient/Home">Record</a>
-    <a class="nav-link" asp-page="/Patient/Share">Share</a>
-    <a class="nav-link" asp-page="/Patient/Activity">Activity</a>
-    <a class="nav-link" asp-page="/Patient/Grants">Access</a>
+  @foreach ((string path, string label) in tabs)
+  {
+    <a class="nav-link @(path == currentPage ? "active" : "")" aria-current="@(path == currentPage ? "page" : null)" asp-page="@path">@label</a>
+  }
 </nav>

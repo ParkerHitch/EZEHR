@@ -3,11 +3,9 @@
 
 @foreach (TimelineItem note in Model.AppNotes)
 {
-    <div class="card border-warning mb-3 app-note">
-        <div class="card-body">
-            <p class="card-text mb-2">@note.Title</p>
-            <small class="text-success">@note.Badge</small>
-        </div>
+    <div class="alert alert-info mb-3" role="note">
+        <p class="mb-1">@note.Title</p>
+        <small class="text-success">@note.Badge</small>
     </div>
 }
 
