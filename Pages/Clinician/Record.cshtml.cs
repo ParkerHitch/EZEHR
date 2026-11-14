@@ -47,7 +47,10 @@ public sealed class RecordModel(
             TimeZoneInfo.FindSystemTimeZoneById(options.Value.TimeZone)
         );
         Header = Copy.ClinicianRecordHeader(result.PatientName ?? "", until);
-        Timeline = TimelineBuilder.Build(result.Entries);
+        Timeline = TimelineBuilder.Build(result.Entries) with
+        {
+            UnverifiedCount = result.UnverifiedCount,
+        };
         return Page();
     }
 }

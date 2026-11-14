@@ -86,4 +86,20 @@ public enum RecordError
     SignerMismatch,
     MissingOrInvalidResourceId,
     NotACommunication,
+
+    /// <summary>The JWS iat is in the future, or too old for a record that is signed when it is sent.</summary>
+    SignedAtOutOfRange,
+}
+
+/// <summary>What storing a signed record did. A record is one (patient, signer, resource type, resource id).</summary>
+public enum StoreOutcome
+{
+    Stored,
+    AlreadyStored,
+
+    /// <summary>The signer sent a changed version, signed at or after the stored one, and it replaced it.</summary>
+    Replaced,
+
+    /// <summary>The signer sent a changed version signed before the stored one, which is kept.</summary>
+    OlderThanStored,
 }

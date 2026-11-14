@@ -196,8 +196,8 @@ sequenceDiagram
   participant Web as Clinician pages
   participant En as Microsoft Entra ID
   Br->>Web: GET /clinician
-  Web-->>Br: redirect to Entra, OpenID Connect
-  Br->>En: Entra sign-in page
+  Web-->>Br: redirect to Entra, OpenID Connect, prompt=login
+  Br->>En: Entra sign-in page, never skipped for a live Entra session
   En-->>Br: sign in with your passkey
   Br->>Key: WebAuthn challenge from Entra
   Key-->>Br: tap and PIN, signed response
@@ -210,7 +210,9 @@ sequenceDiagram
   Web-->>Br: clinician cookie, 10 hours, no renewal
 ```
 
-**Proven:** Microsoft vouches that this is Dr. Rivera from the Riverside tenant, signed in with a phishing-resistant key, and holding the Clinician role.
+**Proven:** Microsoft vouches that this is Dr. Rivera from the Riverside tenant, signed in just now, and holding the Clinician role. `prompt=login` makes Entra ask again on every sign-in, so signing out of EZEHR, or the end of the 10-hour shift, really ends access, and the key tap happens each time.
+
+**What makes it the security key:** our app doesn't check *how* Dr. Rivera authenticated (v2 ID tokens carry no `amr`). Entra enforces it: a Conditional Access policy requiring the "phishing-resistant MFA" authentication strength for the EZEHR app. Without that policy, a password sign-in is accepted.
 
 **Not yet proven:** that Dr. Rivera may see Sam's record. That is Flow 5.
 
@@ -237,8 +239,8 @@ sequenceDiagram
   App->>App: RecordVerifier, every record signed by Lakeside
   App->>App: provider_links, LUC-20417 belongs to Sam
   App->>KV: unwrap Sam's data key
-  App->>App: encrypt, store, skip duplicates, audit PushSignedRecords
-  App-->>Tool: stored and alreadyStored counts
+  App->>App: encrypt, store, skip duplicates, replace corrected records, audit PushSignedRecords
+  App-->>Tool: stored, alreadyStored and replaced counts
 ```
 
 ### Flow 5: Sharing with a clinician (code → approval → grant)

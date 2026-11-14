@@ -6,12 +6,7 @@
 
 <div class="patient-page">
     <partial name="_PatientNav"/>
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h1 class="h4 mb-0">@Model.Home.PatientName</h1>
-        <form method="post" asp-page-handler="SignOut">
-            <button type="submit" class="btn btn-link btn-tap">Sign out</button>
-        </form>
-    </div>
+    <h1 class="h4 mb-3">@Model.Home.PatientName</h1>
     <a class="btn btn-outline-primary btn-tap mb-3" asp-page="/Patient/Home" asp-page-handler="Export">Export my record</a>
     <partial name="_Timeline" model="Model.Home.Timeline"/>
 </div>

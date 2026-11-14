@@ -51,6 +51,13 @@ public sealed class EnrollModel(CallerManager callerManager, EnrollmentManager e
         return RedirectToPage("/Patient/Home");
     }
 
+    /// <summary>Someone else's account is signed in on this phone: sign it out and show enrollment.</summary>
+    public async Task<IActionResult> OnPostSignOutAsync()
+    {
+        await HttpContext.SignOutAsync(CallerManager.PatientScheme);
+        return RedirectToPage("/Patient/Enroll", new { invite = InviteCode });
+    }
+
     // This page is open to everyone, so the patient cookie is read explicitly.
     private async Task<ClaimsPrincipal?> SignedInPatientAsync()
     {

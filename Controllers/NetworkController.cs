@@ -3,6 +3,7 @@ using EZEHR.Managers;
 using EZEHR.Models;
 using EZEHR.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace EZEHR.Controllers;
 
@@ -12,6 +13,7 @@ namespace EZEHR.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/network")]
+[EnableRateLimiting(RateLimitPolicy)]
 public sealed class NetworkController(
     IClientCertificateService clientCertificateService,
     CallerManager callerManager,
@@ -19,6 +21,9 @@ public sealed class NetworkController(
     RecordManager recordManager
 ) : ControllerBase
 {
+    /// <summary>Calls a minute per client address, set up in Program.cs.</summary>
+    public const string RateLimitPolicy = "network";
+
     [HttpPost("create-enrollment-invite")]
     public async Task<IActionResult> CreateEnrollmentInviteAsync(
         CreateEnrollmentInviteRequest request
@@ -58,7 +63,9 @@ public sealed class NetworkController(
         {
             return RecordErrorResult(error);
         }
-        return Ok(new PushSignedRecordsResponse(result.Stored, result.AlreadyStored));
+        return Ok(
+            new PushSignedRecordsResponse(result.Stored, result.AlreadyStored, result.Replaced)
+        );
     }
 
     [HttpGet("patients/{patientId:guid}/read-egfr-labs")]

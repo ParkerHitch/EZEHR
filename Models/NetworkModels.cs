@@ -13,7 +13,8 @@ public sealed record WriteSignedNoteRequest([Required] string Jws);
 
 public sealed record CreateEnrollmentInviteResponse(string InviteCode, string EnrollmentUrl);
 
-public sealed record PushSignedRecordsResponse(int Stored, int AlreadyStored);
+/// <summary>Replaced counts records the provider corrected: same resource id, changed content.</summary>
+public sealed record PushSignedRecordsResponse(int Stored, int AlreadyStored, int Replaced);
 
 public sealed record WriteSignedNoteResponse(bool Stored, Guid? EntryId);
 

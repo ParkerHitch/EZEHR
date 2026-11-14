@@ -12,10 +12,14 @@ public sealed record TimelineItem(
 
 public sealed record TimelineDay(DateOnly Date, IReadOnlyList<TimelineItem> Items);
 
-/// <summary>Notes written by apps (Kidney Check) sit above the dated history, newest day first.</summary>
+/// <summary>
+/// Notes written by apps (Kidney Check) sit above the dated history, newest day first. UnverifiedCount is how many
+/// stored entries failed verification and aren't shown; the page says so instead of hiding them silently.
+/// </summary>
 public sealed record Timeline(
     IReadOnlyList<TimelineItem> AppNotes,
-    IReadOnlyList<TimelineDay> Days
+    IReadOnlyList<TimelineDay> Days,
+    int UnverifiedCount = 0
 );
 
 /// <summary>What the patient's home page shows.</summary>
@@ -38,10 +42,14 @@ public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke);
 /// <summary>A provider that can add records for the patient (a provider link). It can't read the record.</summary>
 public sealed record ConnectedProviderLine(string ProviderUri, string Text);
 
-/// <summary>The Access page: who can see the record (grants), and which providers can add to it (links).</summary>
+/// <summary>
+/// The Access page: who can see the record (grants), which providers can add to it (links), and whether Kidney
+/// Check is on (when it isn't, the page offers to turn it on).
+/// </summary>
 public sealed record AccessOverview(
     IReadOnlyList<AccessLine> Lines,
-    IReadOnlyList<ConnectedProviderLine> ConnectedProviders
+    IReadOnlyList<ConnectedProviderLine> ConnectedProviders,
+    bool KidneyCheckOn
 );
 
 /// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>

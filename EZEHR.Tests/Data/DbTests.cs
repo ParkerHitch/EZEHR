@@ -51,7 +51,6 @@ public class DbTests : IAsyncLifetime
             "share_offers",
             "grants",
             "audit_events",
-            "local_clinicians",
         ];
         foreach (string table in expected)
         {

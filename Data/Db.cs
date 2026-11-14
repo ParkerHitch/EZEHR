@@ -150,13 +150,12 @@ public sealed class Db(IConfiguration configuration)
             reason NVARCHAR(32) NULL,
             INDEX ix_audit_events_patient (patient_id, id));
 
-        IF OBJECT_ID(N'dbo.local_clinicians') IS NULL
-        CREATE TABLE dbo.local_clinicians(
-            id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
-            display_name NVARCHAR(200) NOT NULL,
-            org_name NVARCHAR(200) NOT NULL,
-            credential_id VARBINARY(900) NULL,
-            public_key VARBINARY(MAX) NULL,
-            sign_count BIGINT NOT NULL DEFAULT 0);
+        -- Made for the clinician passkey fallback (plan Task 8b), which Entra sign-in made unnecessary. Nothing
+        -- ever wrote to it; drop it while it's still empty.
+        IF OBJECT_ID(N'dbo.local_clinicians') IS NOT NULL
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM dbo.local_clinicians)
+            DROP TABLE dbo.local_clinicians;
+        END;
         """;
 }

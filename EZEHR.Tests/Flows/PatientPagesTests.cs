@@ -169,6 +169,45 @@ public class PatientPagesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Kidney_check_can_be_turned_back_on_after_revoke()
+    {
+        string kidneyGrantId = Regex
+            .Match(await ReadAsync("/Patient/Grants"), "name=\"grantId\" value=\"([0-9a-f-]+)\"")
+            .Groups[1]
+            .Value;
+        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, await ReadAsync("/Patient/Grants"));
+        await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=Revoke",
+            new() { ["grantId"] = kidneyGrantId }
+        );
+        Assert.Contains(Copy.TurnOnKidneyCheck, await ReadAsync("/Patient/Grants"));
+
+        HttpResponseMessage turnedOn = await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOnKidneyCheck",
+            []
+        );
+
+        Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
+        string access = await ReadAsync("/Patient/Grants");
+        Assert.Contains("Kidney Check · lab results only · you allowed this", access);
+        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, access);
+    }
+
+    [Fact]
+    public async Task Cookie_for_a_deleted_patient_is_signed_out()
+    {
+        Assert.Equal(HttpStatusCode.OK, (await _phone.GetAsync("/Patient/Home")).StatusCode);
+        await _app.Database.Db.DeleteAllDataAsync();
+
+        HttpResponseMessage home = await _phone.GetAsync("/Patient/Home");
+
+        Assert.Equal(HttpStatusCode.Redirect, home.StatusCode);
+        Assert.Contains("/Patient/SignIn", home.Headers.Location!.OriginalString);
+    }
+
+    [Fact]
     public async Task Revoke_moves_access_to_ended()
     {
         Guid kidneyGrantId = Guid.Parse(

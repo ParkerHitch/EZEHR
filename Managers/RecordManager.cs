@@ -30,6 +30,15 @@ public sealed class RecordManager(
 {
     public const string EgfrLoincCode = "98979-8";
 
+    /// <summary>
+    /// Records are signed when they are sent, so an incoming JWS iat must be recent: at most this far ahead (clock
+    /// skew) and this old. The signer's chain is checked at iat, so an unbounded iat would let a key sign after
+    /// its certificate expired by backdating.
+    /// </summary>
+    public static readonly TimeSpan SignedAtClockSkew = TimeSpan.FromMinutes(5);
+
+    public static readonly TimeSpan MaxSignedAtAge = TimeSpan.FromHours(1);
+
     private readonly TrustAnchors _trustAnchors = CertificateValidator.LoadTrustAnchors(
         options.Value
     );
@@ -43,11 +52,11 @@ public sealed class RecordManager(
     {
         if (caller is UnverifiedCaller unverified)
         {
-            return new PushSignedRecordsResult(false, unverified.Reason, null, 0, 0);
+            return new PushSignedRecordsResult(false, unverified.Reason, null, 0, 0, 0);
         }
         if (caller is not VerifiedCaller { Party.Kind: PartyKind.Provider } verified)
         {
-            return new PushSignedRecordsResult(false, DenyReason.WrongPartyKind, null, 0, 0);
+            return new PushSignedRecordsResult(false, DenyReason.WrongPartyKind, null, 0, 0, 0);
         }
         Party provider = verified.Party;
 
@@ -75,17 +84,22 @@ public sealed class RecordManager(
 
         int stored = 0;
         int alreadyStored = 0;
+        int replaced = 0;
         foreach ((string sourceKey, VerifiedEntry entry, string jws) in checkedEntries)
         {
-            (bool newlyStored, Guid _) = await StoreEntryAsync(
+            (StoreOutcome outcome, Guid _) = await StoreEntryAsync(
                 patientId,
                 sourceKey,
                 entry.ResourceType,
                 jws
             );
-            if (newlyStored)
+            if (outcome == StoreOutcome.Stored)
             {
                 stored++;
+            }
+            else if (outcome == StoreOutcome.Replaced)
+            {
+                replaced++;
             }
             else
             {
@@ -93,7 +107,7 @@ public sealed class RecordManager(
             }
         }
         await auditManager.AppendAsync(patientId, provider, "PushSignedRecords", null, true, null);
-        return new PushSignedRecordsResult(true, null, null, stored, alreadyStored);
+        return new PushSignedRecordsResult(true, null, null, stored, alreadyStored, replaced);
     }
 
     /// <summary>The patient's eGFR lab results, for an app with a grant. Logged by the access check.</summary>
@@ -109,12 +123,11 @@ public sealed class RecordManager(
         {
             return new ReadEgfrLabsResult(false, decision.Reason, []);
         }
-        IReadOnlyList<SignedEntry> observations = await ReadVerifiedEntriesAsync(
-            patientId,
-            resourceType => resourceType == "Observation"
+        VerifiedEntries observations = await ReadVerifiedEntriesAsync(patientId, resourceType =>
+            resourceType == "Observation"
         );
         List<SignedEntry> labs = observations
-            .Where(entry => HasLoincCode(entry.Resource, EgfrLoincCode))
+            .Entries.Where(entry => HasLoincCode(entry.Resource, EgfrLoincCode))
             .ToList();
         return new ReadEgfrLabsResult(true, null, labs);
     }
@@ -141,12 +154,14 @@ public sealed class RecordManager(
             "SELECT display_name FROM patients WHERE id = @patientId",
             new { patientId }
         );
+        VerifiedEntries record = await ReadVerifiedEntriesAsync(patientId, null);
         return new ReadFullRecordResult(
             true,
             null,
-            await ReadVerifiedEntriesAsync(patientId, null),
+            record.Entries,
             decision.Grant,
-            patientName
+            patientName,
+            record.UnverifiedCount
         );
     }
 
@@ -161,7 +176,11 @@ public sealed class RecordManager(
             "SELECT display_name FROM patients WHERE id = @patientId",
             new { patientId }
         );
-        Timeline timeline = TimelineBuilder.Build(await ReadVerifiedEntriesAsync(patientId, null));
+        VerifiedEntries record = await ReadVerifiedEntriesAsync(patientId, null);
+        Timeline timeline = TimelineBuilder.Build(record.Entries) with
+        {
+            UnverifiedCount = record.UnverifiedCount,
+        };
         return new PatientHome(name, timeline);
     }
 
@@ -177,7 +196,7 @@ public sealed class RecordManager(
             new { patientId }
         );
         JsonArray bundleEntries = [];
-        foreach (SignedEntry entry in await ReadVerifiedEntriesAsync(patientId, null))
+        foreach (SignedEntry entry in (await ReadVerifiedEntriesAsync(patientId, null)).Entries)
         {
             // Resource ids are only unique per signer, so references go by the entry's own fullUrl.
             string resourceUrl = $"urn:uuid:{entry.Id}";
@@ -244,7 +263,10 @@ public sealed class RecordManager(
         return slug.Length == 0 ? "health-record.json" : $"{slug}-record.json";
     }
 
-    /// <summary>A note (a FHIR Communication) signed by the caller itself. Idempotent per note id.</summary>
+    /// <summary>
+    /// A note (a FHIR Communication) signed by the caller itself. Idempotent per note id; a changed note with the
+    /// same id replaces the stored one.
+    /// </summary>
     public async Task<WriteSignedNoteResult> WriteSignedNoteAsync(
         Guid patientId,
         Caller caller,
@@ -281,12 +303,13 @@ public sealed class RecordManager(
             );
         }
 
-        (bool stored, Guid entryId) = await StoreEntryAsync(
+        (StoreOutcome outcome, Guid entryId) = await StoreEntryAsync(
             patientId,
             sourceKey!,
             "Communication",
             jws
         );
+        bool stored = outcome is StoreOutcome.Stored or StoreOutcome.Replaced;
         return new WriteSignedNoteResult(true, null, null, stored, entryId);
     }
 
@@ -337,10 +360,11 @@ public sealed class RecordManager(
     }
 
     /// <summary>
-    /// Stores a signed record once per (patient, sourceKey). A repeat returns the existing id with
-    /// Stored = false. Checks no access: callers must have.
+    /// Stores a signed record once per (patient, sourceKey). Sending the same resource again, even re-signed,
+    /// changes nothing. A changed resource for the same key is the signer correcting its record: it replaces the
+    /// stored one unless it was signed earlier. Checks no access: callers must have.
     /// </summary>
-    public async Task<(bool Stored, Guid EntryId)> StoreEntryAsync(
+    public async Task<(StoreOutcome Outcome, Guid EntryId)> StoreEntryAsync(
         Guid patientId,
         string sourceKey,
         string resourceType,
@@ -348,15 +372,15 @@ public sealed class RecordManager(
     )
     {
         await using SqlConnection connection = await db.OpenAsync();
-        Guid? existing = await FindEntryIdAsync(connection, patientId, sourceKey);
-        if (existing is Guid found)
-        {
-            return (false, found);
-        }
-
         byte[] dataKey = await UnwrapPatientKeyAsync(connection, patientId);
         try
         {
+            EntryRow? existing = await FindEntryAsync(connection, patientId, sourceKey);
+            if (existing is not null)
+            {
+                return await ReplaceIfCorrectedAsync(connection, dataKey, patientId, existing, jws);
+            }
+
             Guid entryId = Guid.NewGuid();
             (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(
                 dataKey,
@@ -383,7 +407,7 @@ public sealed class RecordManager(
             );
             if (rows == 1)
             {
-                return (true, entryId);
+                return (StoreOutcome.Stored, entryId);
             }
         }
         catch (SqlException exception) when (Db.IsUniqueViolation(exception))
@@ -394,7 +418,58 @@ public sealed class RecordManager(
         {
             CryptographicOperations.ZeroMemory(dataKey);
         }
-        return (false, (await FindEntryIdAsync(connection, patientId, sourceKey))!.Value);
+        return (
+            StoreOutcome.AlreadyStored,
+            (await FindEntryAsync(connection, patientId, sourceKey))!.Id
+        );
+    }
+
+    private static async Task<(StoreOutcome Outcome, Guid EntryId)> ReplaceIfCorrectedAsync(
+        SqlConnection connection,
+        byte[] dataKey,
+        Guid patientId,
+        EntryRow existing,
+        string jws
+    )
+    {
+        string associatedData = AssociatedData(patientId, existing.Id);
+        string storedJws = RecordCipher.Decrypt(
+            dataKey,
+            associatedData,
+            existing.Iv,
+            existing.Ciphertext
+        );
+        // Re-signing gives a new header (a new iat) over the same payload; only a changed payload is a correction.
+        if (PayloadOf(storedJws) == PayloadOf(jws))
+        {
+            return (StoreOutcome.AlreadyStored, existing.Id);
+        }
+        // A replayed older version must not undo a correction.
+        if (
+            RecordVerifier.ReadIssuedAt(storedJws) is DateTimeOffset storedSignedAt
+            && RecordVerifier.ReadIssuedAt(jws) is DateTimeOffset signedAt
+            && signedAt < storedSignedAt
+        )
+        {
+            return (StoreOutcome.OlderThanStored, existing.Id);
+        }
+
+        (byte[] iv, byte[] ciphertext) = RecordCipher.Encrypt(dataKey, associatedData, jws);
+        // Conditional on the version that was compared, so of two corrections racing only one applies.
+        int rows = await connection.ExecuteAsync(
+            """
+            UPDATE entries SET iv = @iv, ciphertext = @ciphertext
+            WHERE id = @entryId AND ciphertext = @storedCiphertext
+            """,
+            new
+            {
+                iv,
+                ciphertext,
+                entryId = existing.Id,
+                storedCiphertext = existing.Ciphertext,
+            }
+        );
+        return (rows == 1 ? StoreOutcome.Replaced : StoreOutcome.AlreadyStored, existing.Id);
     }
 
     /// <summary>Decrypts a patient's entries, oldest first. Checks no access: callers must have.</summary>
@@ -452,7 +527,7 @@ public sealed class RecordManager(
     }
 
     /// <summary>
-    /// Verifies a JWS from a caller: a good signature, signed by the caller itself, and a resource id.
+    /// Verifies a JWS from a caller: a good signature, signed by the caller itself, recently, and a resource id.
     /// Returns the entry and its source key ({signerUri}|{resourceType}/{id}), or why it was refused.
     /// </summary>
     private (VerifiedEntry? Entry, string? SourceKey, RecordError? Error) VerifyEntrySignedByCaller(
@@ -473,6 +548,11 @@ public sealed class RecordManager(
         {
             return (null, null, RecordError.SignerMismatch);
         }
+        DateTimeOffset now = time.GetUtcNow();
+        if (entry.SignedAt > now + SignedAtClockSkew || entry.SignedAt < now - MaxSignedAtAge)
+        {
+            return (null, null, RecordError.SignedAtOutOfRange);
+        }
         // FHIR ids are at most 64 characters, which also keeps the source key inside its column.
         if (
             !entry.Resource.TryGetProperty("id", out JsonElement id)
@@ -485,12 +565,14 @@ public sealed class RecordManager(
         return (entry, $"{entry.Signer.SubjectUri}|{entry.ResourceType}/{resourceId}", null);
     }
 
-    private async Task<IReadOnlyList<SignedEntry>> ReadVerifiedEntriesAsync(
+    /// <summary>Entries that fail verification are left out and counted, so pages can say how many.</summary>
+    private async Task<VerifiedEntries> ReadVerifiedEntriesAsync(
         Guid patientId,
         Func<string, bool>? resourceTypeFilter
     )
     {
         List<SignedEntry> entries = [];
+        int unverifiedCount = 0;
         foreach (
             DecryptedEntry decrypted in await DecryptEntriesAsync(patientId, resourceTypeFilter)
         )
@@ -516,6 +598,7 @@ public sealed class RecordManager(
             }
             catch (RecordSignatureException exception)
             {
+                unverifiedCount++;
                 logger.LogWarning(
                     exception,
                     "Entry {EntryId} failed verification and was not shown.",
@@ -523,22 +606,26 @@ public sealed class RecordManager(
                 );
             }
         }
-        return entries;
+        return new VerifiedEntries(entries, unverifiedCount);
     }
 
     private static PushSignedRecordsResult PushRefused(RecordError error)
     {
-        return new PushSignedRecordsResult(true, null, error, 0, 0);
+        return new PushSignedRecordsResult(true, null, error, 0, 0, 0);
     }
 
-    private static async Task<Guid?> FindEntryIdAsync(
+    private static async Task<EntryRow?> FindEntryAsync(
         SqlConnection connection,
         Guid patientId,
         string sourceKey
     )
     {
-        return await connection.QuerySingleOrDefaultAsync<Guid?>(
-            "SELECT id FROM entries WHERE patient_id = @patientId AND source_key = @sourceKey",
+        return await connection.QuerySingleOrDefaultAsync<EntryRow>(
+            """
+            SELECT id AS Id, resource_type AS ResourceType, iv AS Iv, ciphertext AS Ciphertext
+            FROM entries
+            WHERE patient_id = @patientId AND source_key = @sourceKey
+            """,
             new { patientId, sourceKey }
         );
     }
@@ -550,6 +637,13 @@ public sealed class RecordManager(
             new { patientId }
         ) ?? throw new InvalidOperationException("Unknown patient.");
         return await keyWrapService.UnwrapAsync(wrappedDataKey);
+    }
+
+    /// <summary>The signed resource part of a compact JWS (header.payload.signature).</summary>
+    private static string PayloadOf(string jws)
+    {
+        string[] parts = jws.Split('.');
+        return parts.Length == 3 ? parts[1] : jws;
     }
 
     private static string AssociatedData(Guid patientId, Guid entryId)

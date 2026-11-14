@@ -6,13 +6,17 @@ using Microsoft.Data.SqlClient;
 
 namespace EZEHR.Managers;
 
-/// <summary>Append-only log of every access attempt for a patient, granted or denied. The patient sees all of it.</summary>
+/// <summary>
+/// Append-only log of every access attempt for a patient, granted or denied. The patient sees all of it. An attempt
+/// on an id that isn't a patient is not logged, so callers can't fill the table by guessing ids.
+/// </summary>
 public sealed class AuditManager(Db db, TimeProvider time)
 {
     /// <summary>Longest claimed purpose kept. The broker chooses it, so it's cut to fit the column.</summary>
     public const int MaxClaimedPurposeLength = 200;
 
-    public async Task<AuditEvent> AppendAsync(
+    /// <summary>The event as stored, or null when no such patient exists and nothing was stored.</summary>
+    public async Task<AuditEvent?> AppendAsync(
         Guid patientId,
         Party? actor,
         string action,
@@ -35,7 +39,7 @@ public sealed class AuditManager(Db db, TimeProvider time)
     }
 
     /// <summary>Appends inside the caller's transaction, so the event commits or rolls back with the change it records.</summary>
-    public async Task<AuditEvent> AppendAsync(
+    public async Task<AuditEvent?> AppendAsync(
         SqlConnection connection,
         DbTransaction? transaction,
         Guid patientId,
@@ -50,12 +54,13 @@ public sealed class AuditManager(Db db, TimeProvider time)
         string? purpose = claimedPurpose is { Length: > MaxClaimedPurposeLength }
             ? claimedPurpose[..MaxClaimedPurposeLength]
             : claimedPurpose;
-        long id = await connection.ExecuteScalarAsync<long>(
+        long? id = await connection.ExecuteScalarAsync<long?>(
             """
             INSERT INTO audit_events(patient_id, at, actor_kind, actor_uri, actor_name, actor_org,
                                      action, claimed_purpose, granted, reason)
             OUTPUT inserted.id
-            VALUES (@patientId, @at, @kind, @uri, @name, @org, @action, @purpose, @granted, @reason)
+            SELECT @patientId, @at, @kind, @uri, @name, @org, @action, @purpose, @granted, @reason
+            WHERE EXISTS (SELECT 1 FROM patients WHERE id = @patientId)
             """,
             new
             {
@@ -72,7 +77,11 @@ public sealed class AuditManager(Db db, TimeProvider time)
             },
             transaction
         );
-        return new AuditEvent(id, patientId, at, actor, action, purpose, granted, reason);
+        if (id is not long storedId)
+        {
+            return null;
+        }
+        return new AuditEvent(storedId, patientId, at, actor, action, purpose, granted, reason);
     }
 
     /// <summary>Events for one patient, oldest first, after the given id (for htmx polling).</summary>

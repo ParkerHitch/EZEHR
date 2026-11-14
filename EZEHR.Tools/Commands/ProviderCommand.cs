@@ -81,6 +81,7 @@ public static class ProviderCommand
         SeedFile seed = SeedFile.Load(slug);
         int stored = 0;
         int alreadyStored = 0;
+        int replaced = 0;
         foreach (SeedVisit visit in seed.Visits)
         {
             DateTimeOffset issuedAt = DateTimeOffset.UtcNow;
@@ -113,11 +114,14 @@ public static class ProviderCommand
             )!;
             stored += result.Stored;
             alreadyStored += result.AlreadyStored;
+            replaced += result.Replaced;
             Console.WriteLine(
-                $"{visit.Date:yyyy-MM-dd}: stored {result.Stored}, already stored {result.AlreadyStored}"
+                $"{visit.Date:yyyy-MM-dd}: stored {result.Stored}, already stored {result.AlreadyStored}, replaced {result.Replaced}"
             );
         }
-        Console.WriteLine($"{seed.Organization}: stored {stored}, already stored {alreadyStored}");
+        Console.WriteLine(
+            $"{seed.Organization}: stored {stored}, already stored {alreadyStored}, replaced {replaced}"
+        );
         return 0;
     }
 

@@ -154,7 +154,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   - `provider_links(patient_id, provider_uri, provider_patient_id, linked_at)`, unique on (`provider_uri`, `provider_patient_id`); `linked_at` is nullable because it was added after the first deploy
   - `entries(id, patient_id, source_key, resource_type, iv, ciphertext, created_at)`, unique on (`patient_id`, `source_key`). `source_key` = `{signerUri}|{resourceType}/{resource.id}`.
   - `share_offers`, `grants` and `audit_events`, matching the records
-  - `local_clinicians`, used by Task 8b only
+  - (Task 8b would add a `local_clinicians` table; Entra sign-in works, so it doesn't exist)
 - **Storage rules (Azure SQL + Dapper):**
   - Column types:
     - IDs: `UNIQUEIDENTIFIER`, except `audit_events.id`, which is `BIGINT IDENTITY`
@@ -396,9 +396,10 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
     - otherwise → `VerifiedCaller(party, null)`
   - Endpoints (`NetworkController`, route `/api/network`). Each action gets the certificate, turns it into a `Caller`, calls one manager method of the same name (`InviteManager.CreateEnrollmentInviteAsync` or `RecordManager.PushSignedRecordsAsync`), and maps the result:
     - `POST /create-enrollment-invite { providerPatientId }` (`CreateEnrollmentInviteAsync`) returns `201 { inviteCode, enrollmentUrl }`. Providers only (403 `WrongPartyKind` otherwise). Invites expire in 7 days.
-    - `POST /push-signed-records { providerPatientId, signedEntries: string[] }` (`PushSignedRecordsAsync`) returns `{ stored, alreadyStored }`. Providers only.
+    - `POST /push-signed-records { providerPatientId, signedEntries: string[] }` (`PushSignedRecordsAsync`) returns `{ stored, alreadyStored, replaced }`. Providers only.
       - No `provider_links` row returns 409.
-      - Every JWS must verify (Task 2), and its signer must equal the caller; otherwise the request returns 400 and nothing is stored.
+      - Every JWS must verify (Task 2), its signer must equal the caller, and its `iat` must be recent (at most 5 minutes ahead, at most 1 hour old: records are signed when sent); otherwise the request returns 400 and nothing is stored.
+      - A changed JWS for a resource id already stored is a correction and replaces it (`replaced`), unless it was signed before the stored one.
       - It writes one `PushSignedRecords` audit event for the patient.
     - Request models carry `[Required]`, so a missing field is the automatic 400. Unverified callers get **401 `{ error }`**, and **nothing is logged** for ingest, because there is no target patient yet. Patient-targeted endpoints log through the gate (Task 6).
 
@@ -519,7 +520,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 
 ### Task 8b (only on checkpoint failure): Clinician passkeys in our own directory
 
-- [ ] Reuse Task 7's passkey flow with the `local_clinicians` table, seeded with Dr. Rivera, Riverside Primary Care, `urn:local:rivera`. Register the security key as Dr. Rivera's passkey.
+- [ ] Reuse Task 7's passkey flow with a new `local_clinicians` table, seeded with Dr. Rivera, Riverside Primary Care, `urn:local:rivera`. Register the security key as Dr. Rivera's passkey.
 - [ ] `CallerManager.EvaluateClinician` reads the local cookie instead. Everything downstream is unchanged.
 - [ ] Test `Local_clinician_yields_party`. Commit `feat: local clinician passkeys (fallback)`. The pitch then says "plugs into Entra ID; shown with our own directory."
 

@@ -38,20 +38,20 @@ public class RecordManagerTests : IAsyncLifetime
     public async Task Put_is_idempotent()
     {
         Guid patient = await _records.CreatePatientAsync("Sam Taylor");
-        (bool Stored, Guid EntryId) first = await _records.StoreEntryAsync(
+        (StoreOutcome Outcome, Guid EntryId) first = await _records.StoreEntryAsync(
             patient,
             "urn:provider:maple|Observation/egfr-1",
             "Observation",
             Jws
         );
-        (bool Stored, Guid EntryId) second = await _records.StoreEntryAsync(
+        (StoreOutcome Outcome, Guid EntryId) second = await _records.StoreEntryAsync(
             patient,
             "urn:provider:maple|Observation/egfr-1",
             "Observation",
             Jws
         );
-        Assert.True(first.Stored);
-        Assert.False(second.Stored);
+        Assert.Equal(StoreOutcome.Stored, first.Outcome);
+        Assert.Equal(StoreOutcome.AlreadyStored, second.Outcome);
         Assert.Equal(first.EntryId, second.EntryId);
         Assert.Equal(1, await QueryAsync<int>("SELECT COUNT(*) FROM entries"));
     }
@@ -60,14 +60,14 @@ public class RecordManagerTests : IAsyncLifetime
     public async Task Concurrent_puts_store_once()
     {
         Guid patient = await _records.CreatePatientAsync("Sam Taylor");
-        (bool Stored, Guid EntryId)[] results = await Task.WhenAll(
+        (StoreOutcome Outcome, Guid EntryId)[] results = await Task.WhenAll(
             Enumerable
                 .Range(0, 8)
                 .Select(_ =>
                     _records.StoreEntryAsync(patient, "a|Observation/1", "Observation", Jws)
                 )
         );
-        Assert.Single(results, result => result.Stored);
+        Assert.Single(results, result => result.Outcome == StoreOutcome.Stored);
         Assert.Single(results.Select(result => result.EntryId).Distinct());
         Assert.Equal(1, await QueryAsync<int>("SELECT COUNT(*) FROM entries"));
     }

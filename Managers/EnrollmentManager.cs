@@ -140,8 +140,7 @@ public sealed class EnrollmentManager(
 
         if (kidneyCheckOptIn)
         {
-            Party kidneyCheck = OrgDirectory.KnownOrganizations[OrgDirectory.KidneyCheckCommonName];
-            await grantManager.CreateAppGrantAsync(patientId, kidneyCheck);
+            await grantManager.TurnOnKidneyCheckAsync(patientId);
         }
         return new EnrollmentResult(true, patientId, null);
     }
