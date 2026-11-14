@@ -84,8 +84,12 @@ public static class CertificateValidator
         );
     }
 
-    private static IReadOnlyList<X509Certificate2> LoadCertificatesFromPem(string path)
+    private static IReadOnlyList<X509Certificate2> LoadCertificatesFromPem(string configuredPath)
     {
+        // Relative paths are the app's own files (Security/Trust/ is copied with the build), wherever it runs from.
+        string path = Path.IsPathRooted(configuredPath)
+            ? configuredPath
+            : Path.Combine(AppContext.BaseDirectory, configuredPath);
         if (!File.Exists(path))
         {
             return [];
