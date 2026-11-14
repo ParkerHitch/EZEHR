@@ -1,6 +1,6 @@
 # EZEHR Implementation Plan (C# / ASP.NET Core)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** recommended: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** in the remaining hours of the event (2 PM Nov 13 → 2 PM Nov 14), build a central, patient-controlled health record.
 - Nobody can read it by default.
@@ -20,13 +20,14 @@ Every read or write goes through **one access check** that writes one audit even
 - **Packages:**
   - `Microsoft.Identity.Web` (clinician sign-in)
   - `Fido2.AspNet` 4.3.x (patient passkeys)
-  - `Microsoft.Data.Sqlite` + `Dapper`
+  - `Dapper` over `Microsoft.Data.SqlClient` 7.1.x, plus `Microsoft.Data.SqlClient.Extensions.Azure` for Entra sign-in to Azure SQL (both SqlClient packages are already in the csproj)
+  - Tests: `Testcontainers.MsSql` (a throwaway SQL Server per test run)
   - `Azure.Identity` + `Azure.Security.KeyVault.Keys`
   - `EZCAClient` 1.0.x (Keytos's EZCA SDK)
   - `QRCoder`
   - `Microsoft.AspNetCore.Authentication.Certificate` (certificate forwarding)
 - **Browser:** htmx (pinned, from a CDN) for polling. The only custom JavaScript is `wwwroot/js/passkey.js`.
-- **Azure:** App Service (Linux, B1, managed identity), Key Vault (RBAC), one Entra ID tenant. **Keytos:** EZCA free trial (approved by Keytos, the host).
+- **Azure:** App Service (Linux, B1, managed identity), **Azure SQL Database** (Entra-only authentication, reached with the managed identity), Key Vault (RBAC), one Entra ID tenant. **Keytos:** EZCA free trial (approved by Keytos, the host).
 
 **Spec:** `docs/superpowers/specs/2026-11-13-hackathon-design.md`
 
@@ -105,7 +106,7 @@ Stretch goals S1–S4 are taken only if the team is ahead at 6:00 AM.
 ```
 EZEHR.csproj  Program.cs  appsettings.json        web app (existing)
 Domain/        Party.cs, Grant.cs, ShareOffer.cs, AuditEvent.cs, Entry.cs, Copy.cs, Enums.cs
-Data/          Db.cs (SQLite connection + schema), *Repository.cs
+Data/          Db.cs (Azure SQL connection factory + idempotent schema), *Repository.cs
 Security/Pki/  ICertificateAuthority.cs, LocalCa.cs, EzcaCa.cs, CertificateValidator.cs,
                OrgDirectory.cs, RecordSigner.cs, RecordVerifier.cs
 Security/Crypto/ IKeyWrapper.cs, KeyVaultKeyWrapper.cs, LocalKeyWrapper.cs, RecordCipher.cs
@@ -150,6 +151,19 @@ docs/ezca-notes.md        what the EZCA probe showed
   - `entries(id, patient_id, source_key, resource_type, iv, ciphertext, created_at)`, unique on (`patient_id`, `source_key`). `source_key` = `{signerUri}|{resourceType}/{resource.id}`.
   - `share_offers`, `grants` and `audit_events`, matching the records
   - `local_clinicians`, used by Task 8b only
+- **Storage rules (Azure SQL + Dapper):**
+  - Column types:
+    - IDs: `UNIQUEIDENTIFIER`, except `audit_events.id`, which is `BIGINT IDENTITY`
+    - times: `DATETIMEOFFSET`
+    - keys, IVs and ciphertext: `VARBINARY(MAX)`
+    - text: `NVARCHAR(n)`
+    - enums: `NVARCHAR(32)` holding the enum's name. Pass `.ToString()` when writing, because Dapper writes enums as integers; on reads it parses the name back.
+  - **Identifier columns use a binary collation** (`COLLATE Latin1_General_100_BIN2`): `source_key`, every `*_uri`, and `user_handle`. SQL Server's default collation is case-insensitive, which would make `Observation/a` and `Observation/A` collide. Share and invite codes are upper-cased before they're stored and before every lookup.
+  - `source_key` is `NVARCHAR(400)`, so the (`patient_id`, `source_key`) unique index fits SQL Server's index key limit. Every patient-owned table has an index on `patient_id`.
+  - Party columns are flattened: `grantee_kind`, `grantee_uri`, `grantee_name`, `grantee_org` on `grants`, and the same with the `actor_` prefix on `audit_events` (all `NULL` = unverified).
+  - **Dapper mapping:** positional records map through their constructor, so `SELECT` with aliases that match the parameter names, in parameter order (`patient_id AS PatientId`). Rows that contain a `Party` are read into a private flat row record, then converted.
+  - **Single-use operations are a conditional `UPDATE`, not a read followed by a write.** Redeeming a share offer runs `UPDATE share_offers SET redeemed_grant_id = @grantId WHERE code = @code AND redeemed_grant_id IS NULL AND offer_expires_at > @now`. It must affect exactly 1 row, in the same transaction as the grant insert. Invites work the same way. This is what makes Review Focus 2 hold under a double submit.
+  - Open one connection per operation (`await using SqlConnection connection = await db.OpenAsync()`); pooling makes this cheap. Never share a `SqlConnection` between requests.
 
 ---
 
@@ -196,50 +210,66 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 ### Task 0b: Hosting and Key Vault (App lead, after Task 1)
 
-**Produces:** `KeyVault:KeyId`, the site URL, and the managed identity's object ID (send it to the Identity lead).
+**Produces:** `KeyVault:KeyId`, `AZURE_SQL_CONNECTIONSTRING`, the site URL, and the managed identity's object ID (send it to the Identity lead).
 
 - [ ] **Key Vault** (RBAC): create RSA 3072 key `records-kek` with wrap and unwrap permitted. Give yourself Key Vault Crypto Officer.
 - [ ] **App Service** (Linux, **B1**; client certificates don't work on F1):
   - Runtime: .NET 11 if offered, otherwise .NET 10 (and set `TargetFramework` to `net10.0`).
   - Turn on the system-assigned managed identity and grant it **Key Vault Crypto User**.
-  - Set `DB_PATH=/home/data/ezehr.db`.
   - Deploy with Rider's publish, or `dotnet publish -c Release` plus `az webapp deploy`.
+- [ ] **Azure SQL Database.** It's already provisioned, and `AZURE_SQL_CONNECTIONSTRING` is set on App Service (`Pages/DbTest` reads it). Confirm the rest:
+  - The server uses **Microsoft Entra-only authentication**, so there's no SQL password anywhere.
+  - The connection string uses `Authentication=Active Directory Managed Identity` (or `Active Directory Default`) and contains no `Password=`.
+  - The App Service managed identity is a database user: `CREATE USER [<app-name>] FROM EXTERNAL PROVIDER;`, then add it to `db_datareader`, `db_datawriter` and `db_ddladmin`. `db_ddladmin` is needed because the app creates its own tables at startup.
+  - A second database, `ezehr-dev`, on the same server for local `dotnet run`. Its connection string goes in `appsettings.Development.json` with `Authentication=Active Directory Default`; it holds no secret, so it's safe to commit.
+  - Both teammates are database users in both databases, and the server firewall allows Azure services plus each laptop's IP (for local runs and `demo reset`).
 - [ ] **Client certificates:** Configuration → General settings → Incoming client certificates = **Optional Interactive User**, so browsers aren't prompted and programs can send certificates.
   - This mode uses TLS renegotiation, so set **HTTP version 1.1** (HTTP/2 off).
   - Requests over 100 KB fail under renegotiation. The tools send `Expect: 100-continue` and keep each push small.
-- [ ] **Verify:** `https://{app}.azurewebsites.net` loads, and `az keyvault key show --id {KeyVault:KeyId}` succeeds.
+- [ ] **Verify:** `https://{app}.azurewebsites.net` loads, `/DbTest` connects, and `az keyvault key show --id {KeyVault:KeyId}` succeeds. Delete `Pages/DbTest` once Task 1's schema is running; it shows server details and raw exception text.
 
 ### Task 1: Foundations (App lead, 6:00–7:00 PM)
 
 **Files:**
 - Modify `EZEHR.csproj` (packages, `Compile Remove`), `.gitignore`, `Program.cs`, `Pages/Shared/_Layout.cshtml` (add htmx).
 - Create `Domain/*`, `Data/Db.cs`, the `EZEHR.Tests` and `EZEHR.Tools` projects, and add both to `EZEHR.slnx`.
-- Test: `EZEHR.Tests/Data/DbTests.cs`, `EZEHR.Tests/Domain/CopyTests.cs`.
+- Test: `EZEHR.Tests/Data/SqlFixture.cs`, `EZEHR.Tests/Data/DbTests.cs`, `EZEHR.Tests/Domain/CopyTests.cs`.
 
 **Interfaces:**
 - Produces:
   - `sealed class AppOptions`, bound from configuration, with:
-    - `Origin`, `DbPath`
+    - `Origin`. The database connection string is not in `AppOptions`: `Db` reads the top-level `AZURE_SQL_CONNECTIONSTRING` key, the name App Service already uses.
     - `TrustedTenants: Dictionary<string,string>`, `AzureAd`
     - `CertificateAuthority.Mode: "Ezca" | "Local"`, `Ezca { CaId, TemplateId }`
     - `TrustAnchorsPemPath`, `IntermediatesPemPath`. These are public CA certificates, committed under `Security/Trust/`.
     - `PlatformCertPfxBase64`. On App Service it's a Key Vault secret reference, never committed.
     - `KeyWrapper.Mode: "KeyVault" | "Local"`, `KeyVault.KeyId`, `LocalKekBase64`
     - `TimeZone`
-  - `Db.Open(string path): SqliteConnection`, which creates the tables above if they're missing.
+  - `sealed class Db(string connectionString)`, registered as a singleton:
+    - `Task<SqlConnection> OpenAsync(CancellationToken ct = default)` returns an open, pooled connection; callers dispose it.
+    - `Task EnsureSchemaAsync(CancellationToken ct = default)` runs an idempotent script (`IF OBJECT_ID(N'dbo.entries') IS NULL CREATE TABLE ...`) that creates the tables, constraints and indexes above if they're missing. `Program.cs` calls it once at startup. There are no migrations; when the schema changes, edit the script and the table list in this plan in the same commit.
+    - `static bool IsUniqueViolation(SqlException ex)` is true for SQL errors 2627 and 2601.
+    - `Task DeleteAllDataAsync()` deletes every row, in foreign-key order. Only `demo reset` (Task 15) calls it.
+  - `SqlFixture`, an xUnit collection fixture (`[Collection("Sql")]`):
+    - It starts one SQL Server container per test run with Testcontainers (`mcr.microsoft.com/mssql/server:2022-latest`). If `EZEHR_TEST_SQL` is set (a server connection string), it uses that server instead.
+    - `Task<TestDatabase> CreateDatabaseAsync()` creates a fresh `ezehr_test_{guid:N}` database, runs `EnsureSchemaAsync`, and returns `record TestDatabase(Db Db, string ConnectionString)`. Every test gets its own database, so tests never share state.
+    - `WebApplicationFactory` tests set `AZURE_SQL_CONNECTIONSTRING` to `TestDatabase.ConnectionString` in `ConfigureAppConfiguration`.
+    - It needs Docker or Podman (for Podman, point `DOCKER_HOST` at its socket). Tests that never touch storage (`Copy`, PKI, `RecordCipher`) don't use the fixture.
   - The `Domain` types above, and `static class Copy`.
   - `TimeProvider` is registered in DI, and every time-dependent class takes it, so tests can control the clock.
 
-- [ ] Fix `.gitignore`: remove the four `/wwwroot/lib/*/dist/` lines; add `.pki/` and `*.db`.
+- [ ] Fix `.gitignore`: remove the four `/wwwroot/lib/*/dist/` lines; add `.pki/`.
 - [ ] **Write failing tests:**
-  - `DbTests.Open_creates_all_tables`: every table above exists after `Db.Open(":memory:")`.
-  - `DbTests.Entries_unique_per_patient_and_source_key`: a second insert throws `SqliteException`.
+  - `DbTests.EnsureSchema_creates_all_tables`: every table above exists in a fresh test database.
+  - `DbTests.EnsureSchema_twice_is_harmless`: a second run neither throws nor changes anything.
+  - `DbTests.Entries_unique_per_patient_and_source_key`: a second insert throws a `SqlException` for which `Db.IsUniqueViolation` is true.
+  - `DbTests.Source_key_is_case_sensitive`: `…|Observation/a` and `…|Observation/A` both insert.
   - `CopyTests.Exact_spec_strings`:
     - `Copy.SignedBy("Lakeside Urgent Care")` is `"Signed by Lakeside Urgent Care ✓"`
     - `Copy.ApprovePrompt("Dr. Rivera","Riverside Primary Care","5:00 PM")` is `"Give Dr. Rivera at Riverside Primary Care access until 5:00 PM?"`
     - `Copy.BrokerBlocked("treatment")` is `"Blocked: unverified requester claimed treatment"`
 - [ ] Run `dotnet test`. Expected: FAIL (types missing).
-- [ ] Implement, then run `dotnet test`. Expected: PASS. `dotnet run` serves the template home page.
+- [ ] Implement, then run `dotnet test`. Expected: PASS. `dotnet run` serves the template home page and creates the tables in `ezehr-dev`.
 - [ ] Commit `feat: foundations, domain contracts, schema`.
 
 ### Task 2: PKI core (Identity lead, 7:30–9:00 PM)
@@ -326,12 +356,12 @@ docs/ezca-notes.md        what the EZCA probe showed
   - `static class RecordCipher`, with `(byte[] Iv, byte[] Ciphertext) Encrypt(byte[] dek, string aad, string plaintext)` and `string Decrypt(byte[] dek, string aad, byte[] iv, byte[] ciphertext)`.
     - `AesGcm`, a 12-byte random IV, and a 16-byte tag appended to the ciphertext.
     - `aad` = `{patientId}:{entryId}`.
-  - `sealed class RecordStore(SqliteConnection, IKeyWrapper)`:
+  - `sealed class RecordStore(Db, IKeyWrapper)`:
     - `Task<byte[]> CreatePatientKeyAsync()`: returns the wrapped key.
-    - `Task<(bool Inserted, Guid Id)> PutAsync(Guid patientId, string sourceKey, string resourceType, string jws)`: idempotent on `sourceKey`.
+    - `Task<(bool Inserted, Guid Id)> PutAsync(Guid patientId, string sourceKey, string resourceType, string jws)`: idempotent on `sourceKey`. It inserts with `WHERE NOT EXISTS`, and the unique index is the backstop: a race that hits `Db.IsUniqueViolation` also returns `Inserted=false`.
     - `Task<IReadOnlyList<(Guid Id, string ResourceType, string Jws)>> ReadAsync(Guid patientId, Func<string,bool>? resourceTypeFilter)`: unwraps the patient key **on every call**, so every read is a Key Vault operation. Only `AccessGate`-guarded code and the patient's own pages call it.
 
-- [ ] **Write failing tests:**
+- [ ] **Write failing tests** (`RecordStoreTests` use `SqlFixture`):
   - `Cipher_roundtrip`, `Cipher_wrong_aad_throws`, `Cipher_tamper_throws`.
   - `LocalWrapper_roundtrip`.
   - **(Review Focus 4)** `Put_is_idempotent`: a second identical put returns `Inserted=false`, with 1 row.
@@ -380,16 +410,16 @@ docs/ezca-notes.md        what the EZCA probe showed
 
 **Interfaces:**
 - Consumes: `Caller` (Domain), `RecordStore`, `RecordVerifier`.
-- Produces:
-  - `AuditLog`: `AuditEvent Append(Guid patientId, Party? actor, string action, string? claimedPurpose, bool granted, DenyReason? reason)` and `IReadOnlyList<AuditEvent> List(Guid patientId, long afterId = 0)`.
+- Produces (all async, because each call goes to Azure SQL over the network; every class takes `Db`):
+  - `AuditLog`: `Task<AuditEvent> AppendAsync(Guid patientId, Party? actor, string action, string? claimedPurpose, bool granted, DenyReason? reason)` and `Task<IReadOnlyList<AuditEvent>> ListAsync(Guid patientId, long afterId = 0)`.
   - `GrantService`:
-    - `ShareOffer CreateOffer(Guid patientId, ShareDuration d)`: an 8-character code, valid 10 minutes.
-    - `Grant Redeem(string code, Party clinician)`: creates a `Pending` grant and appends a `RedeemOffer` event. Throws `GrantException("offer_used" | "offer_expired" | "offer_unknown")`.
-    - `Grant Decide(Guid patientId, Guid grantId, bool approve)`: approval sets `ApprovedAt` and `ExpiresAt` from the duration; `EndOfDay` is 23:59:59 in `AppOptions.TimeZone`.
-    - `Grant Revoke(Guid patientId, Guid grantId)`.
-    - `Grant CreateAppGrant(Guid patientId, Party app)`: `LabsAndNotes`, ongoing, `Active`.
-    - `IReadOnlyList<Grant> ForPatient(Guid patientId)` and `Grant? Find(Guid grantId)`.
-  - `AccessGate`: `AccessDecision Authorize(Guid patientId, AccessAction action, Caller caller, string? claimedPurpose)`, where `AccessDecision` is `(bool Allowed, Grant? Grant, DenyReason? Reason)`.
+    - `Task<ShareOffer> CreateOfferAsync(Guid patientId, ShareDuration d)`: an 8-character code, valid 10 minutes.
+    - `Task<Grant> RedeemAsync(string code, Party clinician)`: claims the offer with the conditional `UPDATE` (see Storage rules), creates a `Pending` grant and appends a `RedeemOffer` event, all in one transaction. Throws `GrantException("offer_used" | "offer_expired" | "offer_unknown")`.
+    - `Task<Grant> DecideAsync(Guid patientId, Guid grantId, bool approve)`: approval sets `ApprovedAt` and `ExpiresAt` from the duration; `EndOfDay` is 23:59:59 in `AppOptions.TimeZone`.
+    - `Task<Grant> RevokeAsync(Guid patientId, Guid grantId)`.
+    - `Task<Grant> CreateAppGrantAsync(Guid patientId, Party app)`: `LabsAndNotes`, ongoing, `Active`.
+    - `Task<IReadOnlyList<Grant>> ForPatientAsync(Guid patientId)` and `Task<Grant?> FindAsync(Guid grantId)`.
+  - `AccessGate`: `Task<AccessDecision> AuthorizeAsync(Guid patientId, AccessAction action, Caller caller, string? claimedPurpose)`, where `AccessDecision` is `(bool Allowed, Grant? Grant, DenyReason? Reason)`.
     - It writes **exactly one** audit event, either way.
     - Check order:
       1. Unverified → that reason.
@@ -406,7 +436,7 @@ docs/ezca-notes.md        what the EZCA probe showed
     - `GET /patients/{patientId}/record?purpose=...` (`ReadRecord`), the broker's target.
     - Denials return 401 for certificate reasons, 403 for grant reasons.
 
-- [ ] **Write failing tests** (with a fake `TimeProvider`):
+- [ ] **Write failing tests** (with a fake `TimeProvider`, and `SqlFixture`):
   - `No_grant_denied_and_logged_once`.
   - `Pending_denied`.
   - `Active_allowed_and_logged`.
@@ -427,7 +457,7 @@ docs/ezca-notes.md        what the EZCA probe showed
 **Files:** Create `Auth/PatientPasskeys.cs`, `Api/PatientPasskeyApi.cs`, `wwwroot/js/passkey.js`, `Pages/Patient/Enroll.cshtml(.cs)`, `Pages/Patient/SignIn.cshtml(.cs)`; modify `Program.cs`. Test: `EZEHR.Tests/Auth/PatientPasskeyTests.cs`.
 
 **Interfaces:**
-- Consumes: `RecordStore.CreatePatientKeyAsync` (Task 4); `GrantService.CreateAppGrant` (Task 6; stub its signature until it merges).
+- Consumes: `RecordStore.CreatePatientKeyAsync` (Task 4); `GrantService.CreateAppGrantAsync` (Task 6; stub its signature until it merges).
 - Produces:
   - Cookie scheme `"Patient"`: 12 h, HttpOnly, Secure, SameSite=Lax, and the claim `patient_id`. Policy `"Patient"`. `AuthorizeFolder("/Patient", "Patient")`, with Enroll and SignIn anonymous.
   - JSON endpoints (Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`.
@@ -571,10 +601,10 @@ These are checked manually on a phone. The UI isn't unit-tested, by choice; test
 - [ ] **Redeem:** a code field. On submit it calls `GrantService.Redeem` with the clinician `Party` and goes to Wait.
 - [ ] **Wait:** polls the grant status with htmx every 2 s, showing "Waiting for Sam to approve…", then goes to Record.
 - [ ] **Record:**
-  - Every load calls `AccessGate.Authorize(ReadRecord)`.
+  - Every load calls `AccessGate.AuthorizeAsync(ReadRecord)`.
   - Header: "Sam Taylor · access until 5:00 PM".
   - The combined timeline with badges, and the Kidney Check note at the top.
-  - A **note form** whose default text is "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed." It saves a FHIR `Communication` (`sender.display` = "Dr. Rivera, Riverside Primary Care", `sender.identifier` = the clinician's `SubjectUri`), signed with the **platform** certificate, through `AccessGate.Authorize(WriteNote)`.
+  - A **note form** whose default text is "Stop regular ibuprofen. Repeat kidney labs and urine albumin; refer to nephrology if the decline is confirmed." It saves a FHIR `Communication` (`sender.display` = "Dr. Rivera, Riverside Primary Care", `sender.identifier` = the clinician's `SubjectUri`), signed with the **platform** certificate, through `AccessGate.AuthorizeAsync(WriteNote)`.
   - Any `GrantExpired`, `GrantRevoked`, `NoGrant` or `ShiftEnded` result redirects to AccessEnded.
 - [ ] **AccessEnded:** shows `Copy.AccessEnded`. A `ShiftEnded` result also shows a "Sign in again" link.
 - [ ] Commit `feat: clinician pages and share flow`.
@@ -606,7 +636,7 @@ The download is named `sam-taylor-record.json`.
 
 - [ ] **8:00 AM feature freeze.** `dotnet test` must be all green, then deploy. Have a fresh Claude Code session review the whole branch, focused on the access check, certificate handling and the copy rules. Fix only real defects.
 - [ ] **Demo reset script** (`EZEHR.Tools`, command `demo reset`):
-  1. Delete the database on the server (a protected admin endpoint, or the Kudu console).
+  1. Clear the production database with `Db.DeleteAllDataAsync()`. The tool connects straight to Azure SQL as the teammate running it (`az login`, then `Authentication=Active Directory Default`), so that laptop's IP must be in the server firewall. The site has no reset endpoint.
   2. Create 3 invites and print the URLs.
   3. After phone enrollment, push all 3 providers and run Kidney Check.
 

@@ -76,7 +76,7 @@ flowchart LR
 | **Kidney Check (app)** | `urn:app:kidney-check` | EZCA client certificate (CN `kidney-check.apps.ezehr`) | `.pki/kidney-check.pfx` | **EZCA**, plus Sam's grant | The same certificate checks, plus a `LabsAndNotes` grant from Sam |
 | **EZEHR platform** | `urn:platform:ezehr` | EZCA certificate (CN `platform.ezehr`), used only to **sign** clinician notes | Key Vault secret `platform-cert`, loaded by App Service | **EZCA** | Anyone can verify the signature against the EZCA root |
 | **Data broker** | none | No certificate, or a self-made one | Its own machine | Nobody | Fails the certificate checks, so `UnverifiedCaller` and refused |
-| **EZEHR server → Azure** | App Service **managed identity** | Azure-issued token, automatic | Azure manages it; we store no secret | Azure | Key Vault roles: Crypto User (wrap and unwrap), Secrets User (read the platform certificate) |
+| **EZEHR server → Azure** | App Service **managed identity** | Azure-issued token, automatic | Azure manages it; we store no secret | Azure | Key Vault roles: Crypto User (wrap and unwrap), Secrets User (read the platform certificate). Azure SQL: a database user that can read, write and create tables |
 
 ---
 
@@ -119,6 +119,7 @@ The broker's certificate is made by the same tool **without EZCA** (`certs broke
 - App Service has a **system-assigned managed identity**. Key Vault grants it:
   - **Key Vault Crypto User** on `records-kek`, to wrap and unwrap patients' data keys
   - **Key Vault Secrets User**, to read `platform-cert`
+- Azure SQL uses **Entra-only authentication**. The same managed identity is a database user (`db_datareader`, `db_datawriter`, `db_ddladmin`), so the connection string holds no password.
 - App Service **client certificates = "Optional Interactive User"**:
   - browsers aren't asked for a certificate
   - programs (our tools) can present one

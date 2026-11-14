@@ -230,13 +230,14 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
 - **Libraries and services:**
   - Microsoft.Identity.Web for Entra sign-in
   - Fido2 (fido2-net-lib) for passkeys
-  - Microsoft.Data.Sqlite
+  - Dapper over Microsoft.Data.SqlClient, against Azure SQL Database
   - Azure.Identity + Azure.Security.KeyVault.Keys
   - `EZCAClient` (Keytos's EZCA SDK)
   - QRCoder
   - htmx from a CDN
 - **Hosting:**
   - Azure App Service (Linux, B1) with its managed identity
+  - Azure SQL Database, with Entra-only authentication; App Service connects with its managed identity, so no database password exists
   - Azure Key Vault
   - one Entra ID tenant
   - the EZCA free trial (Basic plan): one root CA and one issuing CA that allows Client Authentication
@@ -253,7 +254,7 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
 
 ## 11. Left to the builder
 
-- Database access style (Dapper or EF Core), schema, and the API shape.
+- The schema and the API shape. (Database access is decided: Dapper over Azure SQL Database.)
 - Grant duration choices (suggested: 5 minutes for the demo, 1 hour, 4 hours, end of day). The shift length is decided: 10 hours.
 - The signature format for records: JWS with the signing certificate attached, or CMS. It must be standard and verifiable outside our app, and it goes into the FHIR export as Provenance.
 - The polling mechanism (htmx or a few lines of script).
