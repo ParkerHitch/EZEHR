@@ -528,7 +528,10 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Produces:
   - `NetworkClient.Create(string baseUrl, string pfxPath)`: an `HttpClient` with the client certificate, `SslProtocols = Tls12` (TLS renegotiation needs 1.2), HTTP/1.1, and `Expect100Continue = true`.
   - `ezehr-tools provider invite <lakeside|northwind|maple|riverside> <providerPatientId>` prints the enrollment URL.
-  - `ezehr-tools provider push <provider> <providerPatientId>` signs each resource in `seed/<provider>.json` with `iat` = the resource's clinical date at 12:00 UTC. It POSTs one request per encounter date, so each request stays well under 100 KB.
+  - `ezehr-tools provider push <provider> <providerPatientId>` signs each resource in `seed/<provider>.json` with `iat` = **the time of signing** (now). It POSTs one request per visit date, so each request stays well under 100 KB.
+    - *Changed from "`iat` = the clinical date at 12:00 UTC":* the verifier checks the signer's chain at `iat`, and a certificate issued today (by EZCA or the local CA) isn't valid on a 2024 date, so the push was refused with `BadSignature`. `SignedAt` therefore means "when the organization signed it". **Clinical dates come from the resource:** `effectiveDateTime` (Observation, MedicationStatement), `period.start` (Encounter), `onsetDateTime` (Condition), `sent` (Communication), `authoredOn` (ServiceRequest). The patient and clinician timelines (Tasks 11, 12) group by that date, and Kidney Check reads `effectiveDateTime`.
+  - As built: `NetworkClient.Create(baseUrl, pfxPath)` takes `null` for "no certificate" (the broker). The base URL comes from `EZEHR_BASE_URL`, defaulting to the local https profile, `https://localhost:7189`. For a loopback base URL only, it skips server-certificate validation, because the ASP.NET Core development certificate is often untrusted on Linux. JSON bodies are sent with a `Content-Length` rather than chunked, so `Expect: 100-continue` applies.
+  - Seed file shape: `{ provider, organization, providerPatientId, visits: [{ date, resources: [FHIR R4 resources] }] }`. Resource ids are `{provider}-{date}-{what}` (for example, `maple-2024-09-12-egfr`), and each resource's `subject` carries the provider's patient id and the display name "Sam Taylor". The files are copied next to the tool's binary.
 - **Seed data** (FHIR R4). Patient Sam Taylor, born 1984-05-17. Provider patient IDs: `LUC-20417`, `NWH-88213`, `MSF-0932`, and `RPC-1107` for Riverside.
 
   | Provider | Date | Resources |
@@ -553,7 +556,9 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
   4. Later, redeem the Riverside invite and push `riverside`: 16 entries, and the plan shows `Copy.WrittenBy("Dr. Rivera", "Riverside Primary Care")`.
 
   Expected: Sam's record holds 13 entries. **(Review Focus 4)** Pushing again gives `stored:0`.
-- [ ] Commit `feat: provider simulator and seed data`.
+
+  Checked against a local `dotnet run` (enrollment stood in for by a script that calls `RecordManager.CreatePatientAsync` and `InviteManager.RedeemInviteAsync`, since Task 7 wasn't merged): 4 invites over mutual TLS, 13 stored, a second push of each provider gives `stored 0`, Riverside gives 409 `PatientNotLinked` until its invite is redeemed, then 16 entries.
+- [x] Commit `feat: provider simulator and seed data`.
 
 ### Task 10: Kidney Check example app (App lead, 1:00–2:00 AM)
 
@@ -584,7 +589,7 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 **Files:** Create `Pages/Patient/Home`, `Share`, `Activity`, `Grants`, `_ActivityPartial`.
 
 These are checked manually on a phone. The UI isn't unit-tested, by choice; testing time goes to the access check and the crypto.
-- [ ] **Home:** the combined timeline grouped by date.
+- [ ] **Home:** the combined timeline grouped by date: the resource's clinical date (see Task 9), not `SignedAt`.
   - Each entry shows `Copy.SignedBy(org)`, or `Copy.WrittenBy(...)` when the entry names an author (Dr. Rivera's plan, signed by Riverside).
   - The Kidney Check note shows as a card at the top.
   - An "Export my record" button (Task 14).

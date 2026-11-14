@@ -1,0 +1,228 @@
+{
+  "provider": "lakeside",
+  "organization": "Lakeside Urgent Care",
+  "providerPatientId": "LUC-20417",
+  "visits": [
+    {
+      "date": "2025-08-21",
+      "resources": [
+        {
+          "resourceType": "Encounter",
+          "id": "lakeside-2025-08-21-encounter",
+          "status": "finished",
+          "class": {
+            "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+            "code": "AMB",
+            "display": "ambulatory"
+          },
+          "type": [
+            {
+              "text": "Urgent care visit: low back pain"
+            }
+          ],
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:lakeside:patients",
+              "value": "LUC-20417"
+            },
+            "display": "Sam Taylor"
+          },
+          "period": {
+            "start": "2025-08-21",
+            "end": "2025-08-21"
+          },
+          "reasonCode": [
+            {
+              "coding": [
+                {
+                  "system": "http://snomed.info/sct",
+                  "code": "279039007",
+                  "display": "Low back pain"
+                }
+              ],
+              "text": "Low back pain"
+            }
+          ],
+          "serviceProvider": {
+            "display": "Lakeside Urgent Care"
+          }
+        },
+        {
+          "resourceType": "MedicationStatement",
+          "id": "lakeside-2025-08-21-ibuprofen",
+          "status": "active",
+          "medicationCodeableConcept": {
+            "coding": [
+              {
+                "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+                "code": "197806",
+                "display": "ibuprofen 600 MG Oral Tablet"
+              }
+            ],
+            "text": "ibuprofen 600 mg three times daily as needed"
+          },
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:lakeside:patients",
+              "value": "LUC-20417"
+            },
+            "display": "Sam Taylor"
+          },
+          "effectiveDateTime": "2025-08-21",
+          "dateAsserted": "2025-08-21",
+          "dosage": [
+            {
+              "text": "600 mg by mouth three times daily as needed for pain"
+            }
+          ]
+        },
+        {
+          "resourceType": "Observation",
+          "id": "lakeside-2025-08-21-egfr",
+          "status": "final",
+          "category": [
+            {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                  "code": "laboratory",
+                  "display": "Laboratory"
+                }
+              ]
+            }
+          ],
+          "code": {
+            "coding": [
+              {
+                "system": "http://loinc.org",
+                "code": "98979-8",
+                "display": "Glomerular filtration rate/1.73 sq M.predicted [Volume Rate/Area] in Serum, Plasma or Blood by Creatinine-based formula (CKD-EPI 2021)"
+              }
+            ],
+            "text": "eGFR"
+          },
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:lakeside:patients",
+              "value": "LUC-20417"
+            },
+            "display": "Sam Taylor"
+          },
+          "effectiveDateTime": "2025-08-21",
+          "valueQuantity": {
+            "value": 81,
+            "unit": "mL/min/1.73m2",
+            "system": "http://unitsofmeasure.org",
+            "code": "mL/min/{1.73_m2}"
+          },
+          "referenceRange": [
+            {
+              "low": {
+                "value": 60,
+                "unit": "mL/min/1.73m2",
+                "system": "http://unitsofmeasure.org",
+                "code": "mL/min/{1.73_m2}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "date": "2026-09-15",
+      "resources": [
+        {
+          "resourceType": "Encounter",
+          "id": "lakeside-2026-09-15-encounter",
+          "status": "finished",
+          "class": {
+            "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+            "code": "AMB",
+            "display": "ambulatory"
+          },
+          "type": [
+            {
+              "text": "Urgent care visit: back pain follow-up"
+            }
+          ],
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:lakeside:patients",
+              "value": "LUC-20417"
+            },
+            "display": "Sam Taylor"
+          },
+          "period": {
+            "start": "2026-09-15",
+            "end": "2026-09-15"
+          },
+          "reasonCode": [
+            {
+              "coding": [
+                {
+                  "system": "http://snomed.info/sct",
+                  "code": "279039007",
+                  "display": "Low back pain"
+                }
+              ],
+              "text": "Back pain follow-up"
+            }
+          ],
+          "serviceProvider": {
+            "display": "Lakeside Urgent Care"
+          }
+        },
+        {
+          "resourceType": "Observation",
+          "id": "lakeside-2026-09-15-egfr",
+          "status": "final",
+          "category": [
+            {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                  "code": "laboratory",
+                  "display": "Laboratory"
+                }
+              ]
+            }
+          ],
+          "code": {
+            "coding": [
+              {
+                "system": "http://loinc.org",
+                "code": "98979-8",
+                "display": "Glomerular filtration rate/1.73 sq M.predicted [Volume Rate/Area] in Serum, Plasma or Blood by Creatinine-based formula (CKD-EPI 2021)"
+              }
+            ],
+            "text": "eGFR"
+          },
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:lakeside:patients",
+              "value": "LUC-20417"
+            },
+            "display": "Sam Taylor"
+          },
+          "effectiveDateTime": "2026-09-15",
+          "valueQuantity": {
+            "value": 63,
+            "unit": "mL/min/1.73m2",
+            "system": "http://unitsofmeasure.org",
+            "code": "mL/min/{1.73_m2}"
+          },
+          "referenceRange": [
+            {
+              "low": {
+                "value": 60,
+                "unit": "mL/min/1.73m2",
+                "system": "http://unitsofmeasure.org",
+                "code": "mL/min/{1.73_m2}"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
