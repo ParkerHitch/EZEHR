@@ -162,6 +162,17 @@ public class PkiTests
     }
 
     [Fact]
+    public void Verifier_rejects_chain_to_attacker_root_supplied_in_x5c()
+    {
+        var attacker = new TestPki();
+        var leaf = attacker.Issue("maple.providers.ezehr");
+        var attackerRoot = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadCertificate(attacker.Ca.Root.RawData);
+        var jws = RecordSigner.Sign(Egfr, leaf, [attackerRoot], pki.Clock.GetUtcNow());
+        Assert.Throws<RecordSignatureException>(() => new RecordVerifier(pki.Validator, pki.Directory).Verify(Guid.NewGuid(), jws));
+        Assert.Equal(DenyReason.UntrustedCertificate, pki.Validator.Validate(leaf, [attackerRoot], pki.Clock.GetUtcNow()).Reason);
+    }
+
+    [Fact]
     public void Verifier_rejects_alg_key_mismatch()
     {
         var cert = pki.Issue("maple.providers.ezehr"); // EC key
