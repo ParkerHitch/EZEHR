@@ -1,0 +1,170 @@
+{
+  "provider": "maple",
+  "organization": "Maple Street Family Medicine",
+  "providerPatientId": "MSF-0932",
+  "visits": [
+    {
+      "date": "2024-09-12",
+      "resources": [
+        {
+          "resourceType": "Encounter",
+          "id": "maple-2024-09-12-encounter",
+          "status": "finished",
+          "class": {
+            "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+            "code": "AMB",
+            "display": "ambulatory"
+          },
+          "type": [
+            {
+              "text": "Annual physical"
+            }
+          ],
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:maple:patients",
+              "value": "MSF-0932"
+            },
+            "display": "Sam Taylor"
+          },
+          "period": {
+            "start": "2024-09-12",
+            "end": "2024-09-12"
+          },
+          "serviceProvider": {
+            "display": "Maple Street Family Medicine"
+          }
+        },
+        {
+          "resourceType": "Condition",
+          "id": "maple-2024-09-12-hypertension",
+          "clinicalStatus": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                "code": "active"
+              }
+            ]
+          },
+          "verificationStatus": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/condition-ver-status",
+                "code": "confirmed"
+              }
+            ]
+          },
+          "category": [
+            {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/condition-category",
+                  "code": "problem-list-item",
+                  "display": "Problem List Item"
+                }
+              ]
+            }
+          ],
+          "code": {
+            "coding": [
+              {
+                "system": "http://snomed.info/sct",
+                "code": "59621000",
+                "display": "Essential hypertension"
+              }
+            ],
+            "text": "Essential hypertension"
+          },
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:maple:patients",
+              "value": "MSF-0932"
+            },
+            "display": "Sam Taylor"
+          },
+          "onsetDateTime": "2024-09-12",
+          "recordedDate": "2024-09-12"
+        },
+        {
+          "resourceType": "MedicationStatement",
+          "id": "maple-2024-09-12-amlodipine",
+          "status": "active",
+          "medicationCodeableConcept": {
+            "coding": [
+              {
+                "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+                "code": "197361",
+                "display": "amlodipine 5 MG Oral Tablet"
+              }
+            ],
+            "text": "amlodipine 5 mg daily"
+          },
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:maple:patients",
+              "value": "MSF-0932"
+            },
+            "display": "Sam Taylor"
+          },
+          "effectiveDateTime": "2024-09-12",
+          "dateAsserted": "2024-09-12",
+          "dosage": [
+            {
+              "text": "5 mg by mouth once daily"
+            }
+          ]
+        },
+        {
+          "resourceType": "Observation",
+          "id": "maple-2024-09-12-egfr",
+          "status": "final",
+          "category": [
+            {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                  "code": "laboratory",
+                  "display": "Laboratory"
+                }
+              ]
+            }
+          ],
+          "code": {
+            "coding": [
+              {
+                "system": "http://loinc.org",
+                "code": "98979-8",
+                "display": "Glomerular filtration rate/1.73 sq M.predicted [Volume Rate/Area] in Serum, Plasma or Blood by Creatinine-based formula (CKD-EPI 2021)"
+              }
+            ],
+            "text": "eGFR"
+          },
+          "subject": {
+            "identifier": {
+              "system": "urn:provider:maple:patients",
+              "value": "MSF-0932"
+            },
+            "display": "Sam Taylor"
+          },
+          "effectiveDateTime": "2024-09-12",
+          "valueQuantity": {
+            "value": 96,
+            "unit": "mL/min/1.73m2",
+            "system": "http://unitsofmeasure.org",
+            "code": "mL/min/{1.73_m2}"
+          },
+          "referenceRange": [
+            {
+              "low": {
+                "value": 60,
+                "unit": "mL/min/1.73m2",
+                "system": "http://unitsofmeasure.org",
+                "code": "mL/min/{1.73_m2}"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
