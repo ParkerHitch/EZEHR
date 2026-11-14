@@ -36,3 +36,13 @@ body {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
   text-align: start;
 }
+
+/* Patient pages are used on a phone: one column, tap targets of at least 44px. */
+.patient-page {
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.btn-tap {
+  min-height: 44px;
+}

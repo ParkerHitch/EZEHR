@@ -1,0 +1,51 @@
+@page
+@using EZEHR.Models
+@model EZEHR.Pages.Patient.EnrollModel
+@{
+    ViewData["Title"] = "Join EZEHR";
+}
+
+<div class="patient-page">
+    @if (Model.ErrorMessage is not null)
+    {
+        <p class="alert alert-danger" role="alert">@Model.ErrorMessage</p>
+    }
+    else if (!Model.Invite.Usable)
+    {
+        <h1 class="h3">This invite can't be used</h1>
+        <p>@Copy.EnrollmentFailed(Model.Invite.Error!.Value)</p>
+        <a class="btn btn-outline-primary btn-tap" asp-page="/Patient/SignIn">Sign in instead</a>
+    }
+    else if (Model.SignedIn)
+    {
+        <h1 class="h3">@Copy.LinkProviderPrompt(Model.Invite.ProviderName!)</h1>
+        <form method="post" asp-page-handler="Link">
+            <input type="hidden" name="invite" value="@Model.InviteCode"/>
+            <button type="submit" class="btn btn-primary btn-tap w-100">Add @Model.Invite.ProviderName</button>
+        </form>
+    }
+    else
+    {
+        <h1 class="h3">Welcome</h1>
+        <p>@Copy.InvitedBy(Model.Invite.ProviderName!)</p>
+        <form>
+            <input type="hidden" name="inviteCode" value="@Model.InviteCode"/>
+            <div class="mb-3">
+                <label class="form-label" for="displayName">Your name</label>
+                <input class="form-control form-control-lg" id="displayName" name="displayName"
+                       autocomplete="name" maxlength="200" required/>
+            </div>
+            <div class="form-check mb-4">
+                <input class="form-check-input" type="checkbox" id="kidneyCheckOptIn" name="kidneyCheckOptIn"/>
+                <label class="form-check-label" for="kidneyCheckOptIn">@Copy.KidneyOptIn</label>
+            </div>
+            <button type="button" class="btn btn-primary btn-tap w-100" data-passkey="enroll"
+                    data-passkey-error="passkey-error">Create passkey</button>
+            <p id="passkey-error" class="text-danger mt-3" role="alert"></p>
+        </form>
+    }
+</div>
+
+@section Scripts {
+    <script src="~/js/passkey.js" asp-append-version="true"></script>
+}

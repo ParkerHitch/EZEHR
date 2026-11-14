@@ -64,10 +64,29 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
     /// <summary>Links the invite's provider record to the patient and marks the invite used. Single use.</summary>
     public async Task<InviteResult> RedeemInviteAsync(string code, Guid patientId)
     {
-        string normalizedCode = GrantManager.NormalizeCode(code);
-        DateTimeOffset now = time.GetUtcNow();
         await using SqlConnection connection = await db.OpenAsync();
         await using DbTransaction transaction = await connection.BeginTransactionAsync();
+        InviteResult result = await RedeemInviteAsync(connection, transaction, code, patientId);
+        if (result.Succeeded)
+        {
+            await transaction.CommitAsync();
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The same, inside the caller's transaction, so enrollment can claim the invite and create the patient
+    /// together. The caller commits.
+    /// </summary>
+    public async Task<InviteResult> RedeemInviteAsync(
+        SqlConnection connection,
+        DbTransaction transaction,
+        string code,
+        Guid patientId
+    )
+    {
+        string normalizedCode = GrantManager.NormalizeCode(code);
+        DateTimeOffset now = time.GetUtcNow();
 
         // The conditional UPDATE is the claim, so a double submit redeems once.
         ProviderLink? link = await connection.QuerySingleOrDefaultAsync<ProviderLink>(
@@ -107,7 +126,6 @@ public sealed class InviteManager(Db db, TimeProvider time, IOptions<AppOptions>
                 transaction
             );
         }
-        await transaction.CommitAsync();
         return Succeeded(link);
     }
 

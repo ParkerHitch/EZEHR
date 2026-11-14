@@ -465,20 +465,19 @@ The layers are described in `docs/style-guide.md` section 3. Expected failures (
 - Consumes: `RecordManager.CreatePatientKeyAsync` (Task 4); `GrantManager.CreateAppGrantAsync` (Task 6; stub its signature until it merges).
 - Produces:
   - Cookie scheme `"Patient"`: 12 h, HttpOnly, Secure, SameSite=Lax, and the claim `patient_id`. Policy `"Patient"`. `AuthorizeFolder("/Patient", "Patient")`, with Enroll and SignIn anonymous.
-  - JSON endpoints (Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`.
-    - `POST /api/patient/passkey/create-registration-options { inviteCode }` (`CreateRegistrationOptionsAsync`). Discoverable credential, `UserVerification = Required`, attestation `none`. An invalid or used invite returns 400.
-    - `POST /api/patient/passkey/complete-registration { inviteCode, attestation, kidneyCheckOptIn }` (`CompleteRegistrationAsync`). It creates the patient (with the wrapped key), the credential and the provider link, redeems the invite, creates the Kidney Check grant **only if** opted in, and signs the patient in.
-    - `POST /api/patient/passkey/create-sign-in-options` (usernameless, `CreateSignInOptionsAsync`) and `/complete-sign-in` (`CompleteSignInAsync`).
-    - `POST /api/patient/redeem-invite { inviteCode }` (signed in, `RedeemInviteAsync`): adds another provider link.
-  - `passkey.js`: about 40 lines. It uses `PublicKeyCredential.parseCreationOptionsFromJSON`, `parseRequestOptionsFromJSON` and `credential.toJSON()`, with base64url helpers as a fallback for older browsers.
+  - JSON endpoints (`PatientPasskeyController`, Fido2.AspNet). The Fido2 server is configured from `AppOptions.Origin`: `ServerDomain` is its host, and `Origins` is `{Origin}`. Each ceremony's options (its challenge) wait in the ASP.NET Core session (in-memory cache, 5 minutes) between its two calls and are removed when the second call reads them, so a challenge answers once.
+    - `POST /api/patient/passkey/create-registration-options { inviteCode, displayName }` (`CreateRegistrationOptionsAsync`). Discoverable credential, `UserVerification = Required`, attestation `none`, a random 32-byte user handle. An invalid or used invite returns 400. Invites carry no name, so the Enroll page asks for it.
+    - `POST /api/patient/passkey/complete-registration { attestation, kidneyCheckOptIn }` (`CompleteRegistrationAsync`). The invite code comes from the session, not the body. In one transaction it redeems the invite, creates the patient (with the wrapped key) and stores the credential; then it creates the Kidney Check grant **only if** opted in, and signs the patient in. A used invite creates nothing.
+    - `POST /api/patient/passkey/create-sign-in-options` (usernameless, `CreateSignInOptions`) and `/complete-sign-in { assertion }` (`CompleteSignInAsync`).
+    - A signed-in patient who opens another invite link gets "Add your records from {provider}?" on the Enroll page, which posts to its `Link` handler (`EnrollmentManager.LinkInviteAsync`). This replaces a separate `redeem-invite` endpoint.
+  - `passkey.js`: buttons with `data-passkey="enroll" | "sign-in"`. It uses `PublicKeyCredential.parseCreationOptionsFromJSON` and `parseRequestOptionsFromJSON` when available (base64url helpers otherwise), and builds the response JSON itself.
+  - `Pages/Patient/Home` is a placeholder (name and sign out) until Task 11.
 - The Enroll page shows `Copy.KidneyOptIn` with a checkbox, plus one "Create passkey" button. The SignIn page has one "Sign in with passkey" button.
 
-- [ ] **Write failing tests** (Fido2 behind `IFido2Service`, stubbed):
-  - `Invite_single_use`, `Invite_expired`.
-  - `OptIn_creates_app_grant` and `No_optin_no_grant`.
-  - `Enroll_creates_wrapped_dek_and_link`.
-  - `Redeem_second_invite_adds_link`.
-- [ ] Run (FAIL), implement, run (PASS).
+- [x] **Write failing tests** (Fido2 behind `IFido2Service`; `FakeFido2Service` makes real options and stubs verification, and `EzehrFactory` always registers it):
+  - `PatientPasskeyTests`: `Invite_single_use`, `Invite_used_between_options_and_completion_creates_nothing`, `Invite_expired`, `Rejected_passkey_leaves_invite_usable`, `OptIn_creates_app_grant`, `No_optin_no_grant`, `Enroll_creates_wrapped_dek_and_link`, `Redeem_second_invite_adds_link`, and sign-in with a known, unknown and badly signed passkey.
+  - `PatientPasskeyFlowTests` (through HTTP): enrollment signs the patient in, patient pages redirect to SignIn without a cookie, a challenge answers once, sign-in on a new browser.
+- [x] Run (FAIL), implement, run (PASS).
 - [ ] On the deployed site, on a phone: enroll from an invite, then sign in again. Expected: no password field ever appears.
 - [ ] Commit `feat: patient passkeys, invites, sessions`.
 

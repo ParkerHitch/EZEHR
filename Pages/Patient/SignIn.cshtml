@@ -1,0 +1,17 @@
+@page
+@model EZEHR.Pages.Patient.SignInModel
+@{
+    ViewData["Title"] = "Sign in";
+}
+
+<div class="patient-page">
+    <h1 class="h3">Your health record</h1>
+    <p>Sign in with the passkey on this phone.</p>
+    <button type="button" class="btn btn-primary btn-tap w-100" data-passkey="sign-in"
+            data-passkey-error="passkey-error">Sign in with passkey</button>
+    <p id="passkey-error" class="text-danger mt-3" role="alert"></p>
+</div>
+
+@section Scripts {
+    <script src="~/js/passkey.js" asp-append-version="true"></script>
+}
