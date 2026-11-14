@@ -44,6 +44,10 @@ public static class CoreServices
             sp.GetRequiredService<IKeyWrapper>(), sp.GetRequiredService<TimeProvider>()));
         services.AddScoped<AuditLog>();
         services.AddScoped<InviteService>();
+        services.AddScoped<GrantService>();
+        services.AddScoped<AccessGate>();
+        services.AddScoped<RecordReader>();
+        services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 
         // The network door's client certificate. Only trust a forwarded header when a proxy that verifies mutual TLS sets it.
         services.AddSingleton<IClientCertificateSource, ConnectionClientCertificateSource>();

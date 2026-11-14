@@ -10,6 +10,7 @@ namespace EZEHR.Api;
 
 public sealed record InviteRequest(string ProviderPatientId);
 public sealed record IngestRequest(string ProviderPatientId, string[] Entries);
+public sealed record NoteRequest(string Jws);
 
 /// <summary>
 /// The network door: organizations and apps call these endpoints over mutual TLS with EZCA certificates.
@@ -65,6 +66,41 @@ public static class NetworkApi
             audit.Append(patientId, provider, "Ingest", null, true, null);
             return Results.Ok(new { inserted, skipped });
         });
+
+        // Patient-targeted endpoints: every call goes through the gate, which logs it for the patient.
+        api.MapGet("/patients/{patientId:guid}/labs", async (Guid patientId, HttpContext ctx, IClientCertificateSource certs,
+            CallerResolver resolver, RecordReader reader) =>
+        {
+            var caller = resolver.Resolve(await certs.GetAsync(ctx));
+            var (decision, entries) = await reader.ReadAsync(patientId, AccessAction.ReadLabs, caller, null);
+            return decision.Allowed ? Results.Ok(new { entries = entries.Select(View) }) : Denied(decision);
+        });
+
+        api.MapGet("/patients/{patientId:guid}/record", async (Guid patientId, string? purpose, HttpContext ctx,
+            IClientCertificateSource certs, CallerResolver resolver, RecordReader reader) =>
+        {
+            var caller = resolver.Resolve(await certs.GetAsync(ctx));
+            var (decision, entries) = await reader.ReadAsync(patientId, AccessAction.ReadRecord, caller, purpose);
+            return decision.Allowed ? Results.Ok(new { entries = entries.Select(View) }) : Denied(decision);
+        });
+
+        api.MapPost("/patients/{patientId:guid}/notes", async (Guid patientId, NoteRequest req, HttpContext ctx,
+            IClientCertificateSource certs, CallerResolver resolver, AccessGate gate, RecordVerifier verifier, RecordStore store) =>
+        {
+            var caller = resolver.Resolve(await certs.GetAsync(ctx));
+            var decision = gate.Authorize(patientId, AccessAction.WriteNote, caller, null);
+            if (!decision.Allowed) return Denied(decision);
+
+            VerifiedEntry note;
+            try { note = verifier.Verify(Guid.Empty, req.Jws ?? ""); }
+            catch (RecordSignatureException) { return Error(400, "bad_signature"); }
+            if (note.Signer.SubjectUri != ((VerifiedCaller)caller).Party.SubjectUri) return Error(400, "signer_mismatch");
+            if (note.ResourceType != "Communication") return Error(400, "notes_must_be_communication");
+            if (!note.Resource.TryGetProperty("id", out var id) || id.GetString() is not { Length: > 0 } noteId) return Error(400, "resource_id_required");
+
+            var (inserted, entryId) = await store.PutAsync(patientId, $"{note.Signer.SubjectUri}|Communication/{noteId}", "Communication", req.Jws!);
+            return Results.Ok(new { inserted, id = entryId });
+        });
     }
 
     /// <summary>401 for certificate problems, 403 for a verified caller of the wrong kind; null when the caller may proceed.</summary>
@@ -73,6 +109,20 @@ public static class NetworkApi
         UnverifiedCaller u => Error(401, u.Reason.ToString()),
         VerifiedCaller v when v.Party.Kind != required => Error(403, "wrong_party_kind"),
         _ => null,
+    };
+
+    private static IResult Denied(AccessDecision d) =>
+        Error(AccessGate.IsAuthenticationFailure(d.Reason!.Value) ? 401 : 403, d.Reason.Value.ToString());
+
+    private static object View(SignedEntry e) => new
+    {
+        id = e.Verified.Id,
+        resourceType = e.Verified.ResourceType,
+        signer = e.Verified.Signer,
+        signedAt = e.Verified.SignedAt,
+        writtenBy = e.Verified.WrittenBy,
+        resource = e.Verified.Resource,
+        jws = e.Jws,
     };
 
     internal static IResult Error(int status, string error) => Results.Json(new { error }, statusCode: status);
