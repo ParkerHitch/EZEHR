@@ -375,4 +375,21 @@ public class PatientPasskeyTests : IAsyncLifetime
             RawId = credentialId,
         };
     }
+
+    [Fact]
+    public async Task Opt_in_after_kidney_check_was_removed_enrolls_without_a_grant()
+    {
+        await using (SqlConnection connection = await _database.Db.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "DELETE FROM organizations WHERE uri = 'urn:app:kidney-check'"
+            );
+        }
+        string code = await InviteAsync("lakeside", "LUC-20417");
+
+        EnrollmentResult result = await EnrollAsync(code, true);
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(await _services.Grants.ListForPatientAsync(result.PatientId!.Value));
+    }
 }

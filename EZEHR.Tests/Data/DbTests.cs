@@ -218,4 +218,43 @@ public class DbTests : IAsyncLifetime
             )
         );
     }
+
+    [Fact]
+    public async Task Deleted_organization_stays_deleted_after_restart()
+    {
+        await using SqlConnection connection = await _database.Db.OpenAsync();
+        await connection.ExecuteAsync(
+            "DELETE FROM organizations WHERE uri = 'urn:app:kidney-check'"
+        );
+
+        await _database.Db.EnsureSchemaAsync();
+
+        Assert.Equal(
+            0,
+            await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM organizations WHERE uri = 'urn:app:kidney-check'"
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Restart_survives_a_demo_cn_reused_by_another_organization()
+    {
+        await using SqlConnection connection = await _database.Db.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            DELETE FROM organizations WHERE uri = 'urn:provider:riverside';
+            INSERT INTO organizations(uri, kind, display_name, certificate_cn)
+            VALUES ('urn:provider:riverside-health', 'Provider', N'Riverside Health',
+                    'riverside.providers.ezehr');
+            """
+        );
+
+        await _database.Db.EnsureSchemaAsync();
+
+        Assert.Equal(
+            5,
+            await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM organizations")
+        );
+    }
 }

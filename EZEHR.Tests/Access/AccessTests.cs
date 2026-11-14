@@ -1,6 +1,8 @@
+using Dapper;
 using EZEHR.Managers;
 using EZEHR.Models;
 using EZEHR.Tests.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Time.Testing;
 
 namespace EZEHR.Tests.Access;
@@ -426,5 +428,21 @@ public class AccessTests : IAsyncLifetime
 
         Assert.Equal(Rivera, events[0].Actor);
         Assert.Null(events[1].Actor);
+    }
+
+    [Fact]
+    public async Task Turning_on_kidney_check_after_it_was_removed_grants_nothing()
+    {
+        await using (SqlConnection connection = await _database.Db.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "DELETE FROM organizations WHERE uri = 'urn:app:kidney-check'"
+            );
+        }
+
+        Grant? grant = await Grants.TurnOnKidneyCheckAsync(_sam);
+
+        Assert.Null(grant);
+        Assert.Empty(await Grants.ListForPatientAsync(_sam));
     }
 }

@@ -25,8 +25,9 @@ public sealed class Db(IConfiguration configuration)
     }
 
     /// <summary>
-    /// Creates the tables, constraints and indexes that are missing, and adds any demo organization whose row is
-    /// missing. Safe to run on every start: it never changes a row that exists, so sysadmins' edits stay.
+    /// Creates the tables, constraints and indexes that are missing, and seeds the demo organizations into an empty
+    /// organizations table. Safe to run on every start: once the table has rows it is never touched, so sysadmins'
+    /// edits and deletions stay.
     /// </summary>
     public async Task EnsureSchemaAsync(CancellationToken cancellationToken = default)
     {
@@ -35,12 +36,21 @@ public sealed class Db(IConfiguration configuration)
         {
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        foreach (Organization organization in OrgDirectory.DemoOrganizations)
+        // Seed only an empty table (a new database). Once a sysadmin has edited it, the table is theirs: deleting a
+        // row is how an organization is cut off, so it must stay deleted across restarts.
+        bool hasOrganizations = await connection.ExecuteScalarAsync<bool>(
+            new CommandDefinition(
+                "SELECT CASE WHEN EXISTS (SELECT 1 FROM dbo.organizations) THEN 1 ELSE 0 END",
+                cancellationToken: cancellationToken
+            )
+        );
+        foreach (
+            Organization organization in hasOrganizations ? [] : OrgDirectory.DemoOrganizations
+        )
         {
             await connection.ExecuteAsync(
                 new CommandDefinition(
                     """
-                    IF NOT EXISTS (SELECT 1 FROM dbo.organizations WHERE uri = @Uri)
                     INSERT INTO dbo.organizations(uri, kind, display_name, certificate_cn, entra_tenant_id)
                     VALUES (@Uri, @kind, @DisplayName, @CertificateCommonName, NULL);
                     """,

@@ -347,15 +347,17 @@ public sealed class GrantManager(
 
     /// <summary>
     /// The patient turns Kidney Check on, at enrollment or later from the Access page. After a revoke this makes a
-    /// new grant. Idempotent while one is active.
+    /// new grant. Idempotent while one is active. Null when a sysadmin removed Kidney Check's row: it's cut off, so
+    /// nothing is granted.
     /// </summary>
-    public async Task<Grant> TurnOnKidneyCheckAsync(Guid patientId)
+    public async Task<Grant?> TurnOnKidneyCheckAsync(Guid patientId)
     {
         OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
-        Party kidneyCheck = directory.FindByUri(OrgDirectory.KidneyCheckUri)
-            ?? throw new InvalidOperationException(
-                $"{OrgDirectory.KidneyCheckUri} is missing from the organizations table."
-            );
+        Party? kidneyCheck = directory.FindByUri(OrgDirectory.KidneyCheckUri);
+        if (kidneyCheck is null)
+        {
+            return null;
+        }
         return await CreateAppGrantAsync(patientId, kidneyCheck);
     }
 

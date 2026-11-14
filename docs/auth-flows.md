@@ -133,7 +133,8 @@ The broker's certificate is made by the same tool **without EZCA** (`certs broke
 
 `organizations` is the one list of who each organization is: `uri` (its identity on the platform), `kind` (`Provider` or `App`), `display_name`, `certificate_cn` (the CN on its EZCA certificate, compared without case), and `entra_tenant_id` (providers only; a tenant belongs to at most one provider). The server reads it on every request that needs it, so an edit takes effect immediately.
 
-- On every start the app adds any of the five demo organizations whose row is missing. It never changes an existing row, so a sysadmin's edits survive restarts, and `ezehr-tools demo reset` leaves the table alone.
+- A new database starts with the five demo organizations: the app seeds them when the table is empty. Once the table has any rows the app never touches it, so a sysadmin's edits and deletions survive restarts, and `ezehr-tools demo reset` leaves the table alone.
+- **Cutting off an organization** (for example, a leaked key): delete its row. EZEHR doesn't check certificate revocation, so this is the kill switch, and it takes effect on the next request. Its certificate is then refused at the network door, its clinicians can't sign in, and records it signed no longer verify, so they drop out of every view until the row is restored.
 - There is no registration endpoint yet. To add an organization, a sysadmin inserts its row, and EZCA must also issue a certificate with that CN:
 
   ```sql
