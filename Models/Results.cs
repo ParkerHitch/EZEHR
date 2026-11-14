@@ -23,7 +23,8 @@ public sealed record PushSignedRecordsResult(
     DenyReason? Reason,
     RecordError? Error,
     int Stored,
-    int AlreadyStored
+    int AlreadyStored,
+    int Replaced
 );
 
 public sealed record ReadEgfrLabsResult(
@@ -32,13 +33,17 @@ public sealed record ReadEgfrLabsResult(
     IReadOnlyList<SignedEntry> EgfrLabs
 );
 
-/// <summary>Grant is the grant the access check decided on (pending, ended or active); PatientName is set when allowed.</summary>
+/// <summary>
+/// Grant is the grant the access check decided on (pending, ended or active); PatientName is set when allowed.
+/// UnverifiedCount is how many stored entries failed verification and aren't in Entries.
+/// </summary>
 public sealed record ReadFullRecordResult(
     bool Allowed,
     DenyReason? Reason,
     IReadOnlyList<SignedEntry> Entries,
     Grant? Grant,
-    string? PatientName
+    string? PatientName,
+    int UnverifiedCount = 0
 );
 
 public sealed record WriteSignedNoteResult(

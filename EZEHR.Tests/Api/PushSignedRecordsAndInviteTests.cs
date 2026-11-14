@@ -80,6 +80,18 @@ public class PushSignedRecordsAndInviteTests : IAsyncLifetime
         return await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM entries");
     }
 
+    private async Task<int> StoredEgfrAsync()
+    {
+        IReadOnlyList<DecryptedEntry> entries = await _app.WithAsync(services =>
+            services.GetRequiredService<RecordManager>().DecryptEntriesAsync(_sam, null)
+        );
+        string payload = Assert.Single(entries).Jws.Split('.')[1];
+        string base64 = payload.Replace('-', '+').Replace('_', '/');
+        byte[] json = Convert.FromBase64String(base64.PadRight((base64.Length + 3) / 4 * 4, '='));
+        using JsonDocument lab = JsonDocument.Parse(json);
+        return lab.RootElement.GetProperty("valueQuantity").GetProperty("value").GetInt32();
+    }
+
     private Task<IReadOnlyList<AuditEvent>> EventsAsync()
     {
         return _app.WithAsync(services =>
@@ -144,6 +156,57 @@ public class PushSignedRecordsAndInviteTests : IAsyncLifetime
         Assert.Equal(0, body.GetProperty("stored").GetInt32());
         Assert.Equal(2, body.GetProperty("alreadyStored").GetInt32());
         Assert.Equal(2, await EntryCountAsync());
+    }
+
+    [Fact]
+    public async Task Changed_record_replaces_stored_one()
+    {
+        await PushAsync(_maple, "MSF-0932", Signed(_maple, "egfr-1", 96));
+        _app.Pki.Clock.Advance(TimeSpan.FromMinutes(5));
+        HttpResponseMessage response = await PushAsync(
+            _maple,
+            "MSF-0932",
+            Signed(_maple, "egfr-1", 69)
+        );
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, body.GetProperty("stored").GetInt32());
+        Assert.Equal(1, body.GetProperty("replaced").GetInt32());
+        Assert.Equal(1, await EntryCountAsync());
+        Assert.Equal(69, await StoredEgfrAsync());
+    }
+
+    [Fact]
+    public async Task Older_version_does_not_undo_a_correction()
+    {
+        string original = Signed(_maple, "egfr-1", 96);
+        _app.Pki.Clock.Advance(TimeSpan.FromMinutes(5));
+        await PushAsync(_maple, "MSF-0932", Signed(_maple, "egfr-1", 69));
+        HttpResponseMessage response = await PushAsync(_maple, "MSF-0932", original);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, body.GetProperty("alreadyStored").GetInt32());
+        Assert.Equal(69, await StoredEgfrAsync());
+    }
+
+    [Theory]
+    [InlineData(10, 0)] // signed 10 minutes ahead
+    [InlineData(0, 90)] // sent 90 minutes after signing
+    public async Task Push_rejects_iat_out_of_range(int signAheadMinutes, int sendAfterMinutes)
+    {
+        JsonElement lab = JsonSerializer.SerializeToElement(
+            new { resourceType = "Observation", id = "egfr-1" }
+        );
+        string jws = RecordSigner.Sign(
+            lab,
+            _maple,
+            [],
+            _app.Pki.Clock.GetUtcNow().AddMinutes(signAheadMinutes)
+        );
+        _app.Pki.Clock.Advance(TimeSpan.FromMinutes(sendAfterMinutes));
+        HttpResponseMessage response = await PushAsync(_maple, "MSF-0932", jws);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("SignedAtOutOfRange", body.GetProperty("error").GetString());
+        Assert.Equal(0, await EntryCountAsync());
     }
 
     [Fact]

@@ -280,6 +280,24 @@ public class PkiTests
         Assert.Equal("urn:provider:riverside", entry.Signer.SubjectUri);
     }
 
+    [Fact]
+    public void Provider_signed_referral_has_written_by()
+    {
+        X509Certificate2 riverside = _pki.Issue("riverside.providers.ezehr");
+        JsonElement referral = Resource(
+            """
+            {"resourceType":"ServiceRequest","id":"r1","status":"active","intent":"order",
+             "code":{"text":"Referral to nephrology"},
+             "requester":{"display":"Dr. Rivera"}}
+            """
+        );
+        VerifiedEntry entry = Verify(
+            Guid.NewGuid(),
+            RecordSigner.Sign(referral, riverside, [], Now)
+        );
+        Assert.Equal("Dr. Rivera", entry.WrittenBy);
+    }
+
     private CertificateCheck Validate(X509Certificate2 leaf, DateTimeOffset at)
     {
         return CertificateValidator.Validate(leaf, null, at, _pki.TrustAnchors);

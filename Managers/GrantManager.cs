@@ -38,6 +38,10 @@ public sealed class GrantManager(
         FROM grants
         """;
 
+    private static readonly Party KidneyCheck = OrgDirectory.KnownOrganizations[
+        OrgDirectory.KidneyCheckCommonName
+    ];
+
     private readonly TimeZoneInfo _timeZone = TimeZoneInfo.FindSystemTimeZoneById(
         options.Value.TimeZone
     );
@@ -150,7 +154,10 @@ public sealed class GrantManager(
             .ToList();
         IReadOnlyList<ConnectedProviderLine> connectedProviders =
             await inviteManager.ListConnectedProvidersAsync(patientId);
-        return new AccessOverview(lines, connectedProviders);
+        bool kidneyCheckOn = grants.Any(grant =>
+            grant.Grantee.SubjectUri == KidneyCheck.SubjectUri && grant.Status == GrantStatus.Active
+        );
+        return new AccessOverview(lines, connectedProviders, kidneyCheckOn);
     }
 
     private AccessLine ToAccessLine(Grant grant, DateTimeOffset now)
@@ -338,6 +345,15 @@ public sealed class GrantManager(
             new { grantId, now }
         );
         return Succeeded(grant with { Status = GrantStatus.Revoked, RevokedAt = now });
+    }
+
+    /// <summary>
+    /// The patient turns Kidney Check on, at enrollment or later from the Access page. After a revoke this makes a
+    /// new grant. Idempotent while one is active.
+    /// </summary>
+    public async Task<Grant> TurnOnKidneyCheckAsync(Guid patientId)
+    {
+        return await CreateAppGrantAsync(patientId, KidneyCheck);
     }
 
     /// <summary>An app the patient turned on: lab results and notes only, ongoing until revoked. Idempotent.</summary>

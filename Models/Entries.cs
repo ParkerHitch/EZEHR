@@ -23,5 +23,8 @@ public sealed record SignedEntry(
     string Jws
 );
 
+/// <summary>The entries that verified, and how many stored entries didn't (those aren't returned).</summary>
+public sealed record VerifiedEntries(IReadOnlyList<SignedEntry> Entries, int UnverifiedCount);
+
 /// <summary>A decrypted entry, not yet verified.</summary>
 public sealed record DecryptedEntry(Guid Id, string ResourceType, string Jws);

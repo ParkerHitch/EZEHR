@@ -15,3 +15,6 @@
     <a class="nav-link @(path == currentPage ? "active" : "")" aria-current="@(path == currentPage ? "page" : null)" asp-page="@path">@label</a>
   }
 </nav>
+<form method="post" asp-page="/Patient/SignIn" asp-page-handler="SignOut" class="text-end mb-2">
+  <button type="submit" class="btn btn-link btn-tap">Sign out</button>
+</form>

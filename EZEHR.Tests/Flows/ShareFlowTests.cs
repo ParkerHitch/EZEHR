@@ -216,6 +216,25 @@ public class ShareFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Denied_request_ends_without_a_blocked_read()
+    {
+        HttpClient browser = ClinicianBrowser();
+        ShareOffer offer = await CreateOfferAsync();
+        await RedeemAsync(browser, GrantManager.FormatCode(offer.Code));
+        Grant grant = await ClinicianGrantAsync();
+        await WithAsync(services =>
+            services.GetRequiredService<GrantManager>().ApproveOrDenyAsync(_sam, grant.Id, false)
+        );
+
+        HttpResponseMessage poll = await browser.GetAsync(
+            $"/Clinician/Wait?handler=Status&patientId={_sam}"
+        );
+
+        Assert.Equal("/Clinician/AccessEnded", poll.Headers.GetValues("HX-Redirect").Single());
+        Assert.DoesNotContain(await ActivityAsync(), audit => !audit.Granted);
+    }
+
+    [Fact]
     public async Task Full_share_flow()
     {
         HttpClient browser = ClinicianBrowser();

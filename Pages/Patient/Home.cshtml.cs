@@ -1,7 +1,6 @@
 using System.Text.Json;
 using EZEHR.Managers;
 using EZEHR.Models;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
@@ -28,11 +27,5 @@ public sealed class HomeModel(CallerManager callerManager, RecordManager recordM
             new JsonSerializerOptions { WriteIndented = true }
         );
         return File(json, "application/fhir+json", export.FileName);
-    }
-
-    public async Task<IActionResult> OnPostSignOutAsync()
-    {
-        await HttpContext.SignOutAsync(CallerManager.PatientScheme);
-        return RedirectToPage("/Patient/SignIn");
     }
 }

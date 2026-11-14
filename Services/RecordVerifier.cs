@@ -40,6 +40,36 @@ public static class RecordVerifier
         }
     }
 
+    /// <summary>
+    /// The iat from a JWS header, without verifying anything, or null when there is none. Only for JWSs that were
+    /// verified when they were stored.
+    /// </summary>
+    public static DateTimeOffset? ReadIssuedAt(string jws)
+    {
+        string[] parts = jws.Split('.');
+        if (parts.Length != 3)
+        {
+            return null;
+        }
+        try
+        {
+            using JsonDocument header = JsonDocument.Parse(Base64Url.Decode(parts[0]));
+            if (
+                header.RootElement.TryGetProperty("iat", out JsonElement iat)
+                && iat.TryGetInt64(out long unixSeconds)
+            )
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+            }
+            return null;
+        }
+        catch (Exception exception)
+            when (exception is FormatException or JsonException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
     private static VerifiedEntry VerifyCore(Guid entryId, string jws, TrustAnchors trustAnchors)
     {
         string[] parts = jws.Split('.');
@@ -95,17 +125,36 @@ public static class RecordVerifier
         string resourceType = resource.GetProperty("resourceType").GetString()
             ?? throw new RecordSignatureException("No resourceType.");
 
-        string? writtenBy = null;
+        return new VerifiedEntry(
+            entryId,
+            resourceType,
+            resource,
+            signer,
+            issuedAt,
+            WrittenBy(resourceType, resource)
+        );
+    }
+
+    /// <summary>The person the signing organization names as author: a note's sender, an order's requester.</summary>
+    private static string? WrittenBy(string resourceType, JsonElement resource)
+    {
+        string? authorField = resourceType switch
+        {
+            "Communication" => "sender",
+            "ServiceRequest" => "requester",
+            _ => null,
+        };
         if (
-            resourceType == "Communication"
-            && resource.TryGetProperty("sender", out JsonElement sender)
-            && sender.TryGetProperty("display", out JsonElement display)
+            authorField is not null
+            && resource.TryGetProperty(authorField, out JsonElement author)
+            && author.ValueKind == JsonValueKind.Object
+            && author.TryGetProperty("display", out JsonElement display)
+            && display.ValueKind == JsonValueKind.String
         )
         {
-            writtenBy = display.GetString();
+            return display.GetString();
         }
-
-        return new VerifiedEntry(entryId, resourceType, resource, signer, issuedAt, writtenBy);
+        return null;
     }
 
     private static bool SignatureVerifies(

@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
+using EZEHR.Controllers;
 using EZEHR.Data;
 using EZEHR.Managers;
 using EZEHR.Models;
@@ -6,6 +8,7 @@ using EZEHR.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Identity.Web;
 
@@ -72,6 +75,21 @@ AuthenticationBuilder authentication = builder
         cookie.SlidingExpiration = false;
         cookie.LoginPath = "/Patient/SignIn";
         cookie.AccessDeniedPath = "/Patient/SignIn";
+        // A demo reset deletes the patient but not the phone's cookie. A cookie for a patient that no longer
+        // exists is dropped, so the phone is signed out instead of acting for a ghost.
+        cookie.Events.OnValidatePrincipal = async context =>
+        {
+            CallerManager callerManager =
+                context.HttpContext.RequestServices.GetRequiredService<CallerManager>();
+            RecordManager recordManager =
+                context.HttpContext.RequestServices.GetRequiredService<RecordManager>();
+            Guid? patientId = callerManager.PatientIdFrom(context.Principal);
+            if (patientId is null || !await recordManager.PatientExistsAsync(patientId.Value))
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(CallerManager.PatientScheme);
+            }
+        };
     })
     // The clinician's shift: 10 hours from sign-in, never sliding. AccessManager enforces the same limit.
     // Whatever signs a clinician in (Entra below, or a passkey fallback) ends by issuing this cookie.
@@ -101,6 +119,9 @@ if (!string.IsNullOrEmpty(builder.Configuration["AzureAd:ClientId"]))
         oidc.SignInScheme = CallerManager.ClinicianScheme;
         oidc.ResponseType = "id_token";
         oidc.UseTokenLifetime = false;
+        // Every sign-in makes the clinician authenticate again, even with a live Entra session, so signing out
+        // and the end of a shift really end access, and the security-key tap happens each time.
+        oidc.Prompt = "login";
         Func<TokenValidatedContext, Task> previous = oidc.Events.OnTokenValidated;
         oidc.Events.OnTokenValidated = async context =>
         {
@@ -159,6 +180,24 @@ else
     );
 }
 
+// The network door is open to anyone with or without a certificate, and every read attempt on a real patient is
+// audited, so each client address gets a fixed number of calls a minute. A certificate can't be the key: anyone
+// can make a new self-signed one per request.
+builder.Services.AddRateLimiter(limiter =>
+{
+    limiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    limiter.AddPolicy(NetworkController.RateLimitPolicy, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+            }
+        )
+    );
+});
+
 builder
     .Services.AddControllers()
     .AddJsonOptions(json =>
@@ -182,12 +221,29 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+// Scripts only from this site and the one htmx file (its integrity hash is in _Layout); no inline script. The
+// only cross-origin styles are that Bootstrap file (also hashed) and Google Fonts. The share QR code is a data: image.
+app.Use(
+    async (context, next) =>
+    {
+        context.Response.Headers.ContentSecurityPolicy =
+            "default-src 'self'; script-src 'self' https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js; "
+            + "style-src 'self' https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css "
+            + "https://fonts.googleapis.com; "
+            + "font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; "
+            + "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        await next();
+    }
+);
+
 if (!string.IsNullOrEmpty(appOptions.ClientCertificateHeader))
 {
     app.UseCertificateForwarding();
 }
 app.UseHttpsRedirection();
 app.UseRouting();
+app.UseRateLimiter();
 app.UseSession();
 app.UseAuthentication();
 app.UseAuthorization();

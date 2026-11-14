@@ -6,6 +6,11 @@ public static class Copy
     public const string KidneyOptIn =
         "Allow the Kidney Check app to read your lab results. It looks for slow changes no single clinic would see. You can turn it off any time.";
 
+    public const string SomethingWentWrong =
+        "We couldn't finish that. Please go back and try again.";
+
+    public const string TurnOnKidneyCheck = "Turn on Kidney Check";
+
     public const string AccessEnded =
         "Your access to this record has ended. Ask the patient to share again.";
 
@@ -65,6 +70,8 @@ public static class Copy
     {
         return $"{provider} invited you to EZEHR, one place for your health record that only you control.";
     }
+
+    public const string NotYouSignOut = "Not you? Sign out and create your own account";
 
     public static string LinkProviderPrompt(string provider)
     {
@@ -178,6 +185,14 @@ public static class Copy
             DenyReason.ScopeDenied => "asked for more than you allowed",
             _ => "had no access",
         };
+    }
+
+    /// <summary>Shown above the record when stored entries fail their signature or certificate check.</summary>
+    public static string UnverifiedEntriesHidden(int count)
+    {
+        return count == 1
+            ? "1 entry couldn't be verified, so it isn't shown."
+            : $"{count} entries couldn't be verified, so they aren't shown.";
     }
 
     public static string SignedBy(string org)

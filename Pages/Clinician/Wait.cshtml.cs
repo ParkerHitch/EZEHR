@@ -5,7 +5,10 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace EZEHR.Pages.Clinician;
 
-/// <summary>Waits while the patient decides. htmx polls Status every 2 s; once the request isn't pending, Record decides.</summary>
+/// <summary>
+/// Waits while the patient decides. htmx polls Status every 2 s; once the request isn't pending, an approved one
+/// goes to Record and anything else to AccessEnded.
+/// </summary>
 public sealed class WaitModel(CallerManager callerManager, GrantManager grantManager) : PageModel
 {
     public Guid PatientId { get; private set; }
@@ -28,7 +31,12 @@ public sealed class WaitModel(CallerManager callerManager, GrantManager grantMan
         {
             return new NoContentResult();
         }
-        Response.Headers["HX-Redirect"] = Url.Page("/Clinician/Record", new { patientId });
+        // Only an approved request goes on to the record. A denied or withdrawn one ends here, so it isn't
+        // logged as a read attempt the patient would see as "Blocked".
+        Response.Headers["HX-Redirect"] =
+            grant?.Status == GrantStatus.Active
+                ? Url.Page("/Clinician/Record", new { patientId })
+                : Url.Page("/Clinician/AccessEnded");
         return new OkResult();
     }
 }

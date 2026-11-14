@@ -32,7 +32,7 @@ public class AccessTests : IAsyncLifetime
     );
 
     private readonly FakeTimeProvider _clock = new(Start);
-    private readonly Guid _sam = Guid.NewGuid();
+    private Guid _sam;
     private TestDatabase _database = null!;
     private TestServices _services = null!;
 
@@ -55,6 +55,7 @@ public class AccessTests : IAsyncLifetime
     {
         _database = await SqlServer.CreateDatabaseAsync();
         _services = new TestServices(_database.Db, _clock);
+        _sam = await _services.Records.CreatePatientAsync("Sam Taylor");
     }
 
     public async Task DisposeAsync()
@@ -94,6 +95,21 @@ public class AccessTests : IAsyncLifetime
         Assert.Equal(DenyReason.NoGrant, logged.Reason);
         Assert.Equal("ReadFullRecord", logged.Action);
         Assert.Equal(Rivera, logged.Actor);
+    }
+
+    [Fact]
+    public async Task Unknown_patient_denied_and_not_logged()
+    {
+        Guid unknown = Guid.NewGuid();
+        AccessDecision decision = await Gate.AuthorizeAsync(
+            unknown,
+            AccessAction.ReadFullRecord,
+            new UnverifiedCaller(DenyReason.NoCertificate),
+            "treatment"
+        );
+        Assert.False(decision.Allowed);
+        Assert.Empty(await Audit.ListForPatientAsync(unknown));
+        Assert.Empty(await Audit.ListForPatientAsync(_sam));
     }
 
     [Fact]

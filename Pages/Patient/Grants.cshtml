@@ -24,6 +24,17 @@
             </li>
         }
     </ul>
+    @if (!Model.KidneyCheckOn)
+    {
+        <div class="card mb-4">
+            <div class="card-body">
+                <p class="card-text">@Copy.KidneyOptIn</p>
+                <form method="post" asp-page-handler="TurnOnKidneyCheck">
+                    <button class="btn btn-outline-primary btn-tap">@Copy.TurnOnKidneyCheck</button>
+                </form>
+            </div>
+        </div>
+    }
     @if (Model.Lines.Any(line => !line.CanRevoke))
     {
         <h2 class="h6 text-muted">Ended</h2>
