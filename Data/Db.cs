@@ -7,6 +7,7 @@ public static class Db
 {
     public static SqliteConnection Open(string path)
     {
+        if (path != ":memory:" && Path.GetDirectoryName(Path.GetFullPath(path)) is { } dir) Directory.CreateDirectory(dir);
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,

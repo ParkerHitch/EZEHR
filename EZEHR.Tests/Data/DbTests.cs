@@ -17,6 +17,16 @@ public class DbTests
     }
 
     [Fact]
+    public void Open_creates_missing_directory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"ezehr-{Guid.NewGuid():N}", "data");
+        using (var db = Db.Open(Path.Combine(dir, "ezehr.db")))
+            Assert.True(File.Exists(Path.Combine(dir, "ezehr.db")));
+        SqliteConnection.ClearAllPools();
+        Directory.Delete(Path.GetDirectoryName(dir)!, true);
+    }
+
+    [Fact]
     public void Entries_unique_per_patient_and_source_key()
     {
         using var db = Db.Open(":memory:");
