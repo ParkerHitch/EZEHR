@@ -16,7 +16,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-DOTNET="$HOME/.dotnet/dotnet"
+DOTNET=$(command -v dotnet || true)
 CONTAINER=ezehr-sql
 # Only protects a container bound to 127.0.0.1.
 SA_PASSWORD='EzehrLocal-Dev-2026'
