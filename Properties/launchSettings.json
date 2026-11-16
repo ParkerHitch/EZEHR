@@ -18,6 +18,17 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
+    },
+    "tailscale": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "https://localhost:7189",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "App__Origin": "https://fedora.tail51bf60.ts.net",
+        "AZURE_SQL_CONNECTIONSTRING": "Server=127.0.0.1,1433;Database=ezehr;User Id=sa;Password=EzehrLocal-Dev-2026;TrustServerCertificate=True"
+      }
     }
   }
 }
