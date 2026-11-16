@@ -4,7 +4,7 @@
 #
 #   sudo scripts/nuc-setup.sh
 #
-# Run it again after `git pull` to rebuild and restart. It creates only what's missing: the TLS certificate, the
+# Run it again after `git pull` to republish and restart. It creates only what's missing: the TLS certificate, the
 # secrets, the SQL Server container and the tailnet port for SQL.
 #
 # Kestrel serves HTTPS itself, on this machine's Tailscale address, with a `tailscale cert` certificate. No proxy:
@@ -105,9 +105,14 @@ AZURE_SQL_CONNECTIONSTRING=Server=127.0.0.1,1433;Database=ezehr;User Id=sa;Passw
 EOF
 )
 
-# --- Build this checkout, and run it as a service. Port 443 without root; retried until Tailscale's address is up.
+# --- Publish this checkout (on the installed .NET, not self-contained), and run it as a service. Publish, not
+# build: MapStaticAssets serves pre-compressed copies (site.css.gz), and only publish puts them next to the app.
+# A build leaves them in obj/, where only a Development run looks, so Production served empty gzip responses.
+# Port 443 without root; retried until Tailscale's address is up.
+PUBLISH_DIR=$REPO_DIR/bin/nuc
 systemctl stop ezehr 2>/dev/null || true
-sudo -u "$RUN_AS" "$DOTNET" build EZEHR.csproj -c Release -nologo -v q
+sudo -u "$RUN_AS" rm -rf "$PUBLISH_DIR"
+sudo -u "$RUN_AS" "$DOTNET" publish EZEHR.csproj -c Release -o "$PUBLISH_DIR" -nologo -v q
 cat > /etc/systemd/system/ezehr.service <<EOF
 [Unit]
 Description=EZEHR ($REPO_DIR)
@@ -116,8 +121,8 @@ Wants=network-online.target
 
 [Service]
 User=$RUN_AS
-WorkingDirectory=$REPO_DIR
-ExecStart=$DOTNET $REPO_DIR/bin/Release/net11.0/EZEHR.dll
+WorkingDirectory=$PUBLISH_DIR
+ExecStart=$DOTNET $PUBLISH_DIR/EZEHR.dll
 EnvironmentFile=$CONFIG_DIR/ezehr.env
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
