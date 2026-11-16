@@ -50,7 +50,7 @@ jobs:
 
     env:
       NUC: colin-nuc.tail51bf60.ts.net
-      NUC_USER: colin
+      NUC_USER: colin-meyer
 
     steps:
       - name: Join the tailnet
