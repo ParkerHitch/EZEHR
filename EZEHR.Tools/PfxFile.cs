@@ -14,7 +14,7 @@ public sealed record PfxFile(X509Certificate2 Certificate, IReadOnlyList<X509Cer
         if (!File.Exists(path))
         {
             throw new FileNotFoundException(
-                $"{path} not found. Run `ezehr-tools certs issue --ca local|ezca` (or `certs broker`) first.",
+                $"{path} not found. Run `ezehr-tools certs issue` (or `certs broker`) first.",
                 path
             );
         }

@@ -1,5 +1,9 @@
 # EZCA notes
 
+> **Status (Nov 15): the EZCA subscription ended with the hackathon.** The tools now default to the local test CA
+> (`--ca local`, the root in `.pki/local-root.pfx`, "EZEHR Local Root"); `--ca ezca` still works if a subscription
+> comes back. The notes below record how the EZCA setup worked.
+
 What the EZCA setup on Nov 14 showed. The tenant is `mwpg089outlook.onmicrosoft.com` (`fd4e23f3-7ba3-49f1-bdcd-3f3c55d42f0d`).
 
 ## Accounts

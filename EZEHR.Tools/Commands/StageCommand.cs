@@ -7,13 +7,14 @@ namespace EZEHR.Tools.Commands;
 
 /// <summary>
 /// The demo's network calls, in order, one per key press. Each step names the system making the call and the
-/// certificate it presents, then shows every request and response. Everything on screen is a real call, to EZCA
-/// or to /api/network; the only thing done behind the scenes is finding Sam's EZEHR patient id in the database.
+/// certificate it presents, then shows every request and response. Everything on screen is a real call, to the CA
+/// (the local test CA by default, EZCA with --ca ezca) or to /api/network; the only thing done behind the scenes is
+/// finding Sam's EZEHR patient id in the database.
 /// </summary>
 public static class StageCommand
 {
     public const string Usage = """
-          stage [--from <step>] [--ca ezca|local] [--ca-id <id>] [--template-id <id>]
+          stage [--from <step>] [--ca local|ezca] [--ca-id <id>] [--template-id <id>]
                                   the demo's network calls in order, one per key press
           stage --list            the steps, numbered
         """;
@@ -46,10 +47,10 @@ public static class StageCommand
             );
             return 1;
         }
-        string authority = CommandLine.Option(args, "--ca") ?? "ezca";
-        if (authority is not ("ezca" or "local"))
+        string authority = CommandLine.Option(args, "--ca") ?? "local";
+        if (authority is not ("local" or "ezca"))
         {
-            Console.Error.WriteLine("--ca must be ezca or local");
+            Console.Error.WriteLine("--ca must be local or ezca");
             return 1;
         }
         List<Step> steps = BuildSteps(
@@ -123,7 +124,7 @@ public static class StageCommand
         Actor northwindJoining = northwind with
         {
             Role = "its IT team, joining the network",
-            Certificate = () => "none yet: it asks EZCA for one",
+            Certificate = () => "none yet: it asks the CA for one",
         };
         Actor platform = new(
             "EZEHR",
@@ -146,7 +147,7 @@ public static class StageCommand
         Actor brokerWithOwnCertificate = brokerWithoutCertificate with
         {
             Certificate = () =>
-                $"{CertsCommand.BrokerCommonName}, self-signed: it made the certificate itself, EZCA didn't issue it",
+                $"{CertsCommand.BrokerCommonName}, self-signed: it made the certificate itself, the network's CA didn't issue it",
         };
         string northwindName = northwind.Name;
 

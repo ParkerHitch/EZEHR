@@ -15,10 +15,10 @@ public sealed class AppOptions
 
     public EzcaOptions Ezca { get; set; } = new();
 
-    /// <summary>Public EZCA root certificate(s), PEM, committed under Security/Trust/.</summary>
+    /// <summary>Public root certificate(s) of the CA we trust (the local test CA since EZCA ended), PEM, committed under Security/Trust/.</summary>
     public string TrustAnchorsPemPath { get; set; } = "Security/Trust/anchors.pem";
 
-    /// <summary>Public EZCA issuing certificate(s), PEM, committed under Security/Trust/.</summary>
+    /// <summary>Public issuing certificate(s) of that CA, PEM, committed under Security/Trust/. Empty for the local test CA.</summary>
     public string IntermediatesPemPath { get; set; } = "Security/Trust/intermediates.pem";
 
     /// <summary>
@@ -29,8 +29,8 @@ public sealed class AppOptions
     public string? ClientCertificateHeader { get; set; }
 
     /// <summary>
-    /// SHA-256 thumbprint (hex) of the EZCA certificate the platform operator registers providers with. Unset means
-    /// nobody can. On App Service: App__PlatformCertificateThumbprint, printed by `ezehr-tools certs issue --platform`.
+    /// SHA-256 thumbprint (hex) of the certificate the platform operator registers providers with. Unset means
+    /// nobody can. On App Service: App__PlatformCertificateThumbprint; on the NUC, appsettings.Development.json. Printed by `ezehr-tools certs issue --platform`.
     /// </summary>
     public string? PlatformCertificateThumbprint { get; set; }
 

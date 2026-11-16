@@ -26,7 +26,7 @@ namespace EZEHR.Tools.Commands;
 public static class CertsCommand
 {
     public const string Usage = """
-          certs issue --ca local|ezca [--key ec|rsa] [--ca-id <id>] [--template-id <id>]
+          certs issue [--ca local|ezca] [--key ec|rsa] [--ca-id <id>] [--template-id <id>]
               [--platform | --provider <slug> --name "<display name>" [--invite <providerPatientId>]]
           certs broker
         """;
@@ -56,7 +56,7 @@ public static class CertsCommand
 
     private static async Task<int> IssueAsync(string[] args)
     {
-        string? authority = CommandLine.Option(args, "--ca");
+        string authority = CommandLine.Option(args, "--ca") ?? "local";
         string keyType = CommandLine.Option(args, "--key") ?? "ec";
         bool platform = args.Contains("--platform");
         string? providerSlug = CommandLine.Option(args, "--provider");

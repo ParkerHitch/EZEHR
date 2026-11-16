@@ -75,7 +75,7 @@ flowchart LR
 
 **What EZEHR trusts, and nothing else:**
 1. **Microsoft Entra ID**, but only for tenants that a provider's row in the `organizations` table names (for the demo, our tenant, set on Riverside Primary Care's row).
-2. **The EZCA root CA**, whose public certificate is committed in `Security/Trust/`, and only for certificate CNs that have a row in `organizations`.
+2. **The network's root CA**, whose public certificate is committed in `Security/Trust/`, and only for certificate CNs that have a row in `organizations`. This was EZCA during the hackathon; since its subscription ended it is the local test CA ("EZEHR Local Root", `certs issue --ca local`, the default), which stands in for EZCA in every flow below. See `docs/ezca-notes.md`.
 3. **Its own passkey table**, for patients.
 
 ---
@@ -115,6 +115,8 @@ sequenceDiagram
 ```
 
 The broker's certificate is made by the same tool **without EZCA** (`certs broker`), on purpose.
+
+With the local test CA (the default now), the laptop is the CA: `certs issue` signs each CSR with `.pki/local-root.pfx` instead of calling EZCA, and the root certificate (no issuing CA) goes to `Security/Trust/`.
 
 ### 4b. Entra setup (portal)
 
@@ -405,8 +407,10 @@ sequenceDiagram
 A provider that has never existed, Harbor Clinic, joins on camera. No Entra tenant is involved, because Harbor's system only invites patients and pushes records. One command on the operator's laptop does all of it:
 
 ```
-ezehr-tools certs issue --ca ezca --provider harbor --name "Harbor Clinic" --invite HBR-001
+ezehr-tools certs issue --provider harbor --name "Harbor Clinic" --invite HBR-001
 ```
+
+That uses the local test CA, so the two EZCA steps below happen on the laptop instead. With `--ca ezca` it goes through EZCA as drawn.
 
 ```mermaid
 sequenceDiagram
@@ -427,7 +431,7 @@ sequenceDiagram
   Net-->>Op: invite link for HBR-001
 ```
 
-- **The platform certificate** is an ordinary EZCA certificate (CN `platform.ezehr`, from `certs issue --platform`). What makes it special is that the server pins its SHA-256 thumbprint in the App Service setting `App__PlatformCertificateThumbprint`. The platform isn't a `Party`: `CallerManager.FromPlatformCertificate` turns it into a `PlatformCaller`, which only `register-provider` accepts. Its CN has no row in `organizations`, so the network door refuses it everywhere else. If the setting is unset, nobody can register.
+- **The platform certificate** is an ordinary certificate from the network's CA (CN `platform.ezehr`, from `certs issue --platform`). What makes it special is that the server pins its SHA-256 thumbprint in `App__PlatformCertificateThumbprint` (an App Service setting; on the NUC, `nuc-setup.sh` takes it from `appsettings.Development.json`). The platform isn't a `Party`: `CallerManager.FromPlatformCertificate` turns it into a `PlatformCaller`, which only `register-provider` accepts. Its CN has no row in `organizations`, so the network door refuses it everywhere else. If the setting is unset, nobody can register.
 - **The slug** is one lowercase DNS label. The server builds `urn:provider:{slug}` and `{slug}.providers.ezehr` from it. An existing URI or CN gets 409 and the row stays unchanged, so running the command again is safe. Deleting the row is still the kill switch.
 - Registration isn't written to `audit_events`, because those rows belong to a patient. It's logged instead.
 
