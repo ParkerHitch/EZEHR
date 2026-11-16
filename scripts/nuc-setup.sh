@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs EZEHR on this machine (the NUC) from this checkout, as a systemd service, at https://<machine>.<tailnet>.ts.net.
+# Runs EZEHR on this machine (the NUC) from this checkout, as a systemd service, at https://<machine>.<tailnet>.ts.net,
+# open to the internet through Tailscale Funnel.
 # Run it from the checkout, as your own user with sudo:
 #
 #   sudo scripts/nuc-setup.sh
@@ -7,11 +8,13 @@
 # Run it again after `git pull` to republish and restart. It creates only what's missing: the TLS certificate, the
 # secrets, the SQL Server container and the tailnet port for SQL.
 #
-# Kestrel serves HTTPS itself, on this machine's Tailscale address, with a `tailscale cert` certificate. No proxy:
-# the network door needs each organization's client certificate on the TLS connection, which a proxy would end.
-# SQL Server listens on 127.0.0.1 only; `tailscale serve --tcp` passes tailnet port 1433 to it, for the laptop's
-# tools (demo reset, demo status, stage's lookup of Sam). Needs: the .NET 11 SDK, docker, and HTTPS (Serve)
-# enabled on the tailnet.
+# Kestrel serves HTTPS itself, on 127.0.0.1:8443, with a `tailscale cert` certificate. `tailscale funnel --tcp 443`
+# passes raw TCP from the internet (and the tailnet) to it without decrypting, because the network door needs each
+# organization's client certificate on the TLS connection, which a TLS-terminating proxy would end. So every caller
+# reaches Kestrel from 127.0.0.1. SQL Server listens on 127.0.0.1 only; `tailscale serve --tcp` passes tailnet port
+# 1433 to it, for the laptop's tools (demo reset, demo status, stage's lookup of Sam), and never the internet.
+# Needs: the .NET 11 SDK, docker, and HTTPS and Funnel enabled on the tailnet (the first funnel run prints a link
+# to turn it on).
 set -euo pipefail
 
 if [[ $EUID -ne 0 || -z "${SUDO_USER:-}" ]]; then
@@ -37,7 +40,6 @@ if [[ -z "$DOTNET" ]] || ! sudo -u "$RUN_AS" "$DOTNET" --list-sdks | grep -q '^1
   exit 1
 fi
 
-TAILSCALE_IP=$(tailscale ip -4)
 # The first DNSName in the status is this machine's own ("Self" comes before the peers).
 DNS_NAME=$(tailscale status --json | grep -m1 '"DNSName"' | cut -d'"' -f4 | sed 's/\.$//')
 # The same values the laptop's Development run uses, so the two never drift.
@@ -92,7 +94,7 @@ tailscale serve --bg --tcp 1433 tcp://127.0.0.1:1433 >/dev/null
 (umask 077 && cat > "$CONFIG_DIR/ezehr.env" <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 DOTNET_hostBuilder__reloadConfigOnChange=false
-Kestrel__Endpoints__Https__Url=https://$TAILSCALE_IP:443
+Kestrel__Endpoints__Https__Url=https://127.0.0.1:8443
 Kestrel__Endpoints__Https__Certificate__Path=$CONFIG_DIR/tls.crt
 Kestrel__Endpoints__Https__Certificate__KeyPath=$CONFIG_DIR/tls.key
 App__Origin=https://$DNS_NAME
@@ -108,7 +110,6 @@ EOF
 # --- Publish this checkout (on the installed .NET, not self-contained), and run it as a service. Publish, not
 # build: MapStaticAssets serves pre-compressed copies (site.css.gz), and only publish puts them next to the app.
 # A build leaves them in obj/, where only a Development run looks, so Production served empty gzip responses.
-# Port 443 without root; retried until Tailscale's address is up.
 PUBLISH_DIR=$REPO_DIR/bin/nuc
 systemctl stop ezehr 2>/dev/null || true
 sudo -u "$RUN_AS" rm -rf "$PUBLISH_DIR"
@@ -124,7 +125,6 @@ User=$RUN_AS
 WorkingDirectory=$PUBLISH_DIR
 ExecStart=$DOTNET $PUBLISH_DIR/EZEHR.dll
 EnvironmentFile=$CONFIG_DIR/ezehr.env
-AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
 RestartSec=5
 
@@ -134,6 +134,10 @@ EOF
 systemctl daemon-reload
 systemctl enable ezehr >/dev/null 2>&1
 systemctl restart ezehr
+
+# --- Internet (and tailnet) port 443 → Kestrel, as raw TCP so the client certificate reaches it. Not silenced:
+# the first run prints the link that enables Funnel, and waits for it.
+tailscale funnel --bg --yes --tcp 443 tcp://127.0.0.1:8443
 
 echo "waiting for https://$DNS_NAME ..."
 status=000

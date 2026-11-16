@@ -45,7 +45,7 @@ flowchart LR
     KC["Kidney Check app<br/>EZCA certificate"]
     BR["Data broker<br/>no trusted certificate"]
   end
-  subgraph EZEHR["EZEHR on Azure App Service"]
+  subgraph EZEHR["EZEHR (Azure App Service, now the NUC)"]
     PP["Patient pages"]
     CP["Clinician pages"]
     NA["Network API"]
@@ -158,6 +158,14 @@ With the local test CA (the default now), the laptop is the CA: `certs issue` si
   - App Service passes it to our code in the `X-ARR-ClientCert` header
   - **App Service does not validate it; our code does**
 
+### 4d. The NUC (replaces Azure, whose subscription is cancelled)
+
+`scripts/nuc-setup.sh` runs the same app on a home server at `https://colin-nuc.tail51bf60.ts.net`, open to the internet.
+
+- **Tailscale Funnel in raw TCP mode** (`tailscale funnel --tcp 443`) carries internet and tailnet traffic to Kestrel on `127.0.0.1:8443` *without decrypting it*. Kestrel terminates TLS itself, with a `tailscale cert` (Let's Encrypt) certificate, so the client certificate arrives on the TLS connection and `ClientCertificateHeader` stays unset. Funnel's default HTTPS mode, or Cloudflare Tunnel, would end TLS at the proxy and the network door would never see a certificate.
+- **Every caller reaches Kestrel from `127.0.0.1`**, so the network door's per-address rate limit (120 calls a minute) is one bucket shared by everyone. Fine for the demo; Funnel's `--proxy-protocol` could carry the real address if Kestrel learned to read it.
+- **Key wrapping is local** (`App__KeyWrapper__Mode=Local`): the key that wraps patients' data keys is in `/etc/ezehr/secrets.env` on the NUC, not Key Vault. SQL Server runs in docker on `127.0.0.1`; `tailscale serve --tcp 1433` exposes it to the tailnet only, for the laptop's tools.
+
 ---
 
 ## 5. Runtime flows
@@ -256,6 +264,7 @@ sequenceDiagram
   Tool->>Tool: sign each FHIR record as a JWS with the Lakeside key
   Tool->>FE: TLS handshake, presents the Lakeside certificate
   FE->>App: request plus X-ARR-ClientCert header
+  Note over FE,App: On the NUC there is no front end: Funnel passes the TLS bytes through and Kestrel sees the certificate itself
   App->>App: CertificateValidator, chains to EZCA root, valid, Client Authentication
   App->>App: organizations table, CN lakeside.providers.ezehr is Lakeside Urgent Care
   App->>App: RecordVerifier, every record signed by Lakeside
@@ -504,7 +513,7 @@ flowchart TB
 
 | Mechanism | Proves | Does **not** prove |
 |---|---|---|
-| HTTPS server certificate (`*.azurewebsites.net`) | You're talking to the real EZEHR site | Anything about the client |
+| HTTPS server certificate (`*.azurewebsites.net`; on the NUC, Let's Encrypt for `colin-nuc.tail51bf60.ts.net`) | You're talking to the real EZEHR site | Anything about the client |
 | Patient passkey | The same person who enrolled with that provider invite is back | Their legal identity (identity proofing is a stretch goal) |
 | Entra ID token + security key | Microsoft vouches: this is Dr. Rivera from a trusted tenant, holding the Clinician role, signed in with a phishing-resistant key | That Sam agreed to share; that comes from the grant |
 | Clinician cookie | That sign-in happened within this 10-hour shift | That it hasn't been stolen; it's limited by HttpOnly, same-site, and the 10-hour cap |
