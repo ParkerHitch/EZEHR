@@ -110,10 +110,11 @@ EOF
 # --- Publish this checkout (on the installed .NET, not self-contained), and run it as a service. Publish, not
 # build: MapStaticAssets serves pre-compressed copies (site.css.gz), and only publish puts them next to the app.
 # A build leaves them in obj/, where only a Development run looks, so Production served empty gzip responses.
+# Published next to the running copy first, so the site is only down for the swap and the app's start, and a failed
+# publish (set -e) leaves the old version serving.
 PUBLISH_DIR=$REPO_DIR/bin/nuc
-systemctl stop ezehr 2>/dev/null || true
-sudo -u "$RUN_AS" rm -rf "$PUBLISH_DIR"
-sudo -u "$RUN_AS" "$DOTNET" publish EZEHR.csproj -c Release -o "$PUBLISH_DIR" -nologo -v q
+sudo -u "$RUN_AS" rm -rf "$PUBLISH_DIR.next" "$PUBLISH_DIR.old"
+sudo -u "$RUN_AS" "$DOTNET" publish EZEHR.csproj -c Release -o "$PUBLISH_DIR.next" -nologo -v q
 cat > /etc/systemd/system/ezehr.service <<EOF
 [Unit]
 Description=EZEHR ($REPO_DIR)
@@ -133,7 +134,13 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable ezehr >/dev/null 2>&1
-systemctl restart ezehr
+systemctl stop ezehr
+if [[ -d "$PUBLISH_DIR" ]]; then
+  mv "$PUBLISH_DIR" "$PUBLISH_DIR.old"
+fi
+mv "$PUBLISH_DIR.next" "$PUBLISH_DIR"
+systemctl start ezehr
+rm -rf "$PUBLISH_DIR.old"
 
 # --- Internet (and tailnet) port 443 → Kestrel, as raw TCP so the client certificate reaches it. Not silenced:
 # the first run prints the link that enables Funnel, and waits for it.
