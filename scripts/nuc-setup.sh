@@ -5,7 +5,7 @@
 #
 #   sudo scripts/nuc-setup.sh
 #
-# Run it again after `git pull` to republish and restart. It creates only what's missing: the TLS certificate, the
+# Run it again after `git pull` to republish and restart; CI does both on every push to main (scripts/nuc-deploy.sh). It creates only what's missing: the TLS certificate, the
 # secrets, the SQL Server container and the tailnet port for SQL.
 #
 # Kestrel serves HTTPS itself, on 127.0.0.1:8443, with a `tailscale cert` certificate. `tailscale funnel --tcp 443`

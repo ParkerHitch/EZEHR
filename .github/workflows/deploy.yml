@@ -1,0 +1,74 @@
+# Builds and tests every push and pull request, and deploys main to the NUC (scripts/nuc-setup.sh).
+#
+# The deploy job joins the tailnet as a temporary tag:ci device, signing in with GitHub's OIDC token (Tailscale
+# workload identity federation, so no Tailscale secret is stored here). It then SSHes to the NUC with a key whose
+# forced command is scripts/nuc-deploy.sh, passing the commit that was just tested. The NUC builds and publishes it.
+
+name: Build and deploy to the NUC
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '11.x'
+
+      - name: Build
+        run: dotnet build EZEHR.slnx --configuration Release
+
+      - name: Test
+        run: dotnet test EZEHR.Tests --configuration Release --no-build
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: nuc
+      url: https://colin-nuc.tail51bf60.ts.net
+    # One deploy at a time; a newer push waits for the running one instead of cancelling it mid-publish.
+    concurrency:
+      group: nuc-deploy
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+
+    env:
+      NUC: colin-nuc.tail51bf60.ts.net
+      NUC_USER: colin
+
+    steps:
+      - name: Join the tailnet
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: colin-nuc.tail51bf60.ts.net
+
+      # The NUC's host key is pinned, so the deploy key is only ever offered to the real NUC.
+      - name: Deploy
+        env:
+          DEPLOY_KEY: ${{ secrets.NUC_DEPLOY_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          (umask 077 && printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/nuc-deploy)
+          echo "$NUC ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZu7eug5d4bDk0k/i8dCtfNZDTu+l+hIMtB7bfARJVy" \
+            > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/nuc-deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$NUC_USER@$NUC" "$GITHUB_SHA"
