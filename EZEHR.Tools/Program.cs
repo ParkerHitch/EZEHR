@@ -8,8 +8,11 @@ namespace EZEHR.Tools;
 /// </summary>
 internal static class Program
 {
-    /// <summary>Wide enough that piped tables don't wrap; COLUMNS overrides it.</summary>
-    private const int RedirectedWidth = 160;
+    /// <summary>
+    /// Piped output shouldn't wrap at all, so scripts and grep see whole lines; tables only take the width they need.
+    /// COLUMNS overrides it.
+    /// </summary>
+    private const int RedirectedWidth = 1000;
 
     public static async Task<int> Main(string[] args)
     {

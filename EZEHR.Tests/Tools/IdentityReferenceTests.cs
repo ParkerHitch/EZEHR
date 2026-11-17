@@ -38,6 +38,17 @@ public sealed class IdentityReferenceTests
         });
     }
 
+    [Fact]
+    public void MissingPfxPathSuggestsNoCommand()
+    {
+        ToolException error = Assert.Throws<ToolException>(() =>
+            IdentityReference.Parse("./nowhere/missing.pfx").RequirePfx()
+        );
+
+        Assert.Contains("missing.pfx not found", error.Message);
+        Assert.DoesNotContain("certs", error.Message);
+    }
+
     private static void WithEmptyPki(Action test)
     {
         string? previous = Environment.GetEnvironmentVariable(ToolRunner.PkiDirectoryVariable);

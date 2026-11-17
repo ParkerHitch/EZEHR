@@ -56,6 +56,10 @@ public sealed record IdentityReference(string Text, string? PfxPath)
         {
             return PfxPath;
         }
+        if (Text.EndsWith(".pfx", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ToolException($"{PfxPath} not found.");
+        }
         throw new ToolException($"{PfxPath} not found. Run `ezehr-tools {CertsCommand()}` first.");
     }
 
