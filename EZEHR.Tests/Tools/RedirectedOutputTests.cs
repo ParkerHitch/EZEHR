@@ -120,6 +120,8 @@ public sealed class RedirectedOutputTests
         start.Environment["EZEHR_PKI_DIRECTORY"] = longDirectory;
         start.Environment["EZEHR_BASE_URL"] = "https://127.0.0.1:1";
         start.Environment.Remove("COLUMNS");
+        // With TERM set and no terminal, .NET reports terminfo's width (80 for xterm), as on CI runners.
+        start.Environment["TERM"] = "xterm";
         using Process process = Process.Start(start)!;
         string output = await process.StandardOutput.ReadToEndAsync();
         await process.WaitForExitAsync();

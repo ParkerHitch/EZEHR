@@ -16,8 +16,9 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
-        // With output piped, the console reports a width of about zero and Spectre squeezes everything to "…".
-        if (AnsiConsole.Console.Profile.Width < 20)
+        // Piped output reports whatever width .NET guesses: about zero with no TERM (Spectre then squeezes everything
+        // to "…"), or terminfo's 80 with TERM set, as on CI runners. Neither is a real terminal, so don't wrap.
+        if (Console.IsOutputRedirected || AnsiConsole.Console.Profile.Width < 20)
         {
             AnsiConsole.Console.Profile.Width = int.TryParse(
                 Environment.GetEnvironmentVariable("COLUMNS"),
