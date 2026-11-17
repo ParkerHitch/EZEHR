@@ -2,6 +2,7 @@ using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 using EZEHR.Services;
 using EZEHR.Tools.Net;
+using Spectre.Console;
 
 namespace EZEHR.Tools.Commands;
 
@@ -436,14 +437,14 @@ public static class StageCommand
         if (response.IsSuccessStatusCode)
         {
             NetworkLog.WriteInColor(
-                ConsoleColor.Red,
+                Color.Red,
                 $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   expected a refusal: the scope isn't enforced"
             );
             return false;
         }
         string body = await response.Content.ReadAsStringAsync();
         NetworkLog.WriteInColor(
-            ConsoleColor.Red,
+            Color.Red,
             $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   {body}".TrimEnd()
         );
         if (!body.Contains(nameof(DenyReason.ScopeDenied)))
@@ -464,11 +465,11 @@ public static class StageCommand
         string label = $"━━ {number}/{count} ";
         Console.WriteLine();
         NetworkLog.WriteInColor(
-            step.Actor.Color,
+            Color.FromConsoleColor(step.Actor.Color),
             label + new string('━', BannerWidth - label.Length)
         );
         NetworkLog.WriteInColor(
-            step.Actor.Color,
+            Color.FromConsoleColor(step.Actor.Color),
             $"  {step.Actor.Name.ToUpperInvariant()} · {step.Actor.Role}"
         );
         Console.WriteLine($"  certificate: {step.Actor.Certificate()}");
@@ -512,12 +513,9 @@ public static class StageCommand
         {
             return await step.RunAsync();
         }
-        catch (HttpRequestException exception)
+        catch (ToolException exception)
         {
-            NetworkLog.WriteInColor(
-                ConsoleColor.Red,
-                $"  couldn't reach EZEHR: {exception.Message}"
-            );
+            NetworkLog.WriteInColor(Color.Red, $"  {exception.Message}");
             return false;
         }
     }

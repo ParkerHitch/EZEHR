@@ -49,7 +49,7 @@ public static class DemoCommand
             return 1;
         }
         Console.WriteLine($"site:     {NetworkClient.BaseUrl}");
-        Console.WriteLine($"database: {DescribeDatabase()}");
+        Console.WriteLine($"database: {ToolDatabase.Describe()}");
         if (!confirmed)
         {
             Console.Write(
@@ -235,13 +235,5 @@ public static class DemoCommand
             return null;
         }
         return new Db(new ConfigurationBuilder().AddEnvironmentVariables().Build());
-    }
-
-    private static string DescribeDatabase()
-    {
-        SqlConnectionStringBuilder builder = new(
-            Environment.GetEnvironmentVariable(AppOptions.ConnectionStringKey)
-        );
-        return $"{builder.InitialCatalog} on {builder.DataSource}";
     }
 }
