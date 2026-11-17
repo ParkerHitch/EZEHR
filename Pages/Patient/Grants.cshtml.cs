@@ -7,8 +7,8 @@ namespace EZEHR.Pages.Patient;
 
 /// <summary>
 /// Who can see the record now, with a Revoke button for each, and who could before. Below that, the providers that
-/// can add records (provider links), with a Disconnect button for each. Apps: Kidney Check, on or off. Emergency
-/// access: on (with the emergency code) or off.
+/// can add records (provider links), with a Disconnect button for each. Apps: every app on the network, each on or
+/// off. Emergency access: on (with the emergency code) or off.
 /// </summary>
 public sealed class GrantsModel(
     CallerManager callerManager,
@@ -20,7 +20,7 @@ public sealed class GrantsModel(
 
     public IReadOnlyList<ConnectedProviderLine> ConnectedProviders { get; private set; } = [];
 
-    public AccessLine? KidneyCheck { get; private set; }
+    public IReadOnlyList<AppLine> Apps { get; private set; } = [];
 
     public string? EmergencyCode { get; private set; }
 
@@ -31,7 +31,7 @@ public sealed class GrantsModel(
         );
         Lines = overview.Lines;
         ConnectedProviders = overview.ConnectedProviders;
-        KidneyCheck = overview.KidneyCheck;
+        Apps = overview.Apps;
         EmergencyCode = overview.EmergencyCode;
         return Page();
     }
@@ -49,9 +49,9 @@ public sealed class GrantsModel(
         return RedirectToPage();
     }
 
-    public async Task<IActionResult> OnPostTurnOnKidneyCheckAsync()
+    public async Task<IActionResult> OnPostTurnOnAppAsync(string appUri)
     {
-        await grantManager.TurnOnKidneyCheckAsync(callerManager.PatientIdFrom(User)!.Value);
+        await grantManager.TurnOnAppAsync(callerManager.PatientIdFrom(User)!.Value, appUri);
         return RedirectToPage();
     }
 

@@ -58,6 +58,43 @@ public sealed class NetworkController(
         );
     }
 
+    /// <summary>
+    /// The platform operator adds an app to the organizations table, with the pinned platform certificate. Patients
+    /// then see it on their Access page, off until they turn it on.
+    /// </summary>
+    [HttpPost("register-app")]
+    public async Task<IActionResult> RegisterAppAsync(RegisterAppRequest request)
+    {
+        X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
+        Caller caller = callerManager.FromPlatformCertificate(certificate);
+        RegisterAppResult result = await organizationManager.RegisterAppAsync(
+            caller,
+            request.Slug,
+            request.DisplayName,
+            request.Scope!.Value,
+            request.Description
+        );
+        if (!result.Allowed)
+        {
+            return DenialResult(result.Reason);
+        }
+        if (result.Error == OrganizationError.AppScopeNotAllowed)
+        {
+            return BadRequest(new ErrorResponse(result.Error.Value.ToString()));
+        }
+        if (result.Error is OrganizationError error)
+        {
+            return Conflict(new ErrorResponse(error.ToString()));
+        }
+        return StatusCode(
+            StatusCodes.Status201Created,
+            new RegisterAppResponse(
+                result.Organization!.Uri,
+                result.Organization.CertificateCommonName
+            )
+        );
+    }
+
     [HttpPost("create-enrollment-invite")]
     public async Task<IActionResult> CreateEnrollmentInviteAsync(
         CreateEnrollmentInviteRequest request
@@ -113,6 +150,19 @@ public sealed class NetworkController(
             return DenialResult(result.Reason);
         }
         return Ok(new SignedEntriesResponse(result.EgfrLabs));
+    }
+
+    [HttpGet("patients/{patientId:guid}/read-medications")]
+    public async Task<IActionResult> ReadMedicationsAsync(Guid patientId)
+    {
+        X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
+        ReadMedicationsResult result = await recordManager.ReadMedicationsAsync(patientId, caller);
+        if (!result.Allowed)
+        {
+            return DenialResult(result.Reason);
+        }
+        return Ok(new SignedEntriesResponse(result.Medications));
     }
 
     [HttpGet("patients/{patientId:guid}/read-full-record")]

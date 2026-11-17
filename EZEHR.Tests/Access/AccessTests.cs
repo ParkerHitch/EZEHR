@@ -143,6 +143,74 @@ public class AccessTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task App_grant_gets_the_scope_the_app_declares_and_no_more()
+    {
+        Party medicationCheck = new(
+            PartyKind.App,
+            "urn:app:medication-check",
+            "Medication Check",
+            "Medication Check",
+            "urn:app:medication-check"
+        );
+        Grant? wide = await Grants.TurnOnAppAsync(_sam, medicationCheck.SubjectUri);
+        Grant? narrow = await Grants.TurnOnAppAsync(_sam, KidneyCheck.SubjectUri);
+        Assert.Equal(GrantScope.MedicationsLabsAndNotes, wide!.Scope);
+        Assert.Equal(GrantScope.LabsAndNotes, narrow!.Scope);
+
+        VerifiedCaller wideApp = new(medicationCheck, null);
+        VerifiedCaller narrowApp = new(KidneyCheck, null);
+        Assert.True(
+            (await Gate.AuthorizeAsync(_sam, AccessAction.ReadMedications, wideApp, null)).Allowed
+        );
+        Assert.True(
+            (await Gate.AuthorizeAsync(_sam, AccessAction.ReadEgfrLabs, wideApp, null)).Allowed
+        );
+        Assert.True(
+            (await Gate.AuthorizeAsync(_sam, AccessAction.WriteSignedNote, wideApp, null)).Allowed
+        );
+        Assert.Equal(DenyReason.ScopeDenied, (await ReadFullRecordAsync(wideApp)).Reason);
+        Assert.Equal(
+            DenyReason.ScopeDenied,
+            (await Gate.AuthorizeAsync(_sam, AccessAction.ReadMedications, narrowApp, null)).Reason
+        );
+    }
+
+    [Fact]
+    public async Task Turning_on_a_provider_or_an_unknown_uri_grants_nothing()
+    {
+        Assert.Null(await Grants.TurnOnAppAsync(_sam, "urn:provider:riverside"));
+        Assert.Null(await Grants.TurnOnAppAsync(_sam, "urn:app:nobody"));
+        Assert.Empty(await Grants.ListForPatientAsync(_sam));
+    }
+
+    [Fact]
+    public async Task Access_overview_lists_every_app_and_keeps_a_grant_for_a_removed_app_revocable()
+    {
+        await Grants.TurnOnAppAsync(_sam, KidneyCheck.SubjectUri);
+
+        AccessOverview overview = await Grants.ListAccessAsync(_sam);
+
+        Assert.Equal(["Kidney Check", "Medication Check"], overview.Apps.Select(app => app.Name));
+        Assert.NotNull(overview.Apps[0].Grant);
+        Assert.Equal("lab results only", overview.Apps[0].What);
+        Assert.Null(overview.Apps[1].Grant);
+        Assert.Equal("medications and lab results only", overview.Apps[1].What);
+        Assert.Empty(overview.Lines);
+
+        await using (SqlConnection connection = await _database.Db.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "DELETE FROM organizations WHERE uri = 'urn:app:kidney-check'"
+            );
+        }
+        AccessOverview afterRemoval = await Grants.ListAccessAsync(_sam);
+
+        Assert.Equal(["Medication Check"], afterRemoval.Apps.Select(app => app.Name));
+        AccessLine orphan = Assert.Single(afterRemoval.Lines);
+        Assert.True(orphan.CanRevoke);
+    }
+
+    [Fact]
     public async Task Clinician_grant_is_read_only()
     {
         await ActiveGrantAsync();
@@ -440,7 +508,7 @@ public class AccessTests : IAsyncLifetime
             );
         }
 
-        Grant? grant = await Grants.TurnOnKidneyCheckAsync(_sam);
+        Grant? grant = await Grants.TurnOnAppAsync(_sam, "urn:app:kidney-check");
 
         Assert.Null(grant);
         Assert.Empty(await Grants.ListForPatientAsync(_sam));

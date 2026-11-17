@@ -1,7 +1,8 @@
 using EZEHR.Tools.Commands;
 
-// ezehr-tools: laptop-side commands (certs, provider, kidney-check, broker, stage, demo reset|status).
-const string Usage = "usage: ezehr-tools <certs|provider|kidney-check|broker|stage|demo> ...";
+// ezehr-tools: laptop-side commands (certs, provider, kidney-check, medication-check, broker, stage, demo reset|status).
+const string Usage =
+    "usage: ezehr-tools <certs|provider|kidney-check|medication-check|broker|stage|demo> ...";
 
 if (args.Length == 0)
 {
@@ -9,6 +10,7 @@ if (args.Length == 0)
     Console.Error.WriteLine(CertsCommand.Usage);
     Console.Error.WriteLine(ProviderCommand.Usage);
     Console.Error.WriteLine(KidneyCheckCommand.Usage);
+    Console.Error.WriteLine(MedicationCheckCommand.Usage);
     Console.Error.WriteLine(BrokerCommand.Usage);
     Console.Error.WriteLine(StageCommand.Usage);
     Console.Error.WriteLine(DemoCommand.Usage);
@@ -23,6 +25,8 @@ switch (args[0])
         return await ProviderCommand.RunAsync(args[1..]);
     case "kidney-check":
         return await KidneyCheckCommand.RunAsync(args[1..]);
+    case "medication-check":
+        return await MedicationCheckCommand.RunAsync(args[1..]);
     case "broker":
         return await BrokerCommand.RunAsync(args[1..]);
     case "stage":

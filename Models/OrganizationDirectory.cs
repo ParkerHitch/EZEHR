@@ -29,6 +29,23 @@ public sealed class OrganizationDirectory(IEnumerable<Organization> organization
         return _organizations.FirstOrDefault(candidate => candidate.Uri == uri)?.ToParty();
     }
 
+    /// <summary>The app with this URI, with what it declares. Null for a provider's URI or an unknown one.</summary>
+    public Organization? FindApp(string uri)
+    {
+        return _organizations.FirstOrDefault(candidate =>
+            candidate.Kind == PartyKind.App && candidate.Uri == uri
+        );
+    }
+
+    /// <summary>Every app on the network, by name: what the patient's Access page offers.</summary>
+    public IReadOnlyList<Organization> ListApps()
+    {
+        return _organizations
+            .Where(candidate => candidate.Kind == PartyKind.App)
+            .OrderBy(candidate => candidate.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     /// <summary>The provider whose clinicians sign in through this Entra tenant, or null when none does.</summary>
     public Party? FindProviderByTenant(Guid tenantId)
     {

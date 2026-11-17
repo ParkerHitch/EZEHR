@@ -153,27 +153,40 @@ public sealed class GrantManager(
     }
 
     /// <summary>
-    /// Everyone who has or had access, newest first, and the providers that can add records, as the Access page
-    /// lists them. Kidney Check's current grant comes out of the list, since the page shows it under Apps.
+    /// Everyone who has or had access, newest first, the providers that can add records, and every app on the
+    /// network, as the Access page lists them. A listed app's current grant comes out of the first list, since the
+    /// page shows it under Apps. A grant for an app that is no longer listed stays in the first list, so the patient
+    /// can still see and revoke it.
     /// </summary>
     public async Task<AccessOverview> ListAccessAsync(Guid patientId)
     {
         DateTimeOffset now = time.GetUtcNow();
         IReadOnlyList<Grant> grants = await ListForPatientAsync(patientId);
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
+        IReadOnlyList<Organization> apps = directory.ListApps();
         List<AccessLine> lines = [];
-        AccessLine? kidneyCheck = null;
+        Dictionary<string, AccessLine> currentAppGrants = [];
         foreach (Grant grant in grants.OrderByDescending(grant => grant.CreatedAt))
         {
             AccessLine line = ToAccessLine(grant, now);
-            if (grant.Grantee.SubjectUri == OrgDirectory.KidneyCheckUri && line.CanRevoke)
+            bool listedApp = apps.Any(app => app.Uri == grant.Grantee.SubjectUri);
+            if (listedApp && line.CanRevoke)
             {
-                kidneyCheck = line;
+                currentAppGrants.TryAdd(grant.Grantee.SubjectUri, line);
             }
             else
             {
                 lines.Add(line);
             }
         }
+        List<AppLine> appLines = apps.Select(app => new AppLine(
+                app.Uri,
+                app.DisplayName,
+                app.AppDescription,
+                Copy.AppScopeWhat(app.GrantedAppScope()),
+                currentAppGrants.GetValueOrDefault(app.Uri)
+            ))
+            .ToList();
         IReadOnlyList<ConnectedProviderLine> connectedProviders =
             await inviteManager.ListConnectedProvidersAsync(patientId);
         await using SqlConnection connection = await db.OpenAsync();
@@ -184,7 +197,7 @@ public sealed class GrantManager(
         return new AccessOverview(
             lines,
             connectedProviders,
-            kidneyCheck,
+            appLines,
             emergencyCode is null ? null : FormatCode(emergencyCode)
         );
     }
@@ -213,7 +226,7 @@ public sealed class GrantManager(
                 grantee.Kind == PartyKind.App
                     ? Copy.AppGrantSummary(
                         grantee.DisplayName,
-                        Copy.AppGrantWhat,
+                        Copy.AppScopeWhat(grant.Scope),
                         LocalTime.Day(grant.ApprovedAt ?? grant.CreatedAt, _timeZone)
                     )
                     : Copy.ClinicianAccessUntil(
@@ -481,23 +494,28 @@ public sealed class GrantManager(
     }
 
     /// <summary>
-    /// The patient turns Kidney Check on, at enrollment or later from the Access page. After a revoke this makes a
-    /// new grant. Idempotent while one is active. Null when a sysadmin removed Kidney Check's row: it's cut off, so
-    /// nothing is granted.
+    /// The patient turns an app on, from the Access page (or Kidney Check at enrollment). The grant gets the scope
+    /// the app declares, and nothing more. After a revoke this makes a new grant. Idempotent while one is active.
+    /// Null when the URI isn't an app in the organizations table: an app a sysadmin removed is cut off, so nothing
+    /// is granted.
     /// </summary>
-    public async Task<Grant?> TurnOnKidneyCheckAsync(Guid patientId)
+    public async Task<Grant?> TurnOnAppAsync(Guid patientId, string appUri)
     {
         OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
-        Party? kidneyCheck = directory.FindByUri(OrgDirectory.KidneyCheckUri);
-        if (kidneyCheck is null)
+        Organization? app = directory.FindApp(appUri);
+        if (app is null)
         {
             return null;
         }
-        return await CreateAppGrantAsync(patientId, kidneyCheck);
+        return await CreateAppGrantAsync(patientId, app.ToParty(), app.GrantedAppScope());
     }
 
-    /// <summary>An app the patient turned on: lab results and notes only, ongoing until revoked. Idempotent.</summary>
-    public async Task<Grant> CreateAppGrantAsync(Guid patientId, Party app)
+    /// <summary>An app the patient turned on: its scope only, ongoing until revoked. Idempotent.</summary>
+    public async Task<Grant> CreateAppGrantAsync(
+        Guid patientId,
+        Party app,
+        GrantScope scope = GrantScope.LabsAndNotes
+    )
     {
         IReadOnlyList<Grant> existing = await ListForGranteeAsync(patientId, app.SubjectUri);
         Grant? active = existing.FirstOrDefault(grant => grant.Status == GrantStatus.Active);
@@ -511,7 +529,7 @@ public sealed class GrantManager(
             Guid.NewGuid(),
             patientId,
             app,
-            GrantScope.LabsAndNotes,
+            scope,
             $"{app.DisplayName} app",
             GrantStatus.Active,
             null,

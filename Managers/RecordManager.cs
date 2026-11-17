@@ -134,6 +134,25 @@ public sealed class RecordManager(
         return new ReadEgfrLabsResult(true, null, labs);
     }
 
+    /// <summary>The patient's medication list, for an app whose grant covers it. Logged by the access check.</summary>
+    public async Task<ReadMedicationsResult> ReadMedicationsAsync(Guid patientId, Caller caller)
+    {
+        AccessDecision decision = await accessManager.AuthorizeAsync(
+            patientId,
+            AccessAction.ReadMedications,
+            caller,
+            null
+        );
+        if (!decision.Allowed)
+        {
+            return new ReadMedicationsResult(false, decision.Reason, []);
+        }
+        VerifiedEntries medications = await ReadVerifiedEntriesAsync(patientId, resourceType =>
+            resourceType is "MedicationStatement" or "MedicationRequest"
+        );
+        return new ReadMedicationsResult(true, null, medications.Entries);
+    }
+
     /// <summary>The whole record. Logged by the access check, with the purpose the caller claimed.</summary>
     public async Task<ReadFullRecordResult> ReadFullRecordAsync(
         Guid patientId,

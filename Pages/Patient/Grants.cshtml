@@ -37,35 +37,47 @@
 
     <h2 class="h5">Apps</h2>
     <p class="text-muted small">@Copy.AppsHint</p>
+    @if (!Model.Apps.Any())
+    {
+        <p class="text-muted">@Copy.NoApps</p>
+    }
     <ul class="list-group mb-4">
-        <li class="list-group-item">
-            <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
-                <span class="fw-semibold">Kidney Check</span>
-                @if (Model.KidneyCheck is not null)
+        @foreach (AppLine app in Model.Apps)
+        {
+            <li class="list-group-item">
+                <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                    <span class="fw-semibold">@app.Name</span>
+                    @if (app.Grant is not null)
+                    {
+                        <span class="badge text-bg-success">On</span>
+                    }
+                    else
+                    {
+                        <span class="badge text-bg-secondary">Off</span>
+                    }
+                </div>
+                @if (app.Description is not null)
                 {
-                    <span class="badge text-bg-success">On</span>
+                    <p class="mb-2">@app.Description</p>
+                }
+                @if (app.Grant is AccessLine grant)
+                {
+                    <p class="mb-2 small text-muted">@grant.Text</p>
+                    <form method="post" asp-page-handler="Revoke">
+                        <input type="hidden" name="grantId" value="@grant.GrantId"/>
+                        <button class="btn btn-outline-secondary btn-tap">@Copy.TurnOffApp(app.Name)</button>
+                    </form>
                 }
                 else
                 {
-                    <span class="badge text-bg-secondary">Off</span>
+                    <p class="mb-2 small text-muted">@Copy.AppOffer(app.What)</p>
+                    <form method="post" asp-page-handler="TurnOnApp">
+                        <input type="hidden" name="appUri" value="@app.AppUri"/>
+                        <button class="btn btn-primary btn-tap">@Copy.TurnOnApp(app.Name)</button>
+                    </form>
                 }
-            </div>
-            @if (Model.KidneyCheck is AccessLine kidneyCheck)
-            {
-                <p class="mb-2">@kidneyCheck.Text</p>
-                <form method="post" asp-page-handler="Revoke">
-                    <input type="hidden" name="grantId" value="@kidneyCheck.GrantId"/>
-                    <button class="btn btn-outline-secondary btn-tap">@Copy.TurnOffKidneyCheck</button>
-                </form>
-            }
-            else
-            {
-                <p class="mb-2">@Copy.KidneyOptIn</p>
-                <form method="post" asp-page-handler="TurnOnKidneyCheck">
-                    <button class="btn btn-primary btn-tap">@Copy.TurnOnKidneyCheck</button>
-                </form>
-            }
-        </li>
+            </li>
+        }
     </ul>
 
     <h2 class="h5">Emergency access</h2>

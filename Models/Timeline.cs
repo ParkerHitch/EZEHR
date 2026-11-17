@@ -43,14 +43,26 @@ public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke, bool 
 public sealed record ConnectedProviderLine(string ProviderUri, string Text);
 
 /// <summary>
-/// The Access page: who can see the record (grants), which providers can add to it (links), and Kidney Check's
-/// current grant, or null when it's off (then the page offers to turn it on). EmergencyCode is the patient's
-/// emergency code as XXXX-XXXX, or null when emergency access is off.
+/// One app on the Access page. What is what it may read, in words ("lab results only"). Grant is the patient's
+/// current grant for it, or null when it's off (then the page offers to turn it on).
+/// </summary>
+public sealed record AppLine(
+    string AppUri,
+    string Name,
+    string? Description,
+    string What,
+    AccessLine? Grant
+);
+
+/// <summary>
+/// The Access page: who can see the record (grants), which providers can add to it (links), and every app on the
+/// network, on or off. EmergencyCode is the patient's emergency code as XXXX-XXXX, or null when emergency
+/// access is off.
 /// </summary>
 public sealed record AccessOverview(
     IReadOnlyList<AccessLine> Lines,
     IReadOnlyList<ConnectedProviderLine> ConnectedProviders,
-    AccessLine? KidneyCheck,
+    IReadOnlyList<AppLine> Apps,
     string? EmergencyCode = null
 );
 

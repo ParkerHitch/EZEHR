@@ -20,6 +20,19 @@ public sealed record RegisterProviderRequest(
 
 public sealed record RegisterProviderResponse(string Uri, string CertificateCommonName);
 
+/// <summary>
+/// The slug becomes urn:app:{slug} and the certificate CN {slug}.apps.ezehr. Scope is the most a patient can allow
+/// the app, and Description is what the patient reads before turning it on.
+/// </summary>
+public sealed record RegisterAppRequest(
+    [Required, RegularExpression(OrgDirectory.SlugPattern)] string Slug,
+    [Required, StringLength(200, MinimumLength = 1)] string DisplayName,
+    [Required] GrantScope? Scope,
+    [Required, StringLength(400, MinimumLength = 1)] string Description
+);
+
+public sealed record RegisterAppResponse(string Uri, string CertificateCommonName);
+
 public sealed record CreateEnrollmentInviteResponse(string InviteCode, string EnrollmentUrl);
 
 /// <summary>Replaced counts records the provider corrected: same resource id, changed content.</summary>

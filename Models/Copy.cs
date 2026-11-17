@@ -9,9 +9,23 @@ public static class Copy
     public const string SomethingWentWrong =
         "We couldn't finish that. Please go back and try again.";
 
-    public const string TurnOnKidneyCheck = "Turn on Kidney Check";
+    public static string TurnOnApp(string app)
+    {
+        return $"Turn on {app}";
+    }
 
-    public const string TurnOffKidneyCheck = "Turn off Kidney Check";
+    public static string TurnOffApp(string app)
+    {
+        return $"Turn off {app}";
+    }
+
+    public const string NoApps = "No apps are available yet.";
+
+    /// <summary>What turning an app on would allow, under its description on the Access page.</summary>
+    public static string AppOffer(string what)
+    {
+        return $"If you turn it on, it can read: {what}. It can add notes to your record. You can turn it off any time.";
+    }
 
     public const string AppsHint =
         "Apps see only what you allow, and every time one reads your record it shows in Activity.";
@@ -142,8 +156,15 @@ public static class Copy
         };
     }
 
-    /// <summary>What the Kidney Check grant covers, as the Access page says it.</summary>
-    public const string AppGrantWhat = "lab results only";
+    /// <summary>What an app's scope covers, as the Access page says it.</summary>
+    public static string AppScopeWhat(GrantScope scope)
+    {
+        return scope switch
+        {
+            GrantScope.MedicationsLabsAndNotes => "medications and lab results only",
+            _ => "lab results only",
+        };
+    }
 
     /// <summary>AppGrantLine without its trailing "Revoke", which the page shows as the button.</summary>
     public static string AppGrantSummary(string app, string what, string date)
@@ -223,6 +244,7 @@ public static class Copy
                 $"{who} viewed your record (emergency access)",
             "ReadFullRecord" => $"{who} viewed your record",
             "ReadEgfrLabs" => $"{who} read your lab results",
+            "ReadMedications" => $"{who} read your medications",
             "WriteSignedNote" => $"{who} added a note to your record",
             "PushSignedRecords" => $"{actor.OrgName} added records",
             "RedeemShareCode" => $"{who} asked to see your record",
@@ -274,6 +296,11 @@ public static class Copy
     public static string AppGrantLine(string app, string what, string date)
     {
         return $"{app} · {what} · you allowed this {date} · Revoke";
+    }
+
+    public static string MedicationNote(string medication, int percent)
+    {
+        return $"You take {medication}, and your kidney function (eGFR) has dropped {percent}%. Medicines like {medication} can be hard on the kidneys. Consider asking a doctor to review it.";
     }
 
     public static string KidneyNote(int percent, int providers)
