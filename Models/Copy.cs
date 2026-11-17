@@ -3,8 +3,15 @@ namespace EZEHR.Models;
 /// <summary>Every user-facing string the spec fixes. Change copy here only.</summary>
 public static class Copy
 {
-    public const string KidneyOptIn =
-        "Allow the Kidney Check app to read your lab results. It looks for slow changes no single provider would see. You can turn it off any time.";
+    /// <summary>
+    /// One app's checkbox on the enrollment page: "Allow Kidney Check. Looks for slow changes… It can read: lab
+    /// results only. You can turn it off any time."
+    /// </summary>
+    public static string AppOptIn(string app, string? description, string what)
+    {
+        string about = description is null ? "" : $" {description}";
+        return $"Allow {app}.{about} It can read: {what}. You can turn it off any time.";
+    }
 
     public const string SomethingWentWrong =
         "We couldn't finish that. Please go back and try again.";

@@ -61,7 +61,7 @@ public class PatientPasskeyTests : IAsyncLifetime
         _fido2.NextRegistration = FakeFido2Service.NewPasskey(options.Options!);
         return await _enrollment.CompleteRegistrationAsync(
             inviteCode,
-            kidneyCheckOptIn,
+            kidneyCheckOptIn ? [OrgDirectory.KidneyCheckUri] : [],
             new AuthenticatorAttestationRawResponse(),
             options.Options!
         );
@@ -101,7 +101,7 @@ public class PatientPasskeyTests : IAsyncLifetime
         _fido2.NextRegistration = FakeFido2Service.NewPasskey(options.Options!);
         EnrollmentResult late = await _enrollment.CompleteRegistrationAsync(
             code,
-            false,
+            [],
             new AuthenticatorAttestationRawResponse(),
             options.Options!
         );
@@ -145,7 +145,7 @@ public class PatientPasskeyTests : IAsyncLifetime
 
         EnrollmentResult rejected = await _enrollment.CompleteRegistrationAsync(
             code,
-            false,
+            [],
             new AuthenticatorAttestationRawResponse(),
             options.Options!
         );
@@ -168,6 +168,58 @@ public class PatientPasskeyTests : IAsyncLifetime
         Assert.Equal("urn:app:kidney-check", grant.Grantee.SubjectUri);
         Assert.Equal(GrantScope.LabsAndNotes, grant.Scope);
         Assert.Equal(GrantStatus.Active, grant.Status);
+    }
+
+    [Fact]
+    public async Task Each_ticked_app_gets_its_own_scope_and_anything_else_is_ignored()
+    {
+        string code = await InviteAsync("lakeside", "LUC-20417");
+        CreateRegistrationOptionsResult options = await _enrollment.CreateRegistrationOptionsAsync(
+            code,
+            "Sam Taylor"
+        );
+        _fido2.NextRegistration = FakeFido2Service.NewPasskey(options.Options!);
+
+        EnrollmentResult result = await _enrollment.CompleteRegistrationAsync(
+            code,
+            [
+                OrgDirectory.MedicationCheckUri,
+                OrgDirectory.KidneyCheckUri,
+                OrgDirectory.MedicationCheckUri,
+                "urn:provider:riverside",
+                "urn:app:nobody",
+            ],
+            new AuthenticatorAttestationRawResponse(),
+            options.Options!
+        );
+
+        IReadOnlyList<Grant> grants = await _services.Grants.ListForPatientAsync(
+            result.PatientId!.Value
+        );
+        Assert.Equal(2, grants.Count);
+        Assert.Equal(
+            GrantScope.MedicationsLabsAndNotes,
+            grants
+                .Single(grant => grant.Grantee.SubjectUri == OrgDirectory.MedicationCheckUri)
+                .Scope
+        );
+        Assert.Equal(
+            GrantScope.LabsAndNotes,
+            grants.Single(grant => grant.Grantee.SubjectUri == OrgDirectory.KidneyCheckUri).Scope
+        );
+    }
+
+    [Fact]
+    public async Task Invite_check_lists_the_apps_a_new_patient_can_turn_on()
+    {
+        string code = await InviteAsync("lakeside", "LUC-20417");
+
+        InviteCheck usable = await _enrollment.CheckInviteAsync(code);
+        InviteCheck unknown = await _enrollment.CheckInviteAsync("NOPE-NOPE");
+
+        Assert.Equal(["Kidney Check", "Medication Check"], usable.Apps.Select(app => app.Name));
+        Assert.All(usable.Apps, app => Assert.Null(app.Grant));
+        Assert.Empty(unknown.Apps);
     }
 
     [Fact]
@@ -310,7 +362,7 @@ public class PatientPasskeyTests : IAsyncLifetime
         _fido2.NextRegistration = passkey;
         EnrollmentResult sam = await _enrollment.CompleteRegistrationAsync(
             code,
-            false,
+            [],
             new AuthenticatorAttestationRawResponse(),
             options.Options!
         );
@@ -353,7 +405,7 @@ public class PatientPasskeyTests : IAsyncLifetime
         _fido2.NextRegistration = passkey;
         await _enrollment.CompleteRegistrationAsync(
             code,
-            false,
+            [],
             new AuthenticatorAttestationRawResponse(),
             options.Options!
         );

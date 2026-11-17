@@ -101,7 +101,9 @@
     const credential = await navigator.credentials.create({ publicKey: creationOptions(options) });
     return postJson("/api/patient/passkey/complete-registration", {
       attestation: attestationJson(credential),
-      kidneyCheckOptIn: form.elements.kidneyCheckOptIn.checked,
+      appUris: Array.from(form.querySelectorAll('input[name="appUris"]:checked')).map(
+        (checkbox) => checkbox.value
+      ),
     });
   }
 

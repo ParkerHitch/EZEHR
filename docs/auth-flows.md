@@ -186,7 +186,7 @@ sequenceDiagram
   Ph->>Web: register/options with the invite code
   Web-->>Ph: WebAuthn challenge
   Ph->>Ph: Face ID or fingerprint, phone creates the passkey
-  Ph->>Web: register/verify with attestation and kidneyCheckOptIn
+  Ph->>Web: register/verify with attestation and the apps Sam ticked
   Web->>Web: Fido2 verifies, invite marked used
   Web->>KV: wrap a new data key for Sam
   Web->>Web: save patient, passkey public key, provider link, app grant if opted in
