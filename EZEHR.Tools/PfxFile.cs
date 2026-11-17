@@ -13,9 +13,8 @@ public sealed record PfxFile(X509Certificate2 Certificate, IReadOnlyList<X509Cer
     {
         if (!File.Exists(path))
         {
-            throw new FileNotFoundException(
-                $"{path} not found. Run `ezehr-tools certs issue` (or `certs broker`) first.",
-                path
+            throw new ToolException(
+                $"{path} not found. Run `ezehr-tools certs issue` (or `certs broker`) first."
             );
         }
         X509Certificate2Collection collection = X509CertificateLoader.LoadPkcs12CollectionFromFile(
@@ -28,6 +27,19 @@ public sealed record PfxFile(X509Certificate2 Certificate, IReadOnlyList<X509Cer
             .Where(candidate => !candidate.HasPrivateKey)
             .ToList();
         return new PfxFile(certificate, chain);
+    }
+
+    /// <summary>"lakeside.providers.ezehr, issued by EZEHR Issuing CA", read from the certificate itself.</summary>
+    public static string Describe(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return $"none: {path} is missing";
+        }
+        X509Certificate2 certificate = Load(path).Certificate;
+        string subject = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+        string issuer = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: true);
+        return $"{subject}, issued by {issuer}";
     }
 
     public void Save(string path)

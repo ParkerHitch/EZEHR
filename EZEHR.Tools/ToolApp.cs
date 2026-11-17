@@ -1,5 +1,7 @@
 using EZEHR.Tools.Commands;
+using EZEHR.Tools.Commands.Database;
 using EZEHR.Tools.Commands.Org;
+using EZEHR.Tools.Commands.Patient;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -47,6 +49,35 @@ public static class ToolApp
                 .WithDescription("List each organization with its certificate and seed records")
                 .WithExample("org", "list");
         });
+        config.AddBranch("patient", patient =>
+        {
+            patient.SetDescription(
+                "Backstage: look patients up in the database (AZURE_SQL_CONNECTIONSTRING), never the network"
+            );
+            patient
+                .AddCommand<PatientFindCommand>("find")
+                .WithDescription("Print a patient's EZEHR id, for $(...) in scripts")
+                .WithExample("patient", "find", "lakeside:LUC-20417")
+                .WithExample("patient", "find", "sam");
+            patient
+                .AddCommand<PatientListCommand>("list")
+                .WithDescription("List every enrolled patient with their linked charts")
+                .WithExample("patient", "list");
+            patient
+                .AddCommand<PatientStatusCommand>("status")
+                .WithDescription("Show a record's contents, grants and audit log check")
+                .WithExample("patient", "status", "sam")
+                .WithExample("patient", "status", "riverside:RPC-1107");
+        });
+        config.AddBranch("db", db =>
+        {
+            db.SetDescription(
+                "Backstage: SQL straight against the database (AZURE_SQL_CONNECTIONSTRING)"
+            );
+            db.AddCommand<DbQueryCommand>("query")
+                .WithDescription("Run SQL and print the rows as a table")
+                .WithExample("db", "query", "SELECT id, action, granted FROM audit_events");
+        });
     }
 
     private static int Report(Exception exception)
@@ -54,7 +85,13 @@ public static class ToolApp
         IAnsiConsole console = AnsiConsole.Console;
         if (exception is CommandAppException commandLineError)
         {
-            if (commandLineError.Pretty is not null)
+            // A value our own parsers refused (a patient, an identity): their message says what would work.
+            if (commandLineError.InnerException is FormatException formatError)
+            {
+                console.Write(new Text(formatError.Message, new Style(Color.Red)));
+                console.WriteLine();
+            }
+            else if (commandLineError.Pretty is not null)
             {
                 console.Write(commandLineError.Pretty);
             }

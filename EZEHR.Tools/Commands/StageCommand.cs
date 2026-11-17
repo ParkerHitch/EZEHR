@@ -1,6 +1,7 @@
 using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 using EZEHR.Services;
+using EZEHR.Tools.Cli;
 using EZEHR.Tools.Net;
 using Spectre.Console;
 
@@ -176,7 +177,7 @@ public static class StageCommand
 
         async Task<Guid?> FindSamAsync()
         {
-            samId ??= await DemoCommand.FindSamAsync();
+            samId ??= await PatientReference.Sam.ResolveAsync();
             return samId;
         }
 
@@ -398,18 +399,9 @@ public static class StageCommand
         return new Actor(name, "its EHR system", () => DescribeCertificate($"{slug}.pfx"), color);
     }
 
-    /// <summary>"lakeside.providers.ezehr, issued by EZEHR Issuing CA", read from the certificate itself.</summary>
     private static string DescribeCertificate(string pfxFileName)
     {
-        string path = ToolPaths.Pki(pfxFileName);
-        if (!File.Exists(path))
-        {
-            return $"none: {path} is missing";
-        }
-        X509Certificate2 certificate = PfxFile.Load(path).Certificate;
-        string subject = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
-        string issuer = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: true);
-        return $"{subject}, issued by {issuer}";
+        return PfxFile.Describe(ToolPaths.Pki(pfxFileName));
     }
 
     private static HttpClient ProviderClient(string slug)

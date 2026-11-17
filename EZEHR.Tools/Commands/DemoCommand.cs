@@ -20,7 +20,6 @@ public static class DemoCommand
     public const string Usage = """
           demo reset [--yes]   empty the database and take Northwind and Medication Check off the network,
                                before `stage`
-          demo status          Sam's patient id, what the record holds, and the latest activity
           demo tamper          edit one of Sam's audit events in the database, as an insider would; run it
                                again to put it back. Sam's Activity shows the log as broken, then verified
         """;
@@ -31,8 +30,6 @@ public static class DemoCommand
         {
             case "reset":
                 return await ResetAsync(args.Contains("--yes"));
-            case "status":
-                return await StatusAsync();
             case "tamper":
                 return await TamperAsync();
             default:
@@ -79,86 +76,9 @@ public static class DemoCommand
         return 0;
     }
 
-    private static async Task<int> StatusAsync()
+    private static async Task<Guid?> FindSamAsync()
     {
-        Guid? samId = await FindSamAsync();
-        if (samId is null)
-        {
-            return 1;
-        }
-        await using SqlConnection connection = await OpenDatabase()!.OpenAsync();
-        Console.WriteLine($"Sam's patient id: {samId}");
-        IEnumerable<string> links = await connection.QueryAsync<string>(
-            "SELECT provider_uri FROM provider_links WHERE patient_id = @samId ORDER BY provider_uri",
-            new { samId }
-        );
-        Console.WriteLine($"linked providers: {string.Join(", ", links)}");
-        int entries = await connection.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM entries WHERE patient_id = @samId",
-            new { samId }
-        );
-        Console.WriteLine($"record entries:   {entries}");
-        IEnumerable<string> grants = await connection.QueryAsync<string>(
-            """
-            SELECT CONCAT(grantee_name, ' (', status,
-                          IIF(emergency_reason IS NULL, '', CONCAT(', EMERGENCY: ', emergency_reason)), ')')
-            FROM grants
-            WHERE patient_id = @samId ORDER BY created_at
-            """,
-            new { samId }
-        );
-        Console.WriteLine($"grants:           {string.Join(", ", grants)}");
-        string? emergencyCode = await connection.ExecuteScalarAsync<string?>(
-            "SELECT emergency_code FROM patients WHERE id = @samId",
-            new { samId }
-        );
-        Console.WriteLine(
-            $"emergency code:   {emergencyCode ?? "off (Sam turns it on from Access → Emergency access)"}"
-        );
-        IEnumerable<string> activity = await connection.QueryAsync<string>(
-            """
-            SELECT TOP 8 CONCAT(FORMAT(at, 'HH:mm:ss'), '  ', action, '  ',
-                   COALESCE(actor_name, 'unverified'), '  ',
-                   IIF(granted = 1, 'granted', CONCAT('DENIED ', reason)))
-            FROM audit_events WHERE patient_id = @samId ORDER BY id DESC
-            """,
-            new { samId }
-        );
-        AuditChainCheck chain = await new AuditManager(
-            OpenDatabase()!,
-            TimeProvider.System
-        ).VerifyChainAsync(samId.Value);
-        Console.WriteLine(
-            chain.Intact
-                ? $"audit log:        intact, {chain.EventCount} events, head {chain.HeadHash}"
-                : $"audit log:        BROKEN at event {chain.FirstBrokenId} of {chain.EventCount}"
-        );
-        Console.WriteLine("latest activity (newest first):");
-        foreach (string line in activity)
-        {
-            Console.WriteLine($"  {line}");
-        }
-        return 0;
-    }
-
-    /// <summary>Sam is whoever redeemed one of the demo providers' invites for Sam's patient ids.</summary>
-    public static async Task<Guid?> FindSamAsync()
-    {
-        Db? db = OpenDatabase();
-        if (db is null)
-        {
-            return null;
-        }
-        await using SqlConnection connection = await db.OpenAsync();
-        Guid? samId = await connection.QueryFirstOrDefaultAsync<Guid?>(
-            """
-            SELECT TOP 1 patient_id FROM provider_links
-            WHERE (provider_uri = 'urn:provider:northwind' AND provider_patient_id = 'NWH-88213')
-               OR (provider_uri = 'urn:provider:lakeside' AND provider_patient_id = 'LUC-20417')
-               OR (provider_uri = 'urn:provider:maple' AND provider_patient_id = 'MSF-0932')
-               OR (provider_uri = 'urn:provider:riverside' AND provider_patient_id = 'RPC-1107')
-            """
-        );
+        Guid? samId = await ToolDatabase.FindSamAsync();
         if (samId is null)
         {
             Console.Error.WriteLine(
@@ -223,17 +143,6 @@ public static class DemoCommand
 
     private static Db? OpenDatabase()
     {
-        if (
-            string.IsNullOrWhiteSpace(
-                Environment.GetEnvironmentVariable(AppOptions.ConnectionStringKey)
-            )
-        )
-        {
-            Console.Error.WriteLine(
-                $"{AppOptions.ConnectionStringKey} isn't set. For the deployed site: source scripts/azure.env"
-            );
-            return null;
-        }
-        return new Db(new ConfigurationBuilder().AddEnvironmentVariables().Build());
+        return ToolDatabase.Open();
     }
 }

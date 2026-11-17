@@ -1,4 +1,5 @@
 using EZEHR.Tools.Commands;
+using EZEHR.Tools.Net;
 using Spectre.Console;
 
 namespace EZEHR.Tools;
@@ -24,7 +25,20 @@ internal static class Program
                 ? columns
                 : RedirectedWidth;
         }
-        // Commands not yet moved to ToolApp run as before, until each is ported.
+        try
+        {
+            return await RunLegacyOrToolAppAsync(args);
+        }
+        catch (ToolException exception)
+        {
+            NetworkLog.WriteInColor(Color.Red, exception.Message);
+            return ToolApp.FailedExitCode;
+        }
+    }
+
+    /// <summary>Commands not yet moved to ToolApp run as before, until each is ported.</summary>
+    private static async Task<int> RunLegacyOrToolAppAsync(string[] args)
+    {
         switch (args.FirstOrDefault())
         {
             case "certs":
