@@ -258,6 +258,12 @@ public class ShareFlowTests : IAsyncLifetime
             Copy.EmergencyCodeUnknown,
             WebUtility.HtmlDecode(await wrong.Content.ReadAsStringAsync())
         );
+        HttpResponseMessage noCode = await OpenEmergencyAccessAsync(browser, "", "Unresponsive");
+        Assert.Equal(HttpStatusCode.OK, noCode.StatusCode);
+        Assert.Contains(
+            Copy.EmergencyCodeUnknown,
+            WebUtility.HtmlDecode(await noCode.Content.ReadAsStringAsync())
+        );
         HttpResponseMessage noReason = await OpenEmergencyAccessAsync(browser, code, " ");
         Assert.Contains(
             Copy.EmergencyReasonMissing,
@@ -288,6 +294,18 @@ public class ShareFlowTests : IAsyncLifetime
             $"/Clinician/Record?handler=Status&patientId={_sam}"
         );
         Assert.Equal("/Clinician/AccessEnded", poll.Headers.GetValues("HX-Redirect").Single());
+    }
+
+    [Fact]
+    public async Task Empty_share_code_shows_the_unknown_code_message()
+    {
+        HttpResponseMessage redeemed = await RedeemAsync(ClinicianBrowser(), "");
+
+        Assert.Equal(HttpStatusCode.OK, redeemed.StatusCode);
+        Assert.Contains(
+            Copy.ShareCodeUnknown,
+            WebUtility.HtmlDecode(await redeemed.Content.ReadAsStringAsync())
+        );
     }
 
     [Fact]

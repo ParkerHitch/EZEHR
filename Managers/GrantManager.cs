@@ -64,11 +64,14 @@ public sealed class GrantManager(
         return new string(RandomNumberGenerator.GetItems<char>(CodeAlphabet, 8));
     }
 
-    /// <summary>Accepts "abcd-efgh", "ABCD EFGH" and so on. Codes are stored and looked up in this form.</summary>
-    public static string NormalizeCode(string input)
+    /// <summary>
+    /// Accepts "abcd-efgh", "ABCD EFGH" and so on. Codes are stored and looked up in this form. A form field left
+    /// empty arrives as null, and normalizes to "", which matches no code.
+    /// </summary>
+    public static string NormalizeCode(string? input)
     {
         return new string(
-            input.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray()
+            (input ?? "").Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray()
         );
     }
 
