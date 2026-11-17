@@ -91,7 +91,7 @@ public class PatientPasskeyFlowTests : IAsyncLifetime
         _app.Fido2.NextRegistration = passkey;
         HttpResponseMessage completed = await browser.PostAsJsonAsync(
             "/api/patient/passkey/complete-registration",
-            new { attestation = EmptyAttestation, kidneyCheckOptIn = true }
+            new { attestation = EmptyAttestation, appUris = new[] { "urn:app:kidney-check" } }
         );
         Assert.True(
             completed.StatusCode == HttpStatusCode.OK,
@@ -129,7 +129,7 @@ public class PatientPasskeyFlowTests : IAsyncLifetime
         HttpResponseMessage completed = await Browser()
             .PostAsJsonAsync(
                 "/api/patient/passkey/complete-registration",
-                new { attestation = EmptyAttestation, kidneyCheckOptIn = false }
+                new { attestation = EmptyAttestation, appUris = Array.Empty<string>() }
             );
 
         Assert.Equal(HttpStatusCode.BadRequest, completed.StatusCode);
@@ -143,7 +143,7 @@ public class PatientPasskeyFlowTests : IAsyncLifetime
 
         HttpResponseMessage replay = await browser.PostAsJsonAsync(
             "/api/patient/passkey/complete-registration",
-            new { attestation = EmptyAttestation, kidneyCheckOptIn = false }
+            new { attestation = EmptyAttestation, appUris = Array.Empty<string>() }
         );
 
         Assert.Equal(HttpStatusCode.BadRequest, replay.StatusCode);
@@ -199,7 +199,13 @@ public class PatientPasskeyFlowTests : IAsyncLifetime
         string page = await Browser().GetStringAsync($"/Patient/Enroll?invite={inviteCode}");
 
         Assert.Contains("Lakeside Urgent Care invited you", page);
-        Assert.Contains(Copy.KidneyOptIn, page);
+        string enrollPage = WebUtility.HtmlDecode(page);
+        Assert.Contains(
+            "Allow Kidney Check. Looks for slow changes in your kidney lab results that no single provider would see. It can read: lab results only. You can turn it off any time.",
+            enrollPage
+        );
+        Assert.Contains("Allow Medication Check.", enrollPage);
+        Assert.Contains("value=\"urn:app:medication-check\"", page);
     }
 
     private static byte[] Base64UrlDecode(string text)

@@ -89,7 +89,7 @@ public class PatientPagesTests : IAsyncLifetime
                     },
                     clientExtensionResults = new { },
                 },
-                kidneyCheckOptIn = true,
+                appUris = new[] { "urn:app:kidney-check" },
             }
         );
         Assert.Equal(HttpStatusCode.OK, completed.StatusCode);

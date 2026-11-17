@@ -57,7 +57,7 @@ public sealed class PatientPasskeyController(
         PendingRegistration pending = JsonSerializer.Deserialize<PendingRegistration>(pendingJson)!;
         EnrollmentResult result = await enrollmentManager.CompleteRegistrationAsync(
             pending.InviteCode,
-            request.KidneyCheckOptIn,
+            request.AppUris ?? [],
             request.Attestation,
             CredentialCreateOptions.FromJson(pending.OptionsJson)
         );

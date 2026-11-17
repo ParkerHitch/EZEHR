@@ -18,7 +18,6 @@ with a second example app that has a different scope.
 ## Non-goals
 
 - Scopes as a free-form list of resource types. Two named scopes are enough to show the model.
-- Choosing apps on the enrollment page. Enrollment still offers only Kidney Check; every app is on the Access page.
 - An app store, reviews, or any vetting beyond "the platform operator registered it".
 - Putting Medication Check into `stage` or `demo`.
 
@@ -47,6 +46,9 @@ with a second example app that has a different scope.
 - **Access page.** `AccessOverview.Apps` lists every app by name with its description, scope in words and current
   grant. A grant for an app whose row was deleted stays visible under "Who can see your record", so it can still be
   revoked.
+- **Enrollment.** The enrollment page has a checkbox for every app, all unticked, each with its description and
+  scope in words. `complete-registration` takes `appUris` (the ticked ones) in place of `kidneyCheckOptIn`; a URI
+  that isn't an app on the network is ignored.
 - **Network.** `GET /api/network/patients/{id}/read-medications`, and `POST /api/network/register-app` (platform
   certificate only; slug, name, scope, description; `Full` is refused with 400; an existing row gets 409).
 - **Tools.** `ezehr-tools certs issue --app <slug> --name … --scope … --description …` issues the app's certificate

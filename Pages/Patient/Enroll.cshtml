@@ -39,10 +39,14 @@
                 <input class="form-control form-control-lg" id="displayName" name="displayName"
                        autocomplete="name" maxlength="200" required/>
             </div>
-            <div class="form-check mb-4">
-                <input class="form-check-input" type="checkbox" id="kidneyCheckOptIn" name="kidneyCheckOptIn"/>
-                <label class="form-check-label" for="kidneyCheckOptIn">@Copy.KidneyOptIn</label>
-            </div>
+            @for (int index = 0; index < Model.Invite.Apps.Count; index++)
+            {
+                AppLine app = Model.Invite.Apps[index];
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" id="app-@index" name="appUris" value="@app.AppUri"/>
+                    <label class="form-check-label" for="app-@index">@Copy.AppOptIn(app.Name, app.Description, app.What)</label>
+                </div>
+            }
             <button type="button" class="btn btn-primary btn-tap w-100" data-passkey="enroll"
                     data-passkey-error="passkey-error">Create passkey</button>
             <p id="passkey-error" class="text-danger mt-3" role="alert"></p>

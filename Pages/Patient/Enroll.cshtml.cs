@@ -18,7 +18,7 @@ public sealed class EnrollModel(CallerManager callerManager, EnrollmentManager e
     public string InviteCode { get; set; } = "";
 
     public InviteCheck Invite { get; private set; } =
-        new(false, null, EnrollmentError.InviteUnknown);
+        new(false, null, EnrollmentError.InviteUnknown, []);
 
     public bool SignedIn { get; private set; }
 

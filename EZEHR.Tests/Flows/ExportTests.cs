@@ -123,7 +123,7 @@ public class ExportTests : IAsyncLifetime
                     },
                     clientExtensionResults = new { },
                 },
-                kidneyCheckOptIn = false,
+                appUris = Array.Empty<string>(),
             }
         );
         Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
