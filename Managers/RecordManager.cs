@@ -31,6 +31,10 @@ public sealed class RecordManager(
 {
     public const string EgfrLoincCode = "98979-8";
 
+    private readonly TimeZoneInfo _timeZone = TimeZoneInfo.FindSystemTimeZoneById(
+        options.Value.TimeZone
+    );
+
     /// <summary>
     /// Records are signed when they are sent, so an incoming JWS iat must be recent: at most this far ahead (clock
     /// skew) and this old. The signer's chain is checked at iat, so an unbounded iat would let a key sign after
@@ -204,7 +208,30 @@ public sealed class RecordManager(
         {
             UnverifiedCount = record.UnverifiedCount,
         };
-        return new PatientHome(name, timeline, recordVersion);
+        // Emergency access was opened without the patient's approval, so the home page says so while it's open.
+        IEnumerable<OpenEmergencyAccess> openEmergencyAccess =
+            await connection.QueryAsync<OpenEmergencyAccess>(
+                """
+                SELECT grantee_name AS Name, grantee_org AS Org, expires_at AS ExpiresAt,
+                       emergency_reason AS Reason
+                FROM grants
+                WHERE patient_id = @patientId AND status = 'Active' AND emergency_reason IS NOT NULL
+                      AND expires_at > @now
+                ORDER BY created_at DESC
+                """,
+                new { patientId, now = time.GetUtcNow() }
+            );
+        List<string> emergencyAlerts = openEmergencyAccess
+            .Select(open =>
+                Copy.EmergencyAccessUntil(
+                    open.Name,
+                    open.Org,
+                    LocalTime.Clock(open.ExpiresAt, _timeZone),
+                    open.Reason
+                )
+            )
+            .ToList();
+        return new PatientHome(name, timeline, recordVersion, emergencyAlerts);
     }
 
     /// <summary>
@@ -228,22 +255,34 @@ public sealed class RecordManager(
     }
 
     /// <summary>
-    /// A fingerprint of the patient's stored entries. A correction re-encrypts with a fresh IV, so it changes too.
+    /// A fingerprint of what the home page shows: the patient's stored entries (a correction re-encrypts with a
+    /// fresh IV, so it changes too) and the emergency access open right now, so its alert appears and clears
+    /// without a refresh.
     /// </summary>
-    private static async Task<string> ReadRecordVersionAsync(
-        SqlConnection connection,
-        Guid patientId
-    )
+    private async Task<string> ReadRecordVersionAsync(SqlConnection connection, Guid patientId)
     {
         return await connection.QuerySingleAsync<string>(
             """
-            SELECT CONCAT(COUNT(*), ':', CHECKSUM_AGG(BINARY_CHECKSUM(id, CAST(iv AS VARBINARY(64)))))
-            FROM entries
-            WHERE patient_id = @patientId
+            SELECT CONCAT(
+                (SELECT CONCAT(COUNT(*), ':', CHECKSUM_AGG(BINARY_CHECKSUM(id, CAST(iv AS VARBINARY(64)))))
+                 FROM entries
+                 WHERE patient_id = @patientId),
+                ':',
+                (SELECT CONCAT(COUNT(*), ':', CHECKSUM_AGG(BINARY_CHECKSUM(id)))
+                 FROM grants
+                 WHERE patient_id = @patientId AND status = 'Active' AND emergency_reason IS NOT NULL
+                       AND expires_at > @now))
             """,
-            new { patientId }
+            new { patientId, now = time.GetUtcNow() }
         );
     }
+
+    private sealed record OpenEmergencyAccess(
+        string Name,
+        string Org,
+        DateTimeOffset ExpiresAt,
+        string Reason
+    );
 
     /// <summary>
     /// The patient's own whole record as a FHIR R4 collection Bundle. Each resource is followed by a Provenance

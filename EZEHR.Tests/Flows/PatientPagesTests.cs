@@ -319,6 +319,8 @@ public class PatientPagesTests : IAsyncLifetime
         Match code = Regex.Match(on, "font-monospace\">([A-Z0-9]{4}-[A-Z0-9]{4})<");
         Assert.True(code.Success, "no emergency code on the Access page");
         Assert.Contains(Copy.EmergencyAccessOnHint, on);
+        string homeBefore = await ReadAsync("/Patient/Home");
+        Assert.DoesNotContain("Emergency access:", homeBefore);
         GrantResult opened = await _app.WithAsync(services =>
             services
                 .GetRequiredService<GrantManager>()
@@ -333,6 +335,24 @@ public class PatientPagesTests : IAsyncLifetime
             activity
         );
         Assert.Contains("list-group-item-warning", activity);
+        // The open home page learns about it on its next poll, and loses the alert once it's revoked.
+        HttpResponseMessage homePoll = await _phone.GetAsync(TimelinePollPath(homeBefore));
+        string homeAlert = WebUtility.HtmlDecode(await homePoll.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, homePoll.StatusCode);
+        Assert.Contains("Emergency access: Dr. Rivera, Riverside Primary Care · until", homeAlert);
+        Assert.Contains("reason given: Unresponsive", homeAlert);
+        Assert.Contains(Copy.EmergencyAccessReview, homeAlert);
+        await _app.WithAsync(services =>
+            services
+                .GetRequiredService<GrantManager>()
+                .RevokeAsync(opened.Grant!.PatientId, opened.Grant.Id)
+        );
+        HttpResponseMessage afterRevoke = await _phone.GetAsync(TimelinePollPath(homeAlert));
+        Assert.Equal(HttpStatusCode.OK, afterRevoke.StatusCode);
+        Assert.DoesNotContain(
+            "Emergency access:",
+            WebUtility.HtmlDecode(await afterRevoke.Content.ReadAsStringAsync())
+        );
 
         await PostFormAsync(
             "/Patient/Grants",

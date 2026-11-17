@@ -22,8 +22,16 @@ public sealed record Timeline(
     int UnverifiedCount = 0
 );
 
-/// <summary>What the patient's home page shows.</summary>
-public sealed record PatientHome(string PatientName, Timeline Timeline, string RecordVersion);
+/// <summary>
+/// What the patient's home page shows. EmergencyAlerts has one line for each emergency access open right now:
+/// who, until when, and the reason they gave.
+/// </summary>
+public sealed record PatientHome(
+    string PatientName,
+    Timeline Timeline,
+    string RecordVersion,
+    IReadOnlyList<string> EmergencyAlerts
+);
 
 /// <summary>A share offer as the Share page shows it, and what became of it.</summary>
 public sealed record ShareStatus(
