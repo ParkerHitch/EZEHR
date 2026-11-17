@@ -39,6 +39,33 @@ public sealed class IdentityReferenceTests
     }
 
     [Fact]
+    public void IssuedButUnregisteredSlugIsAnIdentity()
+    {
+        WithEmptyPki(() =>
+        {
+            File.WriteAllBytes(EZEHR.Tools.ToolPaths.Pki("harbor.pfx"), []);
+
+            Assert.EndsWith("harbor.pfx", IdentityReference.Parse("harbor").PfxPath);
+        });
+    }
+
+    [Fact]
+    public void RelativePkiDirectoryIsResolvedNow()
+    {
+        string? previous = Environment.GetEnvironmentVariable(ToolRunner.PkiDirectoryVariable);
+        Environment.SetEnvironmentVariable(ToolRunner.PkiDirectoryVariable, ".pki-relative");
+        try
+        {
+            Assert.True(Path.IsPathRooted(EZEHR.Tools.ToolPaths.PkiDirectory));
+            Assert.Equal(Path.GetFullPath(".pki-relative"), EZEHR.Tools.ToolPaths.PkiDirectory);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ToolRunner.PkiDirectoryVariable, previous);
+        }
+    }
+
+    [Fact]
     public void MissingPfxPathSuggestsNoCommand()
     {
         ToolException error = Assert.Throws<ToolException>(() =>

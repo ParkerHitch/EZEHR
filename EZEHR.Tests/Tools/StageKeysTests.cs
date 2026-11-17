@@ -17,4 +17,14 @@ public sealed class StageKeysTests
         Assert.Equal('s', second);
         Assert.Equal('q', atEnd);
     }
+
+    [Fact]
+    public void EraseReturnsToTheStartOfTheLine()
+    {
+        using StringWriter output = new();
+
+        StageKeys.Erase(output, "Enter: send");
+
+        Assert.Equal("\r" + new string(' ', "Enter: send".Length + 2) + "\r", output.ToString());
+    }
 }

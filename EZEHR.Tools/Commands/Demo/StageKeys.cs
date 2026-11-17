@@ -19,8 +19,17 @@ public static class StageKeys
             ConsoleKeyInfo pressed = Console.ReadKey(intercept: true);
             key = pressed.Key == ConsoleKey.Enter ? '\r' : char.ToLowerInvariant(pressed.KeyChar);
         } while (!allowedKeys.Contains(key));
-        AnsiConsole.Console.Write(new Text("\r" + new string(' ', prompt.Length + 2) + "\r"));
+        Erase(Console.Out, prompt);
         return key;
+    }
+
+    /// <summary>
+    /// Returns to the start of the prompt's line and blanks it. Written raw: Spectre would turn the carriage returns
+    /// into line breaks and leave the prompt on screen.
+    /// </summary>
+    public static void Erase(TextWriter output, string prompt)
+    {
+        output.Write("\r" + new string(' ', prompt.Length + 2) + "\r");
     }
 
     /// <summary>

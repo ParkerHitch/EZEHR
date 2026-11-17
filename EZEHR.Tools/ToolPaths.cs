@@ -15,7 +15,8 @@ public static class ToolPaths
             string? configured = Environment.GetEnvironmentVariable(PkiDirectoryVariable);
             return string.IsNullOrWhiteSpace(configured)
                 ? Path.Combine(FindRepoRoot(), ".pki")
-                : configured;
+                // Absolute now: the trust-file loader resolves relative paths against bin/, not here.
+                : Path.GetFullPath(configured);
         }
     }
 

@@ -67,6 +67,34 @@ public sealed class PatientCommandTests : IAsyncLifetime
         Assert.Contains("one", run.Output);
     }
 
+    [Fact]
+    public async Task BadSqlIsOneLine()
+    {
+        ToolRun run = await RunAsync("db", "query", "SELECT nonsense FROM nowhere");
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("nowhere", run.Output);
+        Assert.DoesNotContain("\n  at ", run.Output);
+    }
+
+    [Fact]
+    public async Task UnreachableDatabaseIsOneLine()
+    {
+        ToolRun run = await ToolRunner.RunAsync(
+            new Dictionary<string, string?>
+            {
+                ["AZURE_SQL_CONNECTIONSTRING"] =
+                    "Server=127.0.0.1,1;Database=nowhere;Connect Timeout=2;TrustServerCertificate=True",
+            },
+            "patient",
+            "list"
+        );
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("nowhere on 127.0.0.1,1", run.Output);
+        Assert.DoesNotContain("\n  at ", run.Output);
+    }
+
     private Task<ToolRun> RunAsync(params string[] args)
     {
         return ToolRunner.RunAsync(

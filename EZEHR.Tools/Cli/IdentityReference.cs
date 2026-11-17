@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using EZEHR.Models;
 using EZEHR.Services;
 
@@ -30,7 +31,12 @@ public sealed record IdentityReference(string Text, string? PfxPath)
             return new IdentityReference(trimmed, Path.GetFullPath(trimmed));
         }
         List<string> known = [Broker, Platform, .. KnownSlugs()];
-        if (known.Contains(trimmed))
+        // An organization issued a certificate here but never admitted (`certs provider harbor`) is an identity too:
+        // calling as it is how to check that the network refuses it.
+        bool issuedHere =
+            Regex.IsMatch(trimmed, OrgDirectory.SlugPattern)
+            && File.Exists(ToolPaths.Pki($"{trimmed}.pfx"));
+        if (known.Contains(trimmed) || issuedHere)
         {
             return new IdentityReference(trimmed, ToolPaths.Pki($"{trimmed}.pfx"));
         }

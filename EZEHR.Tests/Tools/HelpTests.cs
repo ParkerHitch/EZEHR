@@ -17,6 +17,9 @@ public sealed class HelpTests
         "certs",
         "platform",
         "provider",
+        "network",
+        "app",
+        "demo",
     ];
 
     public static TheoryData<string[]> LeafCommands

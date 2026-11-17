@@ -1,3 +1,4 @@
+using Azure.Identity;
 using EZEHR.Tools.Cli;
 using EZEHR.Tools.Commands;
 using EZEHR.Tools.Commands.App;
@@ -9,6 +10,7 @@ using EZEHR.Tools.Commands.Org;
 using EZEHR.Tools.Commands.Patient;
 using EZEHR.Tools.Commands.Platform;
 using EZEHR.Tools.Commands.Provider;
+using Microsoft.Data.SqlClient;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -300,6 +302,32 @@ public static class ToolApp
         });
     }
 
+    /// <summary>
+    /// Failures a tester causes or meets every day, which deserve one line, not a stack trace: the tools' own, a
+    /// database that refused or doesn't answer, a CA that doesn't answer, an expired az login.
+    /// </summary>
+    public static bool IsExpectedFailure(Exception exception)
+    {
+        return exception
+            is ToolException
+                or SqlException
+                or HttpRequestException
+                or AuthenticationFailedException;
+    }
+
+    public static string DescribeFailure(Exception exception)
+    {
+        return exception switch
+        {
+            SqlException database => $"database {ToolDatabase.Describe()}: {database.Message}",
+            HttpRequestException network =>
+                $"{network.Message} {network.InnerException?.Message}".TrimEnd(),
+            AuthenticationFailedException signIn =>
+                $"sign-in failed (run az login?): {signIn.Message}",
+            _ => exception.Message,
+        };
+    }
+
     private static int Report(Exception exception)
     {
         IAnsiConsole console = AnsiConsole.Console;
@@ -322,9 +350,9 @@ public static class ToolApp
             }
             return UsageExitCode;
         }
-        if (exception is ToolException expected)
+        if (IsExpectedFailure(exception))
         {
-            console.Write(new Text(expected.Message, new Style(Color.Red)));
+            console.Write(new Text(DescribeFailure(exception), new Style(Color.Red)));
             console.WriteLine();
             return FailedExitCode;
         }

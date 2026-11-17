@@ -63,7 +63,7 @@ public static class StageSteps
     {
         List<Step> steps = BuildSteps(settings);
         IAnsiConsole console = AnsiConsole.Console;
-        console.WriteLine($"EZEHR network: {NetworkClient.BaseUrl}");
+        console.WriteLine($"EZEHR network: {settings.BaseUrl}");
         for (int index = firstStep - 1; index < steps.Count; index++)
         {
             Step step = steps[index];
@@ -98,6 +98,8 @@ public static class StageSteps
 
     private static List<Step> BuildSteps(CertificateAuthoritySettings authoritySettings)
     {
+        // Every call goes where --base-url (else EZEHR_BASE_URL) says, never anywhere else.
+        string baseUrl = authoritySettings.BaseUrl;
         Actor northwind = Provider("northwind", ConsoleColor.Blue);
         Actor lakeside = Provider("lakeside", ConsoleColor.Cyan);
         Actor maple = Provider("maple", ConsoleColor.DarkYellow);
@@ -161,7 +163,7 @@ public static class StageSteps
                 $"asks EZEHR for an enrollment invite for its patient {providerPatientId} (Sam)",
                 async () =>
                 {
-                    using HttpClient client = ProviderClient(slug);
+                    using HttpClient client = ProviderClient(baseUrl, slug);
                     return await ProviderCalls.InviteAsync(client, providerPatientId);
                 }
             );
@@ -171,7 +173,7 @@ public static class StageSteps
         {
             return new Step(actor, action, async () =>
             {
-                using HttpClient client = ProviderClient(slug);
+                using HttpClient client = ProviderClient(baseUrl, slug);
                 return await ProviderCalls.PushAsync(
                     client,
                     PfxFile.Load(ToolPaths.Pki($"{slug}.pfx")),
@@ -192,7 +194,7 @@ public static class StageSteps
                 }
                 // Refused is the expected answer, so the step works whatever the server says.
                 using HttpClient client = NetworkClient.Create(
-                    NetworkClient.BaseUrl,
+                    baseUrl,
                     withSelfSignedCertificate ? ToolPaths.Pki("broker.pfx") : null
                 );
                 await RecordReads.ReadAsync(
@@ -232,7 +234,7 @@ public static class StageSteps
                 async () =>
                 {
                     await PlatformCalls.RegisterProviderAsync(
-                        NetworkClient.BaseUrl,
+                        baseUrl,
                         JoiningProviderSlug,
                         northwindName
                     );
@@ -255,7 +257,7 @@ public static class StageSteps
                     {
                         return false;
                     }
-                    using HttpClient client = AppClient();
+                    using HttpClient client = AppClient(baseUrl);
                     kidneyResult = await KidneyCheckApp.ReadEgfrLabsAsync(client, patientId);
                     return kidneyResult is not null;
                 }
@@ -276,7 +278,7 @@ public static class StageSteps
                         );
                         return false;
                     }
-                    using HttpClient client = AppClient();
+                    using HttpClient client = AppClient(baseUrl);
                     return await KidneyCheckApp.WriteSignedNoteAsync(
                         client,
                         PfxFile.Load(ToolPaths.Pki("kidney-check.pfx")),
@@ -294,7 +296,7 @@ public static class StageSteps
                     {
                         return false;
                     }
-                    using HttpClient client = AppClient();
+                    using HttpClient client = AppClient(baseUrl);
                     return await AskForMedicationsOutsideScopeAsync(client, patientId);
                 }
             ),
@@ -305,7 +307,7 @@ public static class StageSteps
                 async () =>
                 {
                     await PlatformCalls.RegisterAppAsync(
-                        NetworkClient.BaseUrl,
+                        baseUrl,
                         JoiningAppSlug,
                         joiningApp.DisplayName,
                         joiningApp.AppScope!.Value,
@@ -323,7 +325,7 @@ public static class StageSteps
                     {
                         return false;
                     }
-                    return await MedicationCheckApp.RunAsync(NetworkClient.BaseUrl, patientId);
+                    return await MedicationCheckApp.RunAsync(baseUrl, patientId);
                 }
             ),
             // Sam checks in at Riverside, which needs its own link to write the visit later.
@@ -346,7 +348,7 @@ public static class StageSteps
                         );
                         return false;
                     }
-                    using HttpClient client = ProviderClient("riverside");
+                    using HttpClient client = ProviderClient(baseUrl, "riverside");
                     return await ProviderCalls.LaunchAsync(
                         client,
                         "RPC-1107",
@@ -379,7 +381,7 @@ public static class StageSteps
                 "reads its own audit trail for Sam: what its clinicians and its system did, with the emergency reason",
                 async () =>
                 {
-                    using HttpClient client = ProviderClient("riverside");
+                    using HttpClient client = ProviderClient(baseUrl, "riverside");
                     return await ProviderCalls.ReadAuditAsync(
                         client,
                         new OrganizationAuditQuery(
@@ -407,14 +409,14 @@ public static class StageSteps
         return PfxFile.Describe(ToolPaths.Pki(pfxFileName));
     }
 
-    private static HttpClient ProviderClient(string slug)
+    private static HttpClient ProviderClient(string baseUrl, string slug)
     {
-        return NetworkClient.Create(NetworkClient.BaseUrl, ToolPaths.Pki($"{slug}.pfx"));
+        return NetworkClient.Create(baseUrl, ToolPaths.Pki($"{slug}.pfx"));
     }
 
-    private static HttpClient AppClient()
+    private static HttpClient AppClient(string baseUrl)
     {
-        return NetworkClient.Create(NetworkClient.BaseUrl, ToolPaths.Pki("kidney-check.pfx"));
+        return NetworkClient.Create(baseUrl, ToolPaths.Pki("kidney-check.pfx"));
     }
 
     /// <summary>
@@ -475,9 +477,9 @@ public static class StageSteps
         {
             return await step.RunAsync();
         }
-        catch (ToolException exception)
+        catch (Exception exception) when (ToolApp.IsExpectedFailure(exception))
         {
-            NetworkLog.WriteInColor(Color.Red, $"  {exception.Message}");
+            NetworkLog.WriteInColor(Color.Red, $"  {ToolApp.DescribeFailure(exception)}");
             return false;
         }
     }

@@ -62,11 +62,19 @@ public sealed class DemoResetCommand : AsyncCommand<DemoResetSettings>
         console.WriteLine($"database: {ToolDatabase.Describe()}");
         if (!settings.Confirmed)
         {
-            string typed = console.Prompt(
-                new TextPrompt<string>(
-                    "This deletes every patient, record, grant and audit event there, and the Northwind and Medication Check organizations. Type reset:"
-                ).AllowEmpty()
-            );
+            const string question =
+                "This deletes every patient, record, grant and audit event there, and the Northwind and Medication Check organizations. Type reset:";
+            string typed;
+            if (Console.IsInputRedirected)
+            {
+                // A prompt can't read piped input; a script answers on stdin, or passes --yes.
+                console.WriteLine(question);
+                typed = Console.In.ReadLine() ?? "";
+            }
+            else
+            {
+                typed = console.Prompt(new TextPrompt<string>(question).AllowEmpty());
+            }
             if (typed.Trim() != "reset")
             {
                 console.WriteLine("Nothing was deleted.");
