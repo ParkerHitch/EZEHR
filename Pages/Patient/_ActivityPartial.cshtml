@@ -1,12 +1,21 @@
 @using EZEHR.Models
-@model IReadOnlyList<ActivityLine>
+@model PatientActivity
 
-@if (Model.Count == 0)
+@if (Model.ChainStatus is not null && Model.ChainIntact)
+{
+    <p class="small text-success mb-1">@Model.ChainStatus</p>
+    <p class="small text-muted">@Copy.AuditLogHint</p>
+}
+@if (!Model.ChainIntact)
+{
+    <div class="alert alert-danger" role="alert">@Model.ChainStatus</div>
+}
+@if (Model.Lines.Count == 0)
 {
     <p class="text-muted">Nothing yet.</p>
 }
 <ul class="list-group">
-    @foreach (ActivityLine line in Model)
+    @foreach (ActivityLine line in Model.Lines)
     {
         <li class="list-group-item @(line.Blocked ? "list-group-item-danger" : "")">
             @line.Text <span class="text-muted">· @line.Time</span>

@@ -54,3 +54,13 @@ public sealed record AccessOverview(
 
 /// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>
 public sealed record ActivityLine(long Id, string Text, string Time, bool Blocked);
+
+/// <summary>
+/// The Activity page: the lines, newest first, and what checking the log's hash chain found, in words. ChainStatus
+/// is null while there is nothing to check.
+/// </summary>
+public sealed record PatientActivity(
+    IReadOnlyList<ActivityLine> Lines,
+    bool ChainIntact,
+    string? ChainStatus
+);

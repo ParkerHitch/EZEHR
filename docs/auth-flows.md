@@ -522,6 +522,7 @@ flowchart TB
 | Record signature (JWS) | This exact record was written by Lakeside (or the app; or Riverside, for a note authored by Dr. Rivera), and hasn't changed since | That its medical content is correct |
 | Grant | Sam agreed: this party, this scope, until this time | Anything after it's revoked or expired |
 | Audit event | That an attempt happened, by whom, with what outcome and claimed purpose, and which organization vouched for the actor | Nothing beyond that; it's evidence, not prevention |
+| Audit hash chain (each event's SHA-256 fingerprint covers the patient's previous event; the Activity page rechecks it on every load) | That no event was changed, removed from the middle or slipped in behind the app's back | That nobody rewrote the whole chain or cut off its newest events; only a fingerprint noted earlier shows that (see `docs/superpowers/specs/2026-11-17-audit-hash-chain-design.md`) |
 | Key Vault envelope encryption | Data at rest is unreadable without EZEHR's managed identity calling Key Vault | That EZEHR itself can't read it (it can, behind the gate; see the spec's honest limits) |
 
 ---

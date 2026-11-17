@@ -268,5 +268,5 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
 - The polling mechanism (htmx or a few lines of script).
 - Visual design. Mockups can come later.
 - Seed data content, and the broker tool's details.
-- Whether the audit log is hash-chained (nice to have).
+- Whether the audit log is hash-chained (nice to have). **Built 2026-11-17:** a SHA-256 chain per patient, checked on every load of the Activity page. See `2026-11-17-audit-hash-chain-design.md` for what it does and doesn't prove.
 - How the two team members split the work.

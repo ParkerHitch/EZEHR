@@ -119,6 +119,10 @@ public sealed class Db(IConfiguration configuration)
                            WHERE name = N'ix_audit_events_actor_org' AND object_id = OBJECT_ID(N'dbo.audit_events'))
             CREATE INDEX ix_audit_events_actor_org ON dbo.audit_events(actor_org_uri, id);
             """,
+        """
+            IF COL_LENGTH(N'dbo.audit_events', N'chain_hash') IS NULL
+            ALTER TABLE dbo.audit_events ADD chain_hash CHAR(64) NULL;
+            """,
     ];
 
     // Identifier columns use a binary collation, because SQL Server's default collation is case-insensitive

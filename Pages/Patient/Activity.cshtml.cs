@@ -9,19 +9,21 @@ namespace EZEHR.Pages.Patient;
 public sealed class ActivityModel(CallerManager callerManager, ActivityManager activityManager)
     : PageModel
 {
-    public IReadOnlyList<ActivityLine> Lines { get; private set; } = [];
+    public PatientActivity Activity { get; private set; } = new([], true, null);
 
     public async Task<IActionResult> OnGetAsync()
     {
-        Lines = await activityManager.ListActivityAsync(callerManager.PatientIdFrom(User)!.Value);
+        Activity = await activityManager.ListActivityAsync(
+            callerManager.PatientIdFrom(User)!.Value
+        );
         return Page();
     }
 
     public async Task<IActionResult> OnGetListAsync()
     {
-        IReadOnlyList<ActivityLine> lines = await activityManager.ListActivityAsync(
+        PatientActivity activity = await activityManager.ListActivityAsync(
             callerManager.PatientIdFrom(User)!.Value
         );
-        return Partial("_ActivityPartial", lines);
+        return Partial("_ActivityPartial", activity);
     }
 }

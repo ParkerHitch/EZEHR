@@ -254,6 +254,42 @@ public class PatientPagesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Activity_page_shows_the_log_is_verified()
+    {
+        Assert.DoesNotContain("Log verified", await ReadAsync("/Patient/Activity"));
+        await _app.WithAsync(services =>
+            services
+                .GetRequiredService<RecordManager>()
+                .ReadFullRecordAsync(
+                    Guid.NewGuid(),
+                    new UnverifiedCaller(DenyReason.NoCertificate),
+                    "treatment"
+                )
+        );
+        Party kidneyCheck = OrgDirectory.Demo.FindByUri(OrgDirectory.KidneyCheckUri)!;
+        Guid sam = (
+            await _app.WithAsync(services =>
+                services
+                    .GetRequiredService<InviteManager>()
+                    .FindLinkedPatientAsync(OrgDirectory.ProviderUri("lakeside"), "LUC-20417")
+            )
+        )!.Value;
+        await _app.WithAsync(services =>
+            services
+                .GetRequiredService<RecordManager>()
+                .ReadEgfrLabsAsync(sam, new VerifiedCaller(kidneyCheck, null))
+        );
+
+        string page = await ReadAsync("/Patient/Activity");
+        string poll = await ReadAsync("/Patient/Activity?handler=List");
+
+        Assert.Matches("Log verified ✓ · 1 event · fingerprint [0-9a-f]{4}( [0-9a-f]{4}){3}", page);
+        Assert.Contains(Copy.AuditLogHint, page);
+        Assert.Contains("Kidney Check read your lab results", poll);
+        Assert.Contains("Log verified ✓", poll);
+    }
+
+    [Fact]
     public async Task Cookie_for_a_deleted_patient_is_signed_out()
     {
         Assert.Equal(HttpStatusCode.OK, (await _phone.GetAsync("/Patient/Home")).StatusCode);
