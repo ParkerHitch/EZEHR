@@ -18,8 +18,11 @@ namespace EZEHR.Tools.Commands;
 public static class DemoCommand
 {
     public const string Usage = """
-          demo reset [--yes]   empty the database and take Northwind off the network, before `stage`
+          demo reset [--yes]   empty the database and take Northwind and Medication Check off the network,
+                               before `stage`
           demo status          Sam's patient id, what the record holds, and the latest activity
+          demo tamper          edit one of Sam's audit events in the database, as an insider would; run it
+                               again to put it back. Sam's Activity shows the log as broken, then verified
         """;
 
     public static async Task<int> RunAsync(string[] args)
@@ -30,6 +33,8 @@ public static class DemoCommand
                 return await ResetAsync(args.Contains("--yes"));
             case "status":
                 return await StatusAsync();
+            case "tamper":
+                return await TamperAsync();
             default:
                 Console.Error.WriteLine($"usage:\n{Usage}");
                 return 1;
@@ -48,7 +53,7 @@ public static class DemoCommand
         if (!confirmed)
         {
             Console.Write(
-                "This deletes every patient, record, grant and audit event there, and Northwind's organization. Type reset: "
+                "This deletes every patient, record, grant and audit event there, and the Northwind and Medication Check organizations. Type reset: "
             );
             if (Console.ReadLine()?.Trim() != "reset")
             {
@@ -57,15 +62,19 @@ public static class DemoCommand
             }
         }
         await db.DeleteAllDataAsync();
-        // Stage opens with Northwind joining the network, so it has to start off it. Only Northwind's row goes:
-        // the other organizations, and any sysadmin edits to them (Riverside's tenant), stay.
+        // Stage has Northwind and Medication Check join the network, so both have to start off it. Only their rows
+        // go: the other organizations, and any sysadmin edits to them (Riverside's tenant), stay.
         await using SqlConnection connection = await db.OpenAsync();
         await connection.ExecuteAsync(
-            "DELETE FROM organizations WHERE uri = @northwindUri",
-            new { northwindUri = OrgDirectory.ProviderUri(StageCommand.JoiningProviderSlug) }
+            "DELETE FROM organizations WHERE uri IN (@northwindUri, @appUri)",
+            new
+            {
+                northwindUri = OrgDirectory.ProviderUri(StageCommand.JoiningProviderSlug),
+                appUri = OrgDirectory.AppUri(StageCommand.JoiningAppSlug),
+            }
         );
         Console.WriteLine(
-            "Database emptied, and Northwind is off the network until stage onboards it. Next: ezehr-tools stage"
+            "Database emptied, and Northwind and Medication Check are off the network until stage adds them. Next: ezehr-tools stage"
         );
         return 0;
     }
@@ -91,12 +100,21 @@ public static class DemoCommand
         Console.WriteLine($"record entries:   {entries}");
         IEnumerable<string> grants = await connection.QueryAsync<string>(
             """
-            SELECT CONCAT(grantee_name, ' (', status, ')') FROM grants
+            SELECT CONCAT(grantee_name, ' (', status,
+                          IIF(emergency_reason IS NULL, '', CONCAT(', EMERGENCY: ', emergency_reason)), ')')
+            FROM grants
             WHERE patient_id = @samId ORDER BY created_at
             """,
             new { samId }
         );
         Console.WriteLine($"grants:           {string.Join(", ", grants)}");
+        string? emergencyCode = await connection.ExecuteScalarAsync<string?>(
+            "SELECT emergency_code FROM patients WHERE id = @samId",
+            new { samId }
+        );
+        Console.WriteLine(
+            $"emergency code:   {emergencyCode ?? "off (Sam turns it on from Access → Emergency access)"}"
+        );
         IEnumerable<string> activity = await connection.QueryAsync<string>(
             """
             SELECT TOP 8 CONCAT(FORMAT(at, 'HH:mm:ss'), '  ', action, '  ',
@@ -123,7 +141,6 @@ public static class DemoCommand
         return 0;
     }
 
-    /// <summary>Sam is whoever enrolled with Lakeside's invite for LUC-20417.</summary>
     /// <summary>Sam is whoever redeemed one of the demo providers' invites for Sam's patient ids.</summary>
     public static async Task<Guid?> FindSamAsync()
     {
@@ -149,6 +166,59 @@ public static class DemoCommand
             );
         }
         return samId;
+    }
+
+    /// <summary>
+    /// Flips granted on the broker's first refused request to Sam, straight in the database, so the log now says the
+    /// broker got in. The fingerprints no longer match, and Sam's Activity shows the warning on its next load.
+    /// Flipping it again restores the event exactly, and the same fingerprint comes back.
+    /// </summary>
+    private static async Task<int> TamperAsync()
+    {
+        Guid? samId = await FindSamAsync();
+        if (samId is null)
+        {
+            return 1;
+        }
+        Db database = OpenDatabase()!;
+        await using SqlConnection connection = await database.OpenAsync();
+        // The broker's no-certificate attempt: the reason stays put when granted flips, so this finds it both ways.
+        long? eventId = await connection.QueryFirstOrDefaultAsync<long?>(
+            """
+            SELECT TOP 1 id FROM audit_events
+            WHERE patient_id = @samId AND reason = @reason ORDER BY id
+            """,
+            new { samId, reason = nameof(DenyReason.NoCertificate) }
+        );
+        if (eventId is null)
+        {
+            Console.Error.WriteLine(
+                "  No refused broker request to edit yet: run stage's broker step first."
+            );
+            return 1;
+        }
+        bool nowGranted = await connection.ExecuteScalarAsync<bool>(
+            """
+            UPDATE audit_events SET granted = 1 - granted OUTPUT inserted.granted
+            WHERE id = @eventId
+            """,
+            new { eventId }
+        );
+        Console.WriteLine(
+            nowGranted
+                ? $"Audit event {eventId} now says the broker's request was granted. Reload Sam's Activity: the log shows as changed."
+                : $"Audit event {eventId} is back as it was (refused). Reload Sam's Activity: the log verifies again."
+        );
+        AuditChainCheck chain = await new AuditManager(
+            database,
+            TimeProvider.System
+        ).VerifyChainAsync(samId.Value);
+        Console.WriteLine(
+            chain.Intact
+                ? $"audit log: intact, {chain.EventCount} events, head {chain.HeadHash}"
+                : $"audit log: BROKEN at event {chain.FirstBrokenId} of {chain.EventCount}"
+        );
+        return 0;
     }
 
     private static Db? OpenDatabase()

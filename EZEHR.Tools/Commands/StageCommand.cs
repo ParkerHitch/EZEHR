@@ -22,6 +22,9 @@ public static class StageCommand
     /// <summary>The provider that joins the network on camera. `demo reset` takes it off first.</summary>
     public const string JoiningProviderSlug = "northwind";
 
+    /// <summary>The app that joins the network on camera, after Kidney Check. `demo reset` takes it off first.</summary>
+    public const string JoiningAppSlug = "medication-check";
+
     private const int BannerWidth = 76;
 
     /// <summary>Certificate is read when the banner prints, since step 1 issues one.</summary>
@@ -137,6 +140,19 @@ public static class StageCommand
             "an app Sam allowed to read lab results",
             () => DescribeCertificate("kidney-check.pfx"),
             ConsoleColor.Yellow
+        );
+        Actor kidneyCheckOverreaching = kidneyCheck with
+        {
+            Role = "the same app, asking for more than Sam allowed",
+        };
+        Actor medicationCheck = new(
+            MedicationCheckCommand.AppName,
+            "a new app, allowed to read medications as well as labs once Sam turns it on",
+            () => DescribeCertificate("medication-check.pfx"),
+            ConsoleColor.DarkGreen
+        );
+        Organization joiningApp = OrgDirectory.DemoOrganizations.Single(organization =>
+            organization.Uri == OrgDirectory.AppUri(JoiningAppSlug)
         );
         Actor brokerWithoutCertificate = new(
             "Data broker",
@@ -272,6 +288,46 @@ public static class StageCommand
                         ) == 0;
                 }
             ),
+            new Step(
+                kidneyCheckOverreaching,
+                "asks for Sam's medications, which its grant doesn't cover",
+                async () =>
+                {
+                    if (await FindSamAsync() is not Guid patientId)
+                    {
+                        return false;
+                    }
+                    using HttpClient client = AppClient();
+                    return await AskForMedicationsOutsideScopeAsync(client, patientId);
+                }
+            ),
+            // A second app joins the platform; Sam turns it on from Access → Apps before the next step.
+            new Step(
+                platform,
+                $"adds {joiningApp.DisplayName} to the network: a second app, whose scope also covers medications",
+                async () =>
+                {
+                    return await CertsCommand.RegisterAppAsync(
+                            JoiningAppSlug,
+                            joiningApp.DisplayName,
+                            joiningApp.AppScope!.Value,
+                            joiningApp.AppDescription!
+                        ) == 0;
+                }
+            ),
+            new Step(
+                medicationCheck,
+                "reads Sam's medications and kidney labs, checks who signed each one, and writes a signed note if a medicine needs a second look",
+                async () =>
+                {
+                    if (await FindSamAsync() is not Guid patientId)
+                    {
+                        return false;
+                    }
+                    return await MedicationCheckCommand.RunAsync(["run", patientId.ToString()])
+                        == 0;
+                }
+            ),
             // Sam checks in at Riverside, which needs its own link to write the visit later.
             Invite(riverside, "riverside", "RPC-1107"),
             // The visit: sign-in, share code, approval and reads happen on the phone and the clinician page.
@@ -281,7 +337,7 @@ public static class StageCommand
                 "RPC-1107",
                 "pushes today's visit: Dr. Rivera's plan and a nephrology referral"
             ),
-            // Sam revokes Dr. Rivera's access; then the broker.
+            // Sam revokes Dr. Rivera's access; then the broker, then emergency access (browser only).
             Broker(
                 brokerWithoutCertificate,
                 $"asks for Sam's whole record, claiming \"{BrokerCommand.ClaimedPurpose}\"",
@@ -294,7 +350,7 @@ public static class StageCommand
             ),
             new Step(
                 riverside,
-                "reads its own audit trail for Sam: what its clinicians and its system did",
+                "reads its own audit trail for Sam: what its clinicians and its system did, with the emergency reason",
                 async () =>
                 {
                     using HttpClient client = ProviderClient("riverside");
@@ -332,6 +388,44 @@ public static class StageCommand
     private static HttpClient AppClient()
     {
         return NetworkClient.Create(NetworkClient.BaseUrl, ToolPaths.Pki("kidney-check.pfx"));
+    }
+
+    /// <summary>
+    /// Kidney Check asks for medications with its labs-only grant. The refusal is the point, so a 403 counts as the
+    /// step working; anything else is reported as a failure.
+    /// </summary>
+    private static async Task<bool> AskForMedicationsOutsideScopeAsync(
+        HttpClient client,
+        Guid patientId
+    )
+    {
+        string path = $"api/network/patients/{patientId}/read-medications";
+        NetworkLog.Request("GET", path, "medications, with a grant for lab results only");
+        using HttpResponseMessage response = await client.GetAsync(path);
+        if (response.IsSuccessStatusCode)
+        {
+            NetworkLog.WriteInColor(
+                ConsoleColor.Red,
+                $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   expected a refusal: the scope isn't enforced"
+            );
+            return false;
+        }
+        string body = await response.Content.ReadAsStringAsync();
+        NetworkLog.WriteInColor(
+            ConsoleColor.Red,
+            $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   {body}".TrimEnd()
+        );
+        if (!body.Contains(nameof(DenyReason.ScopeDenied)))
+        {
+            Console.Error.WriteLine(
+                $"  Expected ScopeDenied: is {KidneyCheckCommand.AppName} still turned on for Sam?"
+            );
+            return false;
+        }
+        Console.WriteLine(
+            $"  Refused: Sam allowed {KidneyCheckCommand.AppName} lab results only. Sam's Activity shows the attempt."
+        );
+        return true;
     }
 
     private static void PrintBanner(int number, int count, Step step)

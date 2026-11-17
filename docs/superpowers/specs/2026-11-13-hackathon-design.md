@@ -99,6 +99,8 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
    - Sam signs in on a phone with a passkey and sees everything in one timeline.
    - The **Kidney Check** example app, which Sam allowed at enrollment to read lab results only, has posted a note: kidney function dropped 34% across three providers, and no single result was flagged.
    - Sam's access list shows the app's grant ("Kidney Check · lab results only · you allowed this Oct 2 · Revoke").
+   - Kidney Check asks for Sam's medications too and is refused: its grant covers lab results only.
+   - A second app, **Medication Check**, joins the platform (added 2026-11-17). Sam turns it on, and it notes the urgent-care ibuprofen next to the falling kidney function.
 3. **Verified sharing at the visit.**
    - Sam taps Share, picks a duration, and shows a short code (with a QR code of it).
    - Dr. Rivera signs in to the clinician page through the clinic's Entra ID by **tapping a physical security key**.
@@ -109,7 +111,9 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
    - A data broker's system asks the network for Sam's record, claiming the purpose is "treatment."
    - First it has no certificate; then it has one that EZCA didn't issue. Both requests are refused.
    - Sam's activity shows: "Blocked: unverified requester claimed treatment."
-5. **Visibility and expiry.** Sam's phone showed each read live. When the grant expires, or Sam revokes it, Dr. Rivera's open record locks itself within a couple of seconds and shows "access ended."
+   - The activity log is hash-chained and shows "Log verified ✓". Editing an event in the database turns it red (optional, backstage `demo tamper`).
+5. **Emergency (break-glass).** Sam has turned on emergency access. Dr. Rivera enters Sam's emergency code with a reason and gets one hour of access with no approval step. Sam's phone shows a red alert, and Riverside's own audit trail shows the reason.
+6. **Visibility and expiry.** Sam's phone showed each read live. When the grant expires, or Sam revokes it, Dr. Rivera's open record locks itself within a couple of seconds and shows "access ended."
 
 **Stretch goals, in priority order:**
 1. Conditional Access requiring phishing-resistant sign-in for the clinician app (needs the P2 trial; about 30 minutes).

@@ -19,7 +19,6 @@ with a second example app that has a different scope.
 
 - Scopes as a free-form list of resource types. Two named scopes are enough to show the model.
 - An app store, reviews, or any vetting beyond "the platform operator registered it".
-- Putting Medication Check into `stage` or `demo`.
 
 ## Approaches considered
 
@@ -55,6 +54,12 @@ with a second example app that has a different scope.
   and registers it. `ezehr-tools medication-check run <patientId>` is the second example app: it reads medications
   and eGFR labs, verifies every signature itself, and when an anti-inflammatory painkiller is active and eGFR has
   dropped more than 25% it writes one signed note. Like Kidney Check's rule, it is deliberately not clinical advice.
+
+## In the demo
+
+Added 2026-11-17: `stage` step 11 has Kidney Check ask for medications and get `403 ScopeDenied`. Step 12 has the
+platform register Medication Check (`demo reset` deletes its row, as it does Northwind's). Sam then turns it on from
+Access → Apps, and step 13 runs it. See `docs/components/13-tools-and-demo.md`.
 
 ## Deploying to a database that already has organizations
 
