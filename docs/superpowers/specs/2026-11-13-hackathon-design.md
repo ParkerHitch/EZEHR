@@ -40,7 +40,7 @@
    - **EZCA certificates** for every organization and app, used for mutual TLS and record signatures
    - encryption at rest with keys in Azure Key Vault
    - one server-side access check
-3. **The platform's app model:** an example app that reads only what the patient granted, with that grant visible and revocable.
+3. **The platform's app model:** an example app that reads only what the patient granted, with that grant visible and revocable. *(Updated 2026-11-17: apps are now rows in the `organizations` table with a declared scope, the Access page lists all of them, and a second example app, Medication Check, has a wider scope. See `2026-11-17-app-platform-design.md`.)*
 4. **Usable:** a patient or clinician never sees a password, a key, or a certificate dialog.
 5. A design that holds up in Q&A with identity and PKI experts (see section 10).
 6. **A small openness feature:** "Export my whole record" downloads a FHIR bundle.

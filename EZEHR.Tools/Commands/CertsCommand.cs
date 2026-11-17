@@ -20,14 +20,17 @@ namespace EZEHR.Tools.Commands;
 /// - with no flag, every demo organization and app in OrgDirectory;
 /// - --platform, the platform operator's certificate, whose thumbprint the server pins;
 /// - --provider, onboards a new provider: registers its name on the EZCA CA, issues its certificate, and adds it to
-///   EZEHR through register-provider with the platform certificate.
+///   EZEHR through register-provider with the platform certificate;
+/// - --app, the same for a new app, through register-app: patients then see it on their Access page, off.
 /// Also the broker's deliberately self-made one.
 /// </summary>
 public static class CertsCommand
 {
     public const string Usage = """
           certs issue [--ca local|ezca] [--key ec|rsa] [--ca-id <id>] [--template-id <id>]
-              [--platform | --provider <slug> --name "<display name>" [--invite <providerPatientId>]]
+              [--platform | --provider <slug> --name "<display name>" [--invite <providerPatientId>]
+               | --app <slug> --name "<display name>" --scope <LabsAndNotes|MedicationsLabsAndNotes>
+                 --description "<what patients read>"]
           certs broker
         """;
 
@@ -95,6 +98,43 @@ public static class CertsCommand
 
         string? caId = CommandLine.Option(args, "--ca-id");
         string? templateId = CommandLine.Option(args, "--template-id");
+        string? appSlug = CommandLine.Option(args, "--app");
+        if (appSlug is not null)
+        {
+            string? appDescription = CommandLine.Option(args, "--description");
+            if (
+                platform
+                || providerSlug is not null
+                || !Regex.IsMatch(appSlug, OrgDirectory.SlugPattern)
+                || string.IsNullOrWhiteSpace(providerName)
+                || string.IsNullOrWhiteSpace(appDescription)
+                || !Enum.TryParse(CommandLine.Option(args, "--scope"), out GrantScope appScope)
+                || appScope == GrantScope.Full
+            )
+            {
+                Console.Error.WriteLine($"usage:\n{Usage}");
+                return 1;
+            }
+            if (!File.Exists(PlatformPfxPath))
+            {
+                Console.Error.WriteLine(
+                    $"{PlatformPfxPath} not found: run `certs issue --ca {authority} --platform` first."
+                );
+                return 1;
+            }
+            int appIssuedExitCode = await IssueOrganizationCertificateAsync(
+                authority,
+                OrgDirectory.AppCommonName(appSlug),
+                keyType,
+                caId,
+                templateId
+            );
+            if (appIssuedExitCode != 0)
+            {
+                return appIssuedExitCode;
+            }
+            return await RegisterAppAsync(appSlug, providerName!, appScope, appDescription!);
+        }
         if (providerSlug is not null)
         {
             int issuedExitCode = await IssueProviderCertificateAsync(
@@ -185,6 +225,24 @@ public static class CertsCommand
         string? templateId
     )
     {
+        return await IssueOrganizationCertificateAsync(
+            authority,
+            OrgDirectory.ProviderCommonName(slug),
+            keyType,
+            caId,
+            templateId
+        );
+    }
+
+    /// <summary>Registers the CN on the EZCA CA (when it's new there), issues its certificate and saves it to .pki/.</summary>
+    private static async Task<int> IssueOrganizationCertificateAsync(
+        string authority,
+        string commonName,
+        string keyType,
+        string? caId,
+        string? templateId
+    )
+    {
         DefaultAzureCredential credential = new();
         ICertificateAuthorityService? certificateAuthority = await CreateAuthorityAsync(
             authority,
@@ -196,7 +254,6 @@ public static class CertsCommand
         {
             return 1;
         }
-        string commonName = OrgDirectory.ProviderCommonName(slug);
         if (certificateAuthority is EzcaCertificateAuthorityService ezca)
         {
             await RegisterOnEzcaAsync(ezca, credential, commonName);
@@ -250,6 +307,57 @@ public static class CertsCommand
                 displayName,
                 OrgDirectory.ProviderCommonName(slug),
                 null
+            )
+        );
+        return 0;
+    }
+
+    /// <summary>Adds the app to EZEHR with the platform certificate; already there counts as done.</summary>
+    public static async Task<int> RegisterAppAsync(
+        string slug,
+        string displayName,
+        GrantScope scope,
+        string description
+    )
+    {
+        const string path = "api/network/register-app";
+        using HttpClient client = NetworkClient.Create(NetworkClient.BaseUrl, PlatformPfxPath);
+        NetworkLog.Request(
+            "POST",
+            path,
+            $"{displayName}, certificate CN {OrgDirectory.AppCommonName(slug)}, scope {scope}"
+        );
+        using HttpResponseMessage response = await NetworkClient.PostJsonAsync(
+            client,
+            path,
+            new RegisterAppRequest(slug, displayName, scope, description)
+        );
+        if (response.StatusCode == HttpStatusCode.Created)
+        {
+            NetworkLog.Succeeded(
+                response,
+                $"{displayName} is on the network as {OrgDirectory.AppUri(slug)}; patients can turn it on"
+            );
+        }
+        else if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            await NetworkLog.FailedAsync(response);
+            Console.WriteLine($"  {OrgDirectory.AppUri(slug)} was already on the network.");
+        }
+        else
+        {
+            await NetworkLog.FailedAsync(response);
+            return 1;
+        }
+        ToolOrganizations.Add(
+            new Organization(
+                OrgDirectory.AppUri(slug),
+                PartyKind.App,
+                displayName,
+                OrgDirectory.AppCommonName(slug),
+                null,
+                scope,
+                description
             )
         );
         return 0;

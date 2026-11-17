@@ -127,9 +127,16 @@ public sealed class AccessManager(
     {
         return scope switch
         {
-            GrantScope.Full => action is AccessAction.ReadFullRecord or AccessAction.ReadEgfrLabs,
+            GrantScope.Full => action
+                is AccessAction.ReadFullRecord
+                    or AccessAction.ReadEgfrLabs
+                    or AccessAction.ReadMedications,
             GrantScope.LabsAndNotes => action
                 is AccessAction.ReadEgfrLabs
+                    or AccessAction.WriteSignedNote,
+            GrantScope.MedicationsLabsAndNotes => action
+                is AccessAction.ReadEgfrLabs
+                    or AccessAction.ReadMedications
                     or AccessAction.WriteSignedNote,
             _ => false,
         };

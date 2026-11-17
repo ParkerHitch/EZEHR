@@ -6,8 +6,8 @@ using EZEHR.Tools.Net;
 namespace EZEHR.Tools;
 
 /// <summary>
-/// The tools' directory of organizations, since they have no database: the five demo organizations plus every
-/// provider `certs issue --provider` onboarded, which it keeps in .pki/organizations.json.
+/// The tools' directory of organizations, since they have no database: the six demo organizations plus every
+/// provider or app `certs issue --provider` or `--app` onboarded, which it keeps in .pki/organizations.json.
 /// </summary>
 public static class ToolOrganizations
 {

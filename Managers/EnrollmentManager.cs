@@ -141,7 +141,7 @@ public sealed class EnrollmentManager(
 
         if (kidneyCheckOptIn)
         {
-            await grantManager.TurnOnKidneyCheckAsync(patientId);
+            await grantManager.TurnOnAppAsync(patientId, OrgDirectory.KidneyCheckUri);
         }
         return new EnrollmentResult(true, patientId, null);
     }

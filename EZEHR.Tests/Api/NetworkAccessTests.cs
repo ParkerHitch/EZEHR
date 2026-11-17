@@ -146,6 +146,54 @@ public class NetworkAccessTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Medication_app_reads_medications_and_a_labs_only_app_is_refused()
+    {
+        X509Certificate2 medicationCheck = _app.Pki.Issue(OrgDirectory.MedicationCheckCommonName);
+        await _app.WithAsync(async services =>
+        {
+            JsonElement ibuprofen = JsonSerializer.SerializeToElement(
+                new
+                {
+                    resourceType = "MedicationStatement",
+                    id = "ibuprofen",
+                    status = "active",
+                    medicationCodeableConcept = new { text = "ibuprofen 600 mg" },
+                }
+            );
+            await services
+                .GetRequiredService<RecordManager>()
+                .StoreEntryAsync(
+                    _sam,
+                    "urn:provider:maple|MedicationStatement/ibuprofen",
+                    "MedicationStatement",
+                    Sign(_maple, ibuprofen)
+                );
+            GrantManager grants = services.GetRequiredService<GrantManager>();
+            await grants.TurnOnAppAsync(_sam, OrgDirectory.MedicationCheckUri);
+            return await grants.TurnOnAppAsync(_sam, OrgDirectory.KidneyCheckUri);
+        });
+
+        HttpResponseMessage allowed = await _app.Client(medicationCheck)
+            .GetAsync($"/api/network/patients/{_sam}/read-medications");
+        HttpResponseMessage refused = await _app.Client(_kidney)
+            .GetAsync($"/api/network/patients/{_sam}/read-medications");
+
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+        JsonElement body = await allowed.Content.ReadFromJsonAsync<JsonElement>();
+        JsonElement entry = Assert.Single(body.GetProperty("entries").EnumerateArray());
+        Assert.Equal("ibuprofen", entry.GetProperty("resource").GetProperty("id").GetString());
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        JsonElement refusal = await refused.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ScopeDenied", refusal.GetProperty("error").GetString());
+        IReadOnlyList<AuditEvent> events = await EventsAsync();
+        Assert.Equal("Medication Check read your medications", Copy.ActivityLine(events[^2]));
+        Assert.Equal(
+            "Blocked: Kidney Check asked for more than you allowed",
+            Copy.ActivityLine(events[^1])
+        );
+    }
+
+    [Fact]
     public async Task App_with_grant_reads_only_egfr_labs()
     {
         await GrantKidneyCheckAsync();

@@ -133,16 +133,11 @@ With the local test CA (the default now), the laptop is the CA: `certs issue` si
 
 ### 4b-2. The organizations table
 
-`organizations` is the one list of who each organization is: `uri` (its identity on the platform), `kind` (`Provider` or `App`), `display_name`, `certificate_cn` (the CN on its EZCA certificate, compared without case), and `entra_tenant_id` (providers only; a tenant belongs to at most one provider). The server reads it on every request that needs it, so an edit takes effect immediately.
+`organizations` is the one list of who each organization is: `uri` (its identity on the platform), `kind` (`Provider` or `App`), `display_name`, `certificate_cn` (the CN on its EZCA certificate, compared without case), `entra_tenant_id` (providers only; a tenant belongs to at most one provider), and for apps `app_scope` (the most a patient can allow it: `LabsAndNotes` or `MedicationsLabsAndNotes`) and `app_description` (what the patient reads before turning it on). The server reads it on every request that needs it, so an edit takes effect immediately.
 
-- A new database starts with the five demo organizations: the app seeds them when the table is empty. Once the table has any rows the app never touches it, so a sysadmin's edits and deletions survive restarts, and `ezehr-tools demo reset` leaves the table alone.
+- A new database starts with the six demo organizations (four providers, Kidney Check and Medication Check): the app seeds them when the table is empty. Once the table has any rows the app never touches it, so a sysadmin's edits and deletions survive restarts, and `ezehr-tools demo reset` leaves the table alone.
 - **Cutting off an organization** (for example, a leaked key): delete its row. EZEHR doesn't check certificate revocation, so this is the kill switch, and it takes effect on the next request. Its certificate is then refused at the network door, its clinicians can't sign in, and records it signed no longer verify, so they drop out of every view until the row is restored.
-- **Adding a provider** goes through `POST /api/network/register-provider` (Flow 11). Only the platform operator can call it, using the platform certificate. `ezehr-tools certs issue --provider` registers the name on EZCA, issues the certificate and calls the endpoint in one run. Apps and Entra tenants are still added by hand:
-
-  ```sql
-  INSERT INTO organizations(uri, kind, display_name, certificate_cn)
-  VALUES ('urn:app:example', 'App', N'Example App', 'example.apps.ezehr');
-  ```
+- **Adding a provider** goes through `POST /api/network/register-provider` (Flow 11). Only the platform operator can call it, using the platform certificate. `ezehr-tools certs issue --provider` registers the name on EZCA, issues the certificate and calls the endpoint in one run. **Adding an app** goes through `POST /api/network/register-app` the same way: `ezehr-tools certs issue --app <slug> --name "<name>" --scope <scope> --description "<text>"`. A registered app has no access to anyone: each patient sees it on their Access page, off, and decides. Entra tenants are still set by hand (4b).
 - The tools have no database. Their directory is the demo list in `OrgDirectory`, plus every provider `certs issue --provider` onboarded, which is saved in `.pki/organizations.json` (`ToolOrganizations`).
 
 **Deployment note (moving off `App:TrustedTenants`):** before deploying, copy the tenant id out of the App Service setting `App__TrustedTenants__…` (the id is in the setting's name, with underscores where the hyphens go). Once the deployed app has started and seeded the table, run the `UPDATE` above against prod, then delete the old setting. Dr. Rivera is refused between the deploy and the `UPDATE`.
@@ -350,6 +345,8 @@ sequenceDiagram
 
 If the app tries `GET /patients/ID/read-full-record` (everything), the gate answers `ScopeDenied`. If Sam revokes the grant, the next call gets `GrantRevoked`.
 
+**More than one app.** Apps are rows in `organizations`, and each declares a scope. Sam's Access page lists every app with what it does and what it could read, each off until Sam turns it on. **Medication Check** is the second example: its scope, `MedicationsLabsAndNotes`, also allows `GET /patients/ID/read-medications`, and it notes when Sam takes an anti-inflammatory painkiller while eGFR is falling. Kidney Check calling `read-medications` gets `ScopeDenied`, because its grant is `LabsAndNotes`. The design is in `docs/superpowers/specs/2026-11-17-app-platform-design.md`.
+
 ### Flow 8: The data broker is refused (the Particle moment)
 
 ```mermaid
@@ -537,7 +534,7 @@ flowchart TB
 | `NoGrant` | Gate: no grant for this identity | "Access ended" page / 403 | Yes |
 | `GrantPending` | Gate: Sam hasn't approved yet | Waiting page / 403 | Yes |
 | `GrantRevoked` / `GrantExpired` | Gate | "Access ended" page / 403 | Yes |
-| `ScopeDenied` | Gate: an app asked for more than lab results, or a clinician tried to write | 403 | Yes |
+| `ScopeDenied` | Gate: an app asked for more than its grant's scope, or a clinician tried to write | 403 | Yes |
 
 ---
 

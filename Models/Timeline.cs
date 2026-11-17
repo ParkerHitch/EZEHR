@@ -43,13 +43,25 @@ public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke);
 public sealed record ConnectedProviderLine(string ProviderUri, string Text);
 
 /// <summary>
-/// The Access page: who can see the record (grants), which providers can add to it (links), and Kidney Check's
-/// current grant, or null when it's off (then the page offers to turn it on).
+/// One app on the Access page. What is what it may read, in words ("lab results only"). Grant is the patient's
+/// current grant for it, or null when it's off (then the page offers to turn it on).
+/// </summary>
+public sealed record AppLine(
+    string AppUri,
+    string Name,
+    string? Description,
+    string What,
+    AccessLine? Grant
+);
+
+/// <summary>
+/// The Access page: who can see the record (grants), which providers can add to it (links), and every app on the
+/// network, on or off.
 /// </summary>
 public sealed record AccessOverview(
     IReadOnlyList<AccessLine> Lines,
     IReadOnlyList<ConnectedProviderLine> ConnectedProviders,
-    AccessLine? KidneyCheck
+    IReadOnlyList<AppLine> Apps
 );
 
 /// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>

@@ -225,10 +225,10 @@ public class PatientPagesTests : IAsyncLifetime
             .Match(on, "name=\"grantId\" value=\"([0-9a-f-]+)\"")
             .Groups[1]
             .Value;
-        Assert.Contains(Copy.TurnOffKidneyCheck, on);
+        Assert.Contains(Copy.TurnOffApp("Kidney Check"), on);
         Assert.Contains(">On<", on);
         Assert.Contains("No clinicians.", on);
-        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, on);
+        Assert.DoesNotContain(Copy.TurnOnApp("Kidney Check"), on);
 
         await PostFormAsync(
             "/Patient/Grants",
@@ -236,21 +236,69 @@ public class PatientPagesTests : IAsyncLifetime
             new() { ["grantId"] = kidneyGrantId }
         );
         string off = await ReadAsync("/Patient/Grants");
-        Assert.Contains(Copy.TurnOnKidneyCheck, off);
-        Assert.Contains(Copy.KidneyOptIn, off);
-        Assert.Contains(">Off<", off);
+        Assert.Contains(Copy.TurnOnApp("Kidney Check"), off);
+        Assert.Contains(Copy.AppOffer("lab results only"), off);
+        Assert.DoesNotContain(">On<", off);
 
         HttpResponseMessage turnedOn = await PostFormAsync(
             "/Patient/Grants",
-            "/Patient/Grants?handler=TurnOnKidneyCheck",
-            []
+            "/Patient/Grants?handler=TurnOnApp",
+            new() { ["appUri"] = OrgDirectory.KidneyCheckUri }
         );
 
         Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
         string access = await ReadAsync("/Patient/Grants");
         Assert.Contains("Kidney Check · lab results only · you allowed this", access);
-        Assert.Contains(Copy.TurnOffKidneyCheck, access);
-        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, access);
+        Assert.Contains(Copy.TurnOffApp("Kidney Check"), access);
+        Assert.DoesNotContain(Copy.TurnOnApp("Kidney Check"), access);
+    }
+
+    [Fact]
+    public async Task Apps_section_lists_every_app_and_turns_a_second_one_on_with_its_own_scope()
+    {
+        string before = await ReadAsync("/Patient/Grants");
+        Assert.Contains("Medication Check", before);
+        Assert.Contains(Copy.TurnOnApp("Medication Check"), before);
+        Assert.Contains(Copy.AppOffer("medications and lab results only"), before);
+
+        HttpResponseMessage turnedOn = await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOnApp",
+            new() { ["appUri"] = OrgDirectory.MedicationCheckUri }
+        );
+
+        Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
+        string after = await ReadAsync("/Patient/Grants");
+        Assert.Contains(
+            "Medication Check · medications and lab results only · you allowed this",
+            after
+        );
+        Assert.Contains(Copy.TurnOffApp("Medication Check"), after);
+        Assert.Contains(Copy.TurnOffApp("Kidney Check"), after);
+        Assert.Contains("No clinicians.", after);
+    }
+
+    [Fact]
+    public async Task Turning_on_something_that_is_not_an_app_grants_nothing()
+    {
+        await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOnApp",
+            new() { ["appUri"] = OrgDirectory.ProviderUri("riverside") }
+        );
+
+        IReadOnlyList<Grant> grants = await _app.WithAsync(async services =>
+        {
+            GrantManager grantManager = services.GetRequiredService<GrantManager>();
+            Guid sam = (
+                await services
+                    .GetRequiredService<InviteManager>()
+                    .FindLinkedPatientAsync(OrgDirectory.ProviderUri("lakeside"), "LUC-20417")
+            )!.Value;
+            return await grantManager.ListForPatientAsync(sam);
+        });
+        Assert.DoesNotContain(grants, grant => grant.Grantee.Kind != PartyKind.App);
+        Assert.Single(grants);
     }
 
     [Fact]

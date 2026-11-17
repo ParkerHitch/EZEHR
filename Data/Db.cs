@@ -36,6 +36,12 @@ public sealed class Db(IConfiguration configuration)
         {
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
+        // Migrations run before the seed, so the seed can fill the columns they add.
+        foreach (string migration in Migrations)
+        {
+            await using SqlCommand command = new(migration, connection);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
         // Seed only an empty table (a new database). Once a sysadmin has edited it, the table is theirs: deleting a
         // row is how an organization is cut off, so it must stay deleted across restarts.
         bool hasOrganizations = await connection.ExecuteScalarAsync<bool>(
@@ -51,8 +57,9 @@ public sealed class Db(IConfiguration configuration)
             await connection.ExecuteAsync(
                 new CommandDefinition(
                     """
-                    INSERT INTO dbo.organizations(uri, kind, display_name, certificate_cn, entra_tenant_id)
-                    VALUES (@Uri, @kind, @DisplayName, @CertificateCommonName, NULL);
+                    INSERT INTO dbo.organizations(uri, kind, display_name, certificate_cn, entra_tenant_id,
+                                                  app_scope, app_description)
+                    VALUES (@Uri, @kind, @DisplayName, @CertificateCommonName, NULL, @appScope, @AppDescription);
                     """,
                     new
                     {
@@ -60,15 +67,12 @@ public sealed class Db(IConfiguration configuration)
                         kind = organization.Kind.ToString(),
                         organization.DisplayName,
                         organization.CertificateCommonName,
+                        appScope = organization.AppScope?.ToString(),
+                        organization.AppDescription,
                     },
                     cancellationToken: cancellationToken
                 )
             );
-        }
-        foreach (string migration in Migrations)
-        {
-            await using SqlCommand command = new(migration, connection);
-            await command.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 
@@ -118,6 +122,20 @@ public sealed class Db(IConfiguration configuration)
             IF NOT EXISTS (SELECT 1 FROM sys.indexes
                            WHERE name = N'ix_audit_events_actor_org' AND object_id = OBJECT_ID(N'dbo.audit_events'))
             CREATE INDEX ix_audit_events_actor_org ON dbo.audit_events(actor_org_uri, id);
+            """,
+        """
+            IF COL_LENGTH(N'dbo.organizations', N'app_scope') IS NULL
+            ALTER TABLE dbo.organizations ADD app_scope NVARCHAR(32) NULL;
+            """,
+        """
+            IF COL_LENGTH(N'dbo.organizations', N'app_description') IS NULL
+            ALTER TABLE dbo.organizations ADD app_description NVARCHAR(400) NULL;
+            """,
+        // Kidney Check's row in a database made before apps had descriptions.
+        """
+            UPDATE dbo.organizations
+            SET app_description = N'Looks for slow changes in your kidney lab results that no single provider would see.'
+            WHERE uri = N'urn:app:kidney-check' AND app_description IS NULL;
             """,
     ];
 

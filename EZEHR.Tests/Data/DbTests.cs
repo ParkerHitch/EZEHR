@@ -134,7 +134,7 @@ public class DbTests : IAsyncLifetime
         Guid tenantId = Guid.NewGuid();
         await using SqlConnection connection = await _database.Db.OpenAsync();
         Assert.Equal(
-            5,
+            6,
             await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM organizations")
         );
         await connection.ExecuteAsync(
@@ -149,7 +149,7 @@ public class DbTests : IAsyncLifetime
         await _database.Db.DeleteAllDataAsync();
 
         Assert.Equal(
-            5,
+            6,
             await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM organizations")
         );
         (Guid? EntraTenantId, string DisplayName) riverside = await connection.QuerySingleAsync<(
@@ -253,7 +253,7 @@ public class DbTests : IAsyncLifetime
         await _database.Db.EnsureSchemaAsync();
 
         Assert.Equal(
-            5,
+            6,
             await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM organizations")
         );
     }
