@@ -1,7 +1,9 @@
 using EZEHR.Tools.Cli;
 using EZEHR.Tools.Commands;
+using EZEHR.Tools.Commands.App;
 using EZEHR.Tools.Commands.Certs;
 using EZEHR.Tools.Commands.Database;
+using EZEHR.Tools.Commands.Network;
 using EZEHR.Tools.Commands.Org;
 using EZEHR.Tools.Commands.Patient;
 using EZEHR.Tools.Commands.Platform;
@@ -179,6 +181,57 @@ public static class ToolApp
                 .AddCommand<ProviderCliniciansCommand>("clinicians")
                 .WithDescription("List the clinicians who have acted for the provider")
                 .WithExample("provider", "clinicians", "riverside");
+        });
+        config.AddBranch("app", app =>
+        {
+            app.SetDescription("The example apps, each presenting its own certificate in .pki/");
+            app.AddCommand<AppKidneyCheckCommand>("kidney-check")
+                .WithDescription("Read eGFR labs, check each signature, write a note if flagged")
+                .WithExample("app", "kidney-check", "sam");
+            app.AddCommand<AppMedicationCheckCommand>("medication-check")
+                .WithDescription("Read medications and labs, write a note if a medicine is risky")
+                .WithExample("app", "medication-check", "sam");
+        });
+        config.AddBranch("network", network =>
+        {
+            network.SetDescription(
+                "Raw network calls as any identity, for checking what the network allows and refuses"
+            );
+            network
+                .AddCommand<NetworkReadCommand>("read")
+                .WithDescription(
+                    "Read a patient's record as any identity, optionally checking the outcome"
+                )
+                .WithExample(
+                    "network",
+                    "read",
+                    "sam",
+                    "medications",
+                    "--as",
+                    "kidney-check",
+                    "--expect",
+                    "ScopeDenied"
+                )
+                .WithExample(
+                    "network",
+                    "read",
+                    "sam",
+                    "full-record",
+                    "--as",
+                    "none",
+                    "--purpose",
+                    "treatment",
+                    "--expect",
+                    "NoCertificate"
+                )
+                .WithExample(
+                    "network",
+                    "read",
+                    "lakeside:LUC-20417",
+                    "egfr-labs",
+                    "--as",
+                    "kidney-check"
+                );
         });
         config.AddBranch("patient", patient =>
         {

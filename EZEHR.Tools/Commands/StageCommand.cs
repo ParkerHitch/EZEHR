@@ -1,6 +1,7 @@
 using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 using EZEHR.Services;
+using EZEHR.Tools.Apps;
 using EZEHR.Tools.Calls;
 using EZEHR.Tools.Cli;
 using EZEHR.Tools.Net;
@@ -21,6 +22,9 @@ public static class StageCommand
                                   the demo's network calls in order, one per key press
           stage --list            the steps, numbered
         """;
+
+    /// <summary>What the data broker claims when it asks for Sam's whole record.</summary>
+    public const string BrokerClaimedPurpose = "treatment";
 
     /// <summary>The provider that joins the network on camera. `demo reset` takes it off first.</summary>
     public const string JoiningProviderSlug = "northwind";
@@ -142,7 +146,7 @@ public static class StageCommand
             ConsoleColor.Green
         );
         Actor kidneyCheck = new(
-            KidneyCheckCommand.AppName,
+            KidneyCheckApp.AppName,
             "an app Sam allowed to read lab results",
             () => DescribeCertificate("kidney-check.pfx"),
             ConsoleColor.Yellow
@@ -152,7 +156,7 @@ public static class StageCommand
             Role = "the same app, asking for more than Sam allowed",
         };
         Actor medicationCheck = new(
-            MedicationCheckCommand.AppName,
+            MedicationCheckApp.AppName,
             "a new app, allowed to read medications as well as labs once Sam turns it on",
             () => DescribeCertificate("medication-check.pfx"),
             ConsoleColor.DarkGreen
@@ -218,7 +222,20 @@ public static class StageCommand
                 {
                     return false;
                 }
-                await BrokerCommand.RequestAsync(patientId, withSelfSignedCertificate);
+                // Refused is the expected answer, so the step works whatever the server says.
+                using HttpClient client = NetworkClient.Create(
+                    NetworkClient.BaseUrl,
+                    withSelfSignedCertificate ? ToolPaths.Pki("broker.pfx") : null
+                );
+                await RecordReads.ReadAsync(
+                    client,
+                    patientId,
+                    RecordKind.FullRecord,
+                    BrokerClaimedPurpose,
+                    withSelfSignedCertificate
+                        ? $"certificate: self-signed CN={CertificateIssuance.BrokerCommonName}"
+                        : "certificate: none"
+                );
                 return true;
             });
         }
@@ -276,7 +293,7 @@ public static class StageCommand
                         return false;
                     }
                     using HttpClient client = AppClient();
-                    kidneyResult = await KidneyCheckCommand.ReadEgfrLabsAsync(client, patientId);
+                    kidneyResult = await KidneyCheckApp.ReadEgfrLabsAsync(client, patientId);
                     return kidneyResult is not null;
                 }
             ),
@@ -297,12 +314,12 @@ public static class StageCommand
                         return false;
                     }
                     using HttpClient client = AppClient();
-                    return await KidneyCheckCommand.WriteSignedNoteAsync(
-                            client,
-                            PfxFile.Load(ToolPaths.Pki("kidney-check.pfx")),
-                            patientId,
-                            kidneyResult
-                        ) == 0;
+                    return await KidneyCheckApp.WriteSignedNoteAsync(
+                        client,
+                        PfxFile.Load(ToolPaths.Pki("kidney-check.pfx")),
+                        patientId,
+                        kidneyResult
+                    );
                 }
             ),
             new Step(
@@ -343,8 +360,7 @@ public static class StageCommand
                     {
                         return false;
                     }
-                    return await MedicationCheckCommand.RunAsync(["run", patientId.ToString()])
-                        == 0;
+                    return await MedicationCheckApp.RunAsync(NetworkClient.BaseUrl, patientId);
                 }
             ),
             // Sam checks in at Riverside, which needs its own link to write the visit later.
@@ -387,7 +403,7 @@ public static class StageCommand
             // Sam revokes Dr. Rivera's access; then the broker, then emergency access (browser only).
             Broker(
                 brokerWithoutCertificate,
-                $"asks for Sam's whole record, claiming \"{BrokerCommand.ClaimedPurpose}\"",
+                $"asks for Sam's whole record, claiming \"{BrokerClaimedPurpose}\"",
                 withSelfSignedCertificate: false
             ),
             Broker(
@@ -447,31 +463,27 @@ public static class StageCommand
         Guid patientId
     )
     {
-        string path = $"api/network/patients/{patientId}/read-medications";
-        NetworkLog.Request("GET", path, "medications, with a grant for lab results only");
-        using HttpResponseMessage response = await client.GetAsync(path);
-        if (response.IsSuccessStatusCode)
+        ReadOutcome outcome = await RecordReads.ReadAsync(
+            client,
+            patientId,
+            RecordKind.Medications,
+            null,
+            "medications, with a grant for lab results only"
+        );
+        if (outcome.Succeeded)
         {
-            NetworkLog.WriteInColor(
-                Color.Red,
-                $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   expected a refusal: the scope isn't enforced"
-            );
+            NetworkLog.WriteInColor(Color.Red, "  expected a refusal: the scope isn't enforced");
             return false;
         }
-        string body = await response.Content.ReadAsStringAsync();
-        NetworkLog.WriteInColor(
-            Color.Red,
-            $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   {body}".TrimEnd()
-        );
-        if (!body.Contains(nameof(DenyReason.ScopeDenied)))
+        if (outcome.DenyReason != nameof(DenyReason.ScopeDenied))
         {
             Console.Error.WriteLine(
-                $"  Expected ScopeDenied: is {KidneyCheckCommand.AppName} still turned on for Sam?"
+                $"  Expected ScopeDenied: is {KidneyCheckApp.AppName} still turned on for Sam?"
             );
             return false;
         }
         Console.WriteLine(
-            $"  Refused: Sam allowed {KidneyCheckCommand.AppName} lab results only. Sam's Activity shows the attempt."
+            $"  Refused: Sam allowed {KidneyCheckApp.AppName} lab results only. Sam's Activity shows the attempt."
         );
         return true;
     }
