@@ -36,21 +36,32 @@ public sealed record ShareStatus(
     string? Until
 );
 
-/// <summary>One line of the patient's Access page.</summary>
-public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke);
+/// <summary>One line of the patient's Access page. Emergency lines (opened without an approval) stand out.</summary>
+public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke, bool Emergency = false);
 
 /// <summary>A provider that can add records for the patient (a provider link). It can't read the record.</summary>
 public sealed record ConnectedProviderLine(string ProviderUri, string Text);
 
 /// <summary>
 /// The Access page: who can see the record (grants), which providers can add to it (links), and Kidney Check's
-/// current grant, or null when it's off (then the page offers to turn it on).
+/// current grant, or null when it's off (then the page offers to turn it on). EmergencyCode is the patient's
+/// emergency code as XXXX-XXXX, or null when emergency access is off.
 /// </summary>
 public sealed record AccessOverview(
     IReadOnlyList<AccessLine> Lines,
     IReadOnlyList<ConnectedProviderLine> ConnectedProviders,
-    AccessLine? KidneyCheck
+    AccessLine? KidneyCheck,
+    string? EmergencyCode = null
 );
 
-/// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>
-public sealed record ActivityLine(long Id, string Text, string Time, bool Blocked);
+/// <summary>
+/// One line of the patient's Activity page. Blocked lines show in red; a clinician opening the record with
+/// emergency access shows as a warning.
+/// </summary>
+public sealed record ActivityLine(
+    long Id,
+    string Text,
+    string Time,
+    bool Blocked,
+    bool Emergency = false
+);

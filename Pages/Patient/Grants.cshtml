@@ -15,7 +15,7 @@
     <ul class="list-group mb-4">
         @foreach (AccessLine line in Model.Lines.Where(line => line.CanRevoke))
         {
-            <li class="list-group-item d-flex justify-content-between align-items-center gap-2">
+            <li class="list-group-item d-flex justify-content-between align-items-center gap-2 @(line.Emergency ? "list-group-item-warning" : "")">
                 <span>@line.Text</span>
                 <form method="post" asp-page-handler="Revoke">
                     <input type="hidden" name="grantId" value="@line.GrantId"/>
@@ -63,6 +63,39 @@
                 <p class="mb-2">@Copy.KidneyOptIn</p>
                 <form method="post" asp-page-handler="TurnOnKidneyCheck">
                     <button class="btn btn-primary btn-tap">@Copy.TurnOnKidneyCheck</button>
+                </form>
+            }
+        </li>
+    </ul>
+
+    <h2 class="h5">Emergency access</h2>
+    <ul class="list-group mb-4">
+        <li class="list-group-item">
+            @if (Model.EmergencyCode is not null)
+            {
+                <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                    <span class="fs-4 font-monospace">@Model.EmergencyCode</span>
+                    <span class="badge text-bg-success">On</span>
+                </div>
+                <p class="mb-2">@Copy.EmergencyAccessOnHint</p>
+                <div class="d-flex flex-wrap gap-2">
+                    <form method="post" asp-page-handler="TurnOnEmergencyAccess">
+                        <button class="btn btn-outline-secondary btn-tap">@Copy.NewEmergencyCode</button>
+                    </form>
+                    <form method="post" asp-page-handler="TurnOffEmergencyAccess">
+                        <button class="btn btn-outline-secondary btn-tap">@Copy.TurnOffEmergencyAccess</button>
+                    </form>
+                </div>
+            }
+            else
+            {
+                <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                    <span class="fw-semibold">Emergency code</span>
+                    <span class="badge text-bg-secondary">Off</span>
+                </div>
+                <p class="mb-2">@Copy.EmergencyAccessOffHint</p>
+                <form method="post" asp-page-handler="TurnOnEmergencyAccess">
+                    <button class="btn btn-primary btn-tap">@Copy.TurnOnEmergencyAccess</button>
                 </form>
             }
         </li>

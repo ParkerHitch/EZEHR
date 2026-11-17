@@ -113,7 +113,7 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
 
 **Stretch goals, in priority order:**
 1. Conditional Access requiring phishing-resistant sign-in for the clinician app (needs the P2 trial; about 30 minutes).
-2. Break-glass emergency access (ER scenario).
+2. Break-glass emergency access (ER scenario). **Built 2026-11-17:** see `2026-11-17-emergency-access-design.md`. The patient opts in and gets an emergency code; a verified clinician who enters it with a reason gets one hour of access with no approval, and the patient and the clinician's organization both see it.
 3. An EZCA certificate on the security key's smart-card slot, used to sign in to Entra (certificate-based authentication). This is Keytos's real product flow, but setup is heavy.
 4. Recovery after a lost phone using a verifiable credential (Entra Verified ID).
 

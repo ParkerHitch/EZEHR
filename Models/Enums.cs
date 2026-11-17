@@ -68,6 +68,12 @@ public enum GrantError
     OfferExpired,
     GrantUnknown,
     GrantNotPending,
+
+    /// <summary>No patient has this emergency code. A patient who turned emergency access off has none.</summary>
+    EmergencyCodeUnknown,
+
+    /// <summary>Emergency access needs a stated reason; the patient and the clinician's organization both see it.</summary>
+    EmergencyReasonMissing,
 }
 
 /// <summary>Why the platform couldn't register an organization.</summary>

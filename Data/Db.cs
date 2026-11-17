@@ -119,6 +119,20 @@ public sealed class Db(IConfiguration configuration)
                            WHERE name = N'ix_audit_events_actor_org' AND object_id = OBJECT_ID(N'dbo.audit_events'))
             CREATE INDEX ix_audit_events_actor_org ON dbo.audit_events(actor_org_uri, id);
             """,
+        """
+            IF COL_LENGTH(N'dbo.patients', N'emergency_code') IS NULL
+            ALTER TABLE dbo.patients ADD emergency_code NVARCHAR(16) NULL;
+            """,
+        """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                           WHERE name = N'uq_patients_emergency_code' AND object_id = OBJECT_ID(N'dbo.patients'))
+            CREATE UNIQUE INDEX uq_patients_emergency_code ON dbo.patients(emergency_code)
+            WHERE emergency_code IS NOT NULL;
+            """,
+        """
+            IF COL_LENGTH(N'dbo.grants', N'emergency_reason') IS NULL
+            ALTER TABLE dbo.grants ADD emergency_reason NVARCHAR(200) NULL;
+            """,
     ];
 
     // Identifier columns use a binary collation, because SQL Server's default collation is case-insensitive

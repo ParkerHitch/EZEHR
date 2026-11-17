@@ -447,6 +447,35 @@ sequenceDiagram
 
 ---
 
+### Flow 12: Emergency access (break-glass)
+
+For when Sam can't tap Approve. It is **off unless Sam turned it on** from the Access page, which gives Sam an emergency code to keep on the phone's medical ID or a wallet card. The design is in `docs/superpowers/specs/2026-11-17-emergency-access-design.md`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Dr as Dr. Rivera's laptop
+  participant CP as Clinician pages
+  participant G as Access gate
+  participant Ph as Sam's phone
+  Note over Ph: earlier, Sam turned emergency access on and got a code
+  Dr->>CP: /Clinician/Emergency with the emergency code and a reason
+  CP->>CP: clinician check (tenant, role), as for a share code
+  CP->>CP: find the patient by code, create an Active grant for 1 hour, log OpenEmergencyAccess with the reason
+  CP-->>Dr: redirect to the record
+  Dr->>CP: open the record
+  CP->>G: ReadFullRecord
+  G-->>CP: allowed, logged with purpose "emergency"
+  Ph->>Ph: Activity and Access show who, until when, and the reason, with Revoke
+```
+
+- **Still proven:** who the clinician is and which organization vouches for them. The emergency code replaces only Sam's live approval, never the sign-in.
+- **What Sam sees:** a highlighted Activity line, "Emergency access: Dr. Rivera, Riverside Primary Care, opened your record without your approval. Reason given: …", and the grant on the Access page with a Revoke button.
+- **What Riverside sees:** the same `OpenEmergencyAccess` event and its reason in its organization audit (Flow 10).
+- **A wrong code** names no patient, so there is nobody to log it to.
+
+---
+
 ## 6. How the components fit together
 
 ```mermaid

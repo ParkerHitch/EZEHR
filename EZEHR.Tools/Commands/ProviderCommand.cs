@@ -203,8 +203,13 @@ public static class ProviderCommand
             {
                 string outcome = auditEvent.Granted ? "allowed" : $"refused {auditEvent.Reason}";
                 string patient = auditEvent.ProviderPatientId ?? auditEvent.PatientId.ToString();
+                // Emergency access was opened without the patient's approval, so the reason given is what to review.
+                string emergencyReason =
+                    auditEvent.Action == GrantManager.OpenEmergencyAccessAction
+                        ? $"  reason: {auditEvent.ClaimedPurpose}"
+                        : "";
                 Console.WriteLine(
-                    $"    {auditEvent.At:yyyy-MM-dd HH:mm}  {auditEvent.ActorName, -20}  {auditEvent.Action, -18}  {outcome}  patient {patient}"
+                    $"    {auditEvent.At:yyyy-MM-dd HH:mm}  {auditEvent.ActorName, -20}  {auditEvent.Action, -19}  {outcome}  patient {patient}{emergencyReason}"
                 );
             }
             if (page.NextAfterId is not long nextAfterId)

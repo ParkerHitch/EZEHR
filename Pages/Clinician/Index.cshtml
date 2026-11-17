@@ -10,7 +10,10 @@
   @if (Model.SignedInBanner is not null)
   {
     <p class="lead">@Model.SignedInBanner</p>
-    <p><a class="btn btn-primary" asp-page="/Clinician/Redeem">Enter a share code</a></p>
+    <p class="d-flex flex-wrap gap-2">
+      <a class="btn btn-primary" asp-page="/Clinician/Redeem">Enter a share code</a>
+      <a class="btn btn-outline-danger" asp-page="/Clinician/Emergency">Emergency access</a>
+    </p>
     <form method="post" asp-page-handler="SignOut">
       <button type="submit" class="btn btn-outline-secondary">Sign out</button>
     </form>

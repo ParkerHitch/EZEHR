@@ -8,7 +8,7 @@
 <ul class="list-group">
     @foreach (ActivityLine line in Model)
     {
-        <li class="list-group-item @(line.Blocked ? "list-group-item-danger" : "")">
+        <li class="list-group-item @(line.Blocked ? "list-group-item-danger" : "") @(line.Emergency ? "list-group-item-warning" : "")">
             @line.Text <span class="text-muted">· @line.Time</span>
         </li>
     }

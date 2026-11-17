@@ -12,6 +12,8 @@ namespace EZEHR.Managers;
 /// <summary>
 /// The patient's permissions. Sharing: the patient makes a single-use code, a clinician redeems it (Pending),
 /// the patient approves the named clinician (Active until the chosen time). Apps get ongoing LabsAndNotes grants.
+/// Emergency access: a patient who turned it on has an emergency code, and a clinician who enters it with a reason
+/// gets an Active grant for one hour with no approval.
 /// Also the one place that makes, normalizes and formats share and invite codes.
 /// </summary>
 public sealed class GrantManager(
@@ -27,6 +29,18 @@ public sealed class GrantManager(
 
     public const string TreatmentPurpose = "treatment";
 
+    /// <summary>How long emergency access lasts. Fixed: the clinician doesn't choose it and the patient didn't.</summary>
+    public static readonly TimeSpan EmergencyAccessLifetime = TimeSpan.FromHours(1);
+
+    /// <summary>The purpose on an emergency grant, and the claimed purpose logged with each read made under one.</summary>
+    public const string EmergencyPurpose = "emergency";
+
+    /// <summary>The audit action for opening emergency access. Its claimed purpose is the clinician's stated reason.</summary>
+    public const string OpenEmergencyAccessAction = "OpenEmergencyAccess";
+
+    /// <summary>Longest reason kept, so it fits the grant and audit columns.</summary>
+    public const int MaxEmergencyReasonLength = 200;
+
     // 8 characters with no look-alikes (no I, L, O, U, 0, 1).
     private const string CodeAlphabet = "ABCDEFGHJKMNPQRSTVWXYZ23456789";
 
@@ -35,7 +49,8 @@ public sealed class GrantManager(
                grantee_uri AS GranteeUri, grantee_name AS GranteeName, grantee_org AS GranteeOrg,
                grantee_org_uri AS GranteeOrgUri, scope AS Scope, purpose AS Purpose, status AS Status,
                duration_minutes AS DurationMinutes, created_at AS CreatedAt,
-               approved_at AS ApprovedAt, expires_at AS ExpiresAt, revoked_at AS RevokedAt
+               approved_at AS ApprovedAt, expires_at AS ExpiresAt, revoked_at AS RevokedAt,
+               emergency_reason AS EmergencyReason
         FROM grants
         """;
 
@@ -161,13 +176,37 @@ public sealed class GrantManager(
         }
         IReadOnlyList<ConnectedProviderLine> connectedProviders =
             await inviteManager.ListConnectedProvidersAsync(patientId);
-        return new AccessOverview(lines, connectedProviders, kidneyCheck);
+        await using SqlConnection connection = await db.OpenAsync();
+        string? emergencyCode = await connection.QuerySingleOrDefaultAsync<string?>(
+            "SELECT emergency_code FROM patients WHERE id = @patientId",
+            new { patientId }
+        );
+        return new AccessOverview(
+            lines,
+            connectedProviders,
+            kidneyCheck,
+            emergencyCode is null ? null : FormatCode(emergencyCode)
+        );
     }
 
     private AccessLine ToAccessLine(Grant grant, DateTimeOffset now)
     {
         Party grantee = grant.Grantee;
         bool expired = grant.ExpiresAt is DateTimeOffset expiresAt && expiresAt <= now;
+        if (grant.Status == GrantStatus.Active && !expired && grant.EmergencyReason is not null)
+        {
+            return new AccessLine(
+                grant.Id,
+                Copy.EmergencyAccessUntil(
+                    grantee.DisplayName,
+                    grantee.OrgName,
+                    LocalTime.Clock(grant.ExpiresAt!.Value, _timeZone),
+                    grant.EmergencyReason
+                ),
+                true,
+                true
+            );
+        }
         if (grant.Status == GrantStatus.Active && !expired)
         {
             string text =
@@ -193,16 +232,106 @@ public sealed class GrantManager(
             );
         }
         GrantStatus ended = expired ? GrantStatus.Expired : grant.Status;
+        string who =
+            grantee.Kind == PartyKind.App
+                ? grantee.DisplayName
+                : $"{grantee.DisplayName}, {grantee.OrgName}";
         return new AccessLine(
             grant.Id,
             Copy.AccessEndedLine(
-                grantee.Kind == PartyKind.App
-                    ? grantee.DisplayName
-                    : $"{grantee.DisplayName}, {grantee.OrgName}",
+                grant.EmergencyReason is null ? who : Copy.EmergencyAccessWho(who),
                 ended
             ),
             false
         );
+    }
+
+    /// <summary>
+    /// Turns emergency access on with a new emergency code, or replaces the code when it's already on (the old one
+    /// stops working). Returns the code as stored.
+    /// </summary>
+    public async Task<string> TurnOnEmergencyAccessAsync(Guid patientId)
+    {
+        string emergencyCode = GenerateCode();
+        await using SqlConnection connection = await db.OpenAsync();
+        await connection.ExecuteAsync(
+            "UPDATE patients SET emergency_code = @emergencyCode WHERE id = @patientId",
+            new { emergencyCode, patientId }
+        );
+        return emergencyCode;
+    }
+
+    /// <summary>Removes the emergency code, so nobody can open new emergency access. Access already open runs out or is revoked as usual.</summary>
+    public async Task TurnOffEmergencyAccessAsync(Guid patientId)
+    {
+        await using SqlConnection connection = await db.OpenAsync();
+        await connection.ExecuteAsync(
+            "UPDATE patients SET emergency_code = NULL WHERE id = @patientId",
+            new { patientId }
+        );
+    }
+
+    /// <summary>
+    /// Break-glass: a verified clinician enters the patient's emergency code and a reason, and gets an Active grant
+    /// for one hour with no approval step. The patient consented ahead of time by turning emergency access on. The
+    /// grant and its audit event, which carries the reason, commit together.
+    /// </summary>
+    public async Task<GrantResult> OpenEmergencyAccessAsync(
+        string emergencyCode,
+        string? reason,
+        Party clinician
+    )
+    {
+        string statedReason = (reason ?? "").Trim();
+        if (statedReason.Length == 0)
+        {
+            return Failed(GrantError.EmergencyReasonMissing);
+        }
+        if (statedReason.Length > MaxEmergencyReasonLength)
+        {
+            statedReason = statedReason[..MaxEmergencyReasonLength];
+        }
+        string normalizedCode = NormalizeCode(emergencyCode);
+        DateTimeOffset now = time.GetUtcNow();
+        await using SqlConnection connection = await db.OpenAsync();
+        await using DbTransaction transaction = await connection.BeginTransactionAsync();
+        Guid? patientId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+            "SELECT id FROM patients WHERE emergency_code = @normalizedCode",
+            new { normalizedCode },
+            transaction
+        );
+        if (patientId is not Guid foundPatientId)
+        {
+            return Failed(GrantError.EmergencyCodeUnknown);
+        }
+
+        Grant grant = new(
+            Guid.NewGuid(),
+            foundPatientId,
+            clinician,
+            GrantScope.Full,
+            EmergencyPurpose,
+            GrantStatus.Active,
+            (int)EmergencyAccessLifetime.TotalMinutes,
+            now,
+            null,
+            now + EmergencyAccessLifetime,
+            null,
+            statedReason
+        );
+        await InsertAsync(connection, transaction, grant);
+        await auditManager.AppendAsync(
+            connection,
+            transaction,
+            foundPatientId,
+            clinician,
+            OpenEmergencyAccessAction,
+            statedReason,
+            true,
+            null
+        );
+        await transaction.CommitAsync();
+        return Succeeded(grant);
     }
 
     /// <summary>A clinician enters the patient's code. Creates one Pending grant; a code works once and for 10 minutes.</summary>
@@ -506,9 +635,9 @@ public sealed class GrantManager(
             """
             INSERT INTO grants(id, patient_id, grantee_kind, grantee_uri, grantee_name, grantee_org,
                                grantee_org_uri, scope, purpose, status, duration_minutes, created_at,
-                               approved_at, expires_at, revoked_at)
+                               approved_at, expires_at, revoked_at, emergency_reason)
             VALUES (@Id, @PatientId, @kind, @uri, @name, @org, @orgUri, @scope, @Purpose, @status,
-                    @DurationMinutes, @CreatedAt, @ApprovedAt, @ExpiresAt, NULL)
+                    @DurationMinutes, @CreatedAt, @ApprovedAt, @ExpiresAt, NULL, @EmergencyReason)
             """,
             new
             {
@@ -526,6 +655,7 @@ public sealed class GrantManager(
                 grant.CreatedAt,
                 grant.ApprovedAt,
                 grant.ExpiresAt,
+                grant.EmergencyReason,
             },
             transaction
         );
@@ -548,7 +678,8 @@ public sealed class GrantManager(
         DateTimeOffset CreatedAt,
         DateTimeOffset? ApprovedAt,
         DateTimeOffset? ExpiresAt,
-        DateTimeOffset? RevokedAt
+        DateTimeOffset? RevokedAt,
+        string? EmergencyReason
     )
     {
         public Grant ToGrant()
@@ -571,7 +702,8 @@ public sealed class GrantManager(
                 CreatedAt,
                 ApprovedAt,
                 ExpiresAt,
-                RevokedAt
+                RevokedAt,
+                EmergencyReason
             );
         }
     }

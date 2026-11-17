@@ -20,7 +20,8 @@ public sealed class ActivityManager(AuditManager auditManager, IOptions<AppOptio
                 auditEvent.Id,
                 Copy.ActivityLine(auditEvent),
                 LocalTime.Clock(auditEvent.At, _timeZone),
-                !auditEvent.Granted
+                !auditEvent.Granted,
+                auditEvent.Action == GrantManager.OpenEmergencyAccessAction
             ))
             .ToList();
     }

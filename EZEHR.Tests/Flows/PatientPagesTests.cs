@@ -254,6 +254,50 @@ public class PatientPagesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Emergency_access_section_turns_on_shows_the_code_and_turns_off()
+    {
+        string off = await ReadAsync("/Patient/Grants");
+        Assert.Contains(Copy.EmergencyAccessOffHint, off);
+        Assert.Contains(Copy.TurnOnEmergencyAccess, off);
+
+        HttpResponseMessage turnedOn = await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOnEmergencyAccess",
+            []
+        );
+
+        Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
+        string on = await ReadAsync("/Patient/Grants");
+        Match code = Regex.Match(on, "font-monospace\">([A-Z0-9]{4}-[A-Z0-9]{4})<");
+        Assert.True(code.Success, "no emergency code on the Access page");
+        Assert.Contains(Copy.EmergencyAccessOnHint, on);
+        GrantResult opened = await _app.WithAsync(services =>
+            services
+                .GetRequiredService<GrantManager>()
+                .OpenEmergencyAccessAsync(code.Groups[1].Value, "Unresponsive", Rivera)
+        );
+        Assert.True(opened.Succeeded);
+        string access = await ReadAsync("/Patient/Grants");
+        Assert.Contains("Emergency access: Dr. Rivera, Riverside Primary Care · until", access);
+        string activity = await ReadAsync("/Patient/Activity");
+        Assert.Contains(
+            "opened your record without your approval. Reason given: Unresponsive",
+            activity
+        );
+        Assert.Contains("list-group-item-warning", activity);
+
+        await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOffEmergencyAccess",
+            []
+        );
+
+        string offAgain = await ReadAsync("/Patient/Grants");
+        Assert.Contains(Copy.TurnOnEmergencyAccess, offAgain);
+        Assert.DoesNotContain(code.Groups[1].Value, offAgain);
+    }
+
+    [Fact]
     public async Task Cookie_for_a_deleted_patient_is_signed_out()
     {
         Assert.Equal(HttpStatusCode.OK, (await _phone.GetAsync("/Patient/Home")).StatusCode);

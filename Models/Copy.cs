@@ -36,6 +36,53 @@ public static class Copy
 
     public const string WaitingForApproval = "Waiting for the patient to approve on their phone…";
 
+    public const string EmergencyAccessOffHint =
+        "If you turn this on, you get an emergency code to keep where emergency staff will find it. A verified clinician who enters it can open your record for 1 hour without waiting for your approval. They must give a reason, and you see who, when and why.";
+
+    public const string EmergencyAccessOnHint =
+        "Keep this code where emergency staff will find it, like your phone's medical ID or a card in your wallet. A verified clinician who enters it can open your record for 1 hour without waiting for your approval. They must give a reason, and you see who, when and why.";
+
+    public const string TurnOnEmergencyAccess = "Turn on emergency access";
+
+    public const string TurnOffEmergencyAccess = "Turn off emergency access";
+
+    public const string NewEmergencyCode = "Make a new code";
+
+    public const string EmergencyAccessWarning =
+        "Emergency access opens the record for 1 hour without the patient's approval. The patient and your organization will see your name, the time and the reason you give.";
+
+    public const string EmergencyCodeUnknown =
+        "We don't recognize that emergency code. Check it and try again.";
+
+    public const string EmergencyReasonMissing = "Give a reason for emergency access.";
+
+    /// <summary>What the clinician sees when emergency access can't be opened.</summary>
+    public static string EmergencyAccessFailed(GrantError error)
+    {
+        return error switch
+        {
+            GrantError.EmergencyReasonMissing => EmergencyReasonMissing,
+            _ => EmergencyCodeUnknown,
+        };
+    }
+
+    /// <summary>An open emergency grant on the patient's Access page.</summary>
+    public static string EmergencyAccessUntil(string name, string org, string time, string reason)
+    {
+        return $"Emergency access: {name}, {org} · until {time} · reason given: {reason}";
+    }
+
+    /// <summary>Marks an ended emergency grant on the Access page: "Dr. Rivera, Riverside Primary Care (emergency access)".</summary>
+    public static string EmergencyAccessWho(string who)
+    {
+        return $"{who} (emergency access)";
+    }
+
+    public static string ClinicianEmergencyRecordHeader(string patient, string time)
+    {
+        return $"{patient} · emergency access until {time}";
+    }
+
     public static string ClinicianSignedIn(string name, string org, string time)
     {
         return $"{name} · {org} · signed in until {time}";
@@ -170,6 +217,10 @@ public static class Copy
         }
         return auditEvent.Action switch
         {
+            "OpenEmergencyAccess" =>
+                $"Emergency access: {who} opened your record without your approval. Reason given: {auditEvent.ClaimedPurpose}",
+            "ReadFullRecord" when auditEvent.ClaimedPurpose == "emergency" =>
+                $"{who} viewed your record (emergency access)",
             "ReadFullRecord" => $"{who} viewed your record",
             "ReadEgfrLabs" => $"{who} read your lab results",
             "WriteSignedNote" => $"{who} added a note to your record",
