@@ -13,7 +13,8 @@ namespace EZEHR.Managers;
 /// The patient's permissions. Sharing: the patient makes a single-use code, a clinician redeems it (Pending),
 /// the patient approves the named clinician (Active until the chosen time). Apps get ongoing LabsAndNotes grants.
 /// Emergency access: a patient who turned it on has an emergency code, and a clinician who enters it with a reason
-/// gets an Active grant for one hour with no approval.
+/// gets an Active grant for one hour with no approval. Either way the clinician needs an open launch from their
+/// own organization's system (LaunchManager), and the grant carries that launch's visit.
 /// Also the one place that makes, normalizes and formats share and invite codes.
 /// </summary>
 public sealed class GrantManager(
@@ -21,6 +22,7 @@ public sealed class GrantManager(
     AuditManager auditManager,
     InviteManager inviteManager,
     OrganizationManager organizationManager,
+    LaunchManager launchManager,
     TimeProvider time,
     IOptions<AppOptions> options
 )
@@ -50,7 +52,7 @@ public sealed class GrantManager(
                grantee_org_uri AS GranteeOrgUri, scope AS Scope, purpose AS Purpose, status AS Status,
                duration_minutes AS DurationMinutes, created_at AS CreatedAt,
                approved_at AS ApprovedAt, expires_at AS ExpiresAt, revoked_at AS RevokedAt,
-               emergency_reason AS EmergencyReason
+               emergency_reason AS EmergencyReason, encounter_id AS EncounterId
         FROM grants
         """;
 
@@ -295,9 +297,17 @@ public sealed class GrantManager(
     public async Task<GrantResult> OpenEmergencyAccessAsync(
         string emergencyCode,
         string? reason,
-        Party clinician
+        Party clinician,
+        Guid launchId
     )
     {
+        // The organization has to be part of an emergency too. The launch can't be matched to the patient, who may
+        // never have been to this organization, so it vouches only for the clinician and the visit.
+        ClinicianLaunch? launch = await launchManager.FindOpenLaunchAsync(launchId, clinician);
+        if (launch is null)
+        {
+            return Failed(GrantError.LaunchNotOpen);
+        }
         string statedReason = (reason ?? "").Trim();
         if (statedReason.Length == 0)
         {
@@ -333,7 +343,8 @@ public sealed class GrantManager(
             null,
             now + EmergencyAccessLifetime,
             null,
-            statedReason
+            statedReason,
+            launch.EncounterId
         );
         await InsertAsync(connection, transaction, grant);
         await auditManager.AppendAsync(
@@ -344,15 +355,30 @@ public sealed class GrantManager(
             OpenEmergencyAccessAction,
             statedReason,
             true,
-            null
+            null,
+            launch.EncounterId
         );
         await transaction.CommitAsync();
         return Succeeded(grant);
     }
 
-    /// <summary>A clinician enters the patient's code. Creates one Pending grant; a code works once and for 10 minutes.</summary>
-    public async Task<GrantResult> RedeemShareCodeAsync(string code, Party clinician)
+    /// <summary>
+    /// A clinician enters the patient's code. Creates one Pending grant; a code works once and for 10 minutes.
+    /// The clinician needs an open launch from their own organization, and the code must be the code of the patient
+    /// whose chart that launch came from: the patient has to be linked to that organization under the launch's
+    /// patient id. A code for anyone else is refused, stays unused, and is logged to that patient as blocked.
+    /// </summary>
+    public async Task<GrantResult> RedeemShareCodeAsync(
+        string? code,
+        Party clinician,
+        Guid launchId
+    )
     {
+        ClinicianLaunch? launch = await launchManager.FindOpenLaunchAsync(launchId, clinician);
+        if (launch is null)
+        {
+            return Failed(GrantError.LaunchNotOpen);
+        }
         string normalizedCode = NormalizeCode(code);
         DateTimeOffset now = time.GetUtcNow();
         Guid grantId = Guid.NewGuid();
@@ -397,6 +423,37 @@ public sealed class GrantManager(
             return Failed(GrantError.OfferExpired);
         }
 
+        bool launchedForThisPatient = await connection.ExecuteScalarAsync<bool>(
+            """
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM provider_links
+                WHERE patient_id = @PatientId AND provider_uri = @ProviderUri
+                      AND provider_patient_id = @ProviderPatientId) THEN 1 ELSE 0 END
+            """,
+            new
+            {
+                claimed.PatientId,
+                launch.ProviderUri,
+                launch.ProviderPatientId,
+            },
+            transaction
+        );
+        if (!launchedForThisPatient)
+        {
+            // Rolling back gives the code back to the patient, unused.
+            await transaction.RollbackAsync();
+            await auditManager.AppendAsync(
+                claimed.PatientId,
+                clinician,
+                "RedeemShareCode",
+                TreatmentPurpose,
+                false,
+                DenyReason.LaunchPatientMismatch,
+                launch.EncounterId
+            );
+            return Failed(GrantError.OfferNotForLaunchedPatient);
+        }
+
         Grant grant = new(
             grantId,
             claimed.PatientId,
@@ -408,7 +465,9 @@ public sealed class GrantManager(
             now,
             null,
             null,
-            null
+            null,
+            null,
+            launch.EncounterId
         );
         await InsertAsync(connection, transaction, grant);
         await auditManager.AppendAsync(
@@ -419,7 +478,8 @@ public sealed class GrantManager(
             "RedeemShareCode",
             TreatmentPurpose,
             true,
-            null
+            null,
+            launch.EncounterId
         );
         await transaction.CommitAsync();
         return Succeeded(grant);
@@ -656,9 +716,10 @@ public sealed class GrantManager(
             """
             INSERT INTO grants(id, patient_id, grantee_kind, grantee_uri, grantee_name, grantee_org,
                                grantee_org_uri, scope, purpose, status, duration_minutes, created_at,
-                               approved_at, expires_at, revoked_at, emergency_reason)
+                               approved_at, expires_at, revoked_at, emergency_reason, encounter_id)
             VALUES (@Id, @PatientId, @kind, @uri, @name, @org, @orgUri, @scope, @Purpose, @status,
-                    @DurationMinutes, @CreatedAt, @ApprovedAt, @ExpiresAt, NULL, @EmergencyReason)
+                    @DurationMinutes, @CreatedAt, @ApprovedAt, @ExpiresAt, NULL, @EmergencyReason,
+                    @EncounterId)
             """,
             new
             {
@@ -677,6 +738,7 @@ public sealed class GrantManager(
                 grant.ApprovedAt,
                 grant.ExpiresAt,
                 grant.EmergencyReason,
+                grant.EncounterId,
             },
             transaction
         );
@@ -700,7 +762,8 @@ public sealed class GrantManager(
         DateTimeOffset? ApprovedAt,
         DateTimeOffset? ExpiresAt,
         DateTimeOffset? RevokedAt,
-        string? EmergencyReason
+        string? EmergencyReason,
+        string? EncounterId
     )
     {
         public Grant ToGrant()
@@ -724,7 +787,8 @@ public sealed class GrantManager(
                 ApprovedAt,
                 ExpiresAt,
                 RevokedAt,
-                EmergencyReason
+                EmergencyReason,
+                EncounterId
             );
         }
     }

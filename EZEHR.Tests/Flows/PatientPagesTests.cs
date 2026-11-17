@@ -95,6 +95,17 @@ public class PatientPagesTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
     }
 
+    private async Task<Guid> SamAsync()
+    {
+        return (
+            await _app.WithAsync(services =>
+                services
+                    .GetRequiredService<InviteManager>()
+                    .FindLinkedPatientAsync(OrgDirectory.ProviderUri("lakeside"), "LUC-20417")
+            )
+        )!.Value;
+    }
+
     /// <summary>The page as a person reads it: Razor encodes characters like "·".</summary>
     private async Task<string> ReadAsync(string url)
     {
@@ -183,8 +194,14 @@ public class PatientPagesTests : IAsyncLifetime
         Assert.Matches("^[A-Z0-9]{4}-[A-Z0-9]{4}$", code);
         Assert.Contains("data:image/png;base64,", sharePage);
 
+        Guid launchId = await TestLaunches.OpenAsync(
+            _app.Database.Db,
+            _app.Pki.Clock,
+            Rivera,
+            await SamAsync()
+        );
         GrantResult redeemed = await _app.WithAsync(services =>
-            services.GetRequiredService<GrantManager>().RedeemShareCodeAsync(code, Rivera)
+            services.GetRequiredService<GrantManager>().RedeemShareCodeAsync(code, Rivera, launchId)
         );
         Assert.True(redeemed.Succeeded);
 
@@ -321,10 +338,21 @@ public class PatientPagesTests : IAsyncLifetime
         Assert.Contains(Copy.EmergencyAccessOnHint, on);
         string homeBefore = await ReadAsync("/Patient/Home");
         Assert.DoesNotContain("Emergency access:", homeBefore);
+        Guid emergencyLaunchId = await TestLaunches.OpenAsync(
+            _app.Database.Db,
+            _app.Pki.Clock,
+            Rivera,
+            null
+        );
         GrantResult opened = await _app.WithAsync(services =>
             services
                 .GetRequiredService<GrantManager>()
-                .OpenEmergencyAccessAsync(code.Groups[1].Value, "Unresponsive", Rivera)
+                .OpenEmergencyAccessAsync(
+                    code.Groups[1].Value,
+                    "Unresponsive",
+                    Rivera,
+                    emergencyLaunchId
+                )
         );
         Assert.True(opened.Succeeded);
         string access = await ReadAsync("/Patient/Grants");

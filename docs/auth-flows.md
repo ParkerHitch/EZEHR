@@ -11,7 +11,7 @@ EZEHR has **three front doors**, one for each kind of party. Each door checks a 
 | Door | Who comes through it | Credential | Checked by | Result |
 |---|---|---|---|---|
 | **Patient pages** (`/patient/*`) | Sam, on a phone | **Passkey** on the phone | Our server (Fido2 library) | A patient cookie session (`patient_id`) |
-| **Clinician pages** (`/clinician/*`) | Dr. Rivera, on a laptop | **Security key**, used to sign in to **Microsoft Entra ID** | Entra checks the key. Our server checks Entra's signed **ID token** | A clinician cookie session, fixed at 10 hours, which becomes `VerifiedCaller(clinician)` |
+| **Clinician pages** (`/clinician/*`) | Dr. Rivera, on a laptop, arriving from a **launch** made by Riverside's system | **Security key**, used to sign in to **Microsoft Entra ID** | Entra checks the key. Our server checks Entra's signed **ID token**, and that the launch was made for this clinician | A clinician cookie session, fixed at 10 hours, which becomes `VerifiedCaller(clinician)`, plus an open launch naming the chart and the visit |
 | **Network API** (`/api/network/*`) | Provider systems, the Kidney Check app, and the data broker | **EZCA client certificate**, presented in the TLS handshake (**mutual TLS**) | Our server checks that the certificate chains to the EZCA root and maps it to a known organization | `VerifiedCaller(provider or app)`, or `UnverifiedCaller(reason)` |
 
 A sign-in only proves **who** someone is. Whether they may read Sam's record is a separate question, answered by **Sam's grant**. Even a perfectly signed-in doctor gets nothing until Sam approves.
@@ -28,7 +28,7 @@ A sign-in only proves **who** someone is. Whether they may read Sam's record is 
 
 This mirrors how care is really documented. A clinician charts in **their own organization's system**, which is the legal custodian of that record: history taken at the visit, diagnoses, medication changes, referrals. That system then pushes the result to EZEHR like any other provider. So Dr. Rivera's plan and the nephrology referral reach Sam's record from **Riverside's** system, signed by Riverside, with Dr. Rivera as author. The clinician pages exist for the gap no single system can fill: seeing what *other* organizations hold, with the patient's consent.
 
-The production form of this is a SMART on FHIR EHR launch: the clinician opens EZEHR from inside their own EHR, and the request carries both the organization's identity and the clinician's. The demo keeps the two doors separate instead.
+The two doors meet in the **launch** (Flow 13): a clinician can ask for a record only after their own organization's system, with its certificate, has opened EZEHR for them from one patient's chart for one visit. So the organization takes part in every access, and can refuse by not launching. The shape is borrowed from a SMART on FHIR EHR launch; `docs/direction.md` says what real integration would take beyond this.
 
 ---
 
@@ -272,7 +272,7 @@ sequenceDiagram
 
 ### Flow 5: Sharing with a clinician (code → approval → grant)
 
-A grant is the only thing that lets a signed-in clinician into a record. Sam creates it, and it is bound to one verified identity.
+A grant is the only thing that lets a signed-in clinician into a record. Sam creates it, and it is bound to one verified identity. Dr. Rivera reaches the share-code form only through a launch from Riverside's system (Flow 13), and the code must be Sam's: the launch names Riverside's chart for Sam, and EZEHR checks that the code's patient is linked to Riverside under that id.
 
 ```mermaid
 sequenceDiagram
@@ -283,8 +283,9 @@ sequenceDiagram
   Ph->>Web: create share offer, for example 4 hours
   Web-->>Ph: code ABCD-EFGH, single use, valid 10 minutes
   Ph-->>Doc: Sam shows or reads out the code
-  Doc->>Web: redeem the code, with the clinician cookie
-  Web->>Web: Pending grant bound to urn:entra:tenant:object
+  Doc->>Web: redeem the code, with the clinician cookie and the launch id
+  Web->>Web: launch open for this clinician, and Sam is the patient of the launch's chart
+  Web->>Web: Pending grant bound to urn:entra:tenant:object, carrying the visit
   Web-->>Doc: waiting page, polling
   Web-->>Ph: approval prompt via polling, Give Dr. Rivera at Riverside Primary Care access until 5:00 PM?
   Ph->>Web: Approve, with the patient cookie
@@ -467,9 +468,39 @@ sequenceDiagram
 ```
 
 - **Still proven:** who the clinician is and which organization vouches for them. The emergency code replaces only Sam's live approval, never the sign-in.
+- **Still needs a launch** (Flow 13), so the clinician's organization is part of it and the visit is recorded. The chart isn't matched to Sam, who may never have been to that organization.
 - **What Sam sees:** a highlighted Activity line, "Emergency access: Dr. Rivera, Riverside Primary Care, opened your record without your approval. Reason given: …", and the grant on the Access page with a Revoke button.
 - **What Riverside sees:** the same `OpenEmergencyAccess` event and its reason in its organization audit (Flow 10).
 - **A wrong code** names no patient, so there is nobody to log it to.
+
+---
+
+### Flow 13: The organization launch
+
+How a clinician's organization takes part in each access. The design is in `docs/superpowers/specs/2026-11-17-organization-launch-design.md`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Sys as Riverside's system
+  participant Net as Network API
+  participant Dr as Dr. Rivera's browser
+  participant CP as Clinician pages
+  Note over Sys,Dr: Dr. Rivera clicks "open EZEHR" in Sam's chart
+  Sys->>Net: POST /create-clinician-launch over mutual TLS: clinician object id, chart RPC-1107, visit id
+  Net->>Net: certificate check, caller must be a provider with an Entra tenant
+  Net-->>Sys: launch link, to open within 5 minutes
+  Sys-->>Dr: sends the browser to the link
+  Dr->>CP: /Clinician/Launch?launch=CODE
+  CP->>CP: sign in with Entra if needed, then check the launch was made for this clinician
+  CP-->>Dr: the share-code form, showing the chart and visit, usable for 1 hour
+```
+
+- **Proven:** Riverside, by its certificate, says this clinician of its own is seeing this patient of its own in this visit. The clinician URI is built from the tenant on Riverside's row, so a provider can't launch anyone else's clinician.
+- **Checked later:** when Dr. Rivera enters a share code, its patient must be linked to Riverside under the launch's chart id. A code from another patient is refused with `OfferNotForLaunchedPatient`, stays unused, and shows on that patient's Activity as blocked.
+- **Recorded:** the visit id goes on the grant and on every audit event decided under it, and Riverside's organization audit returns it.
+- **Without a launch:** a signed-in clinician can open records they already have access to, and nothing else.
+- `ezehr-tools provider launch riverside RPC-1107 --clinician <object id>` plays Riverside's system.
 
 ---
 
@@ -547,6 +578,7 @@ flowchart TB
 | EZCA client certificate (mutual TLS) | EZCA vouches that this connection is Lakeside's (or the app's) system | That the organization may read Sam's data; that comes from links and grants |
 | Record signature (JWS) | This exact record was written by Lakeside (or the app; or Riverside, for a note authored by Dr. Rivera), and hasn't changed since | That its medical content is correct |
 | Grant | Sam agreed: this party, this scope, until this time | Anything after it's revoked or expired |
+| Launch | The clinician's organization, by its certificate, opened EZEHR for this clinician from this chart for this visit | That the visit id means anything outside the organization; that the organization still wants the access once the patient has approved it |
 | Audit event | That an attempt happened, by whom, with what outcome and claimed purpose, and which organization vouched for the actor | Nothing beyond that; it's evidence, not prevention |
 | Audit hash chain (each event's SHA-256 fingerprint covers the patient's previous event; the Activity page rechecks it on every load) | That no event was changed, removed from the middle or slipped in behind the app's back | That nobody rewrote the whole chain or cut off its newest events; only a fingerprint noted earlier shows that (see `docs/superpowers/specs/2026-11-17-audit-hash-chain-design.md`) |
 | Key Vault envelope encryption | Data at rest is unreadable without EZEHR's managed identity calling Key Vault | That EZEHR itself can't read it (it can, behind the gate; see the spec's honest limits) |
@@ -564,6 +596,7 @@ flowchart TB
 | `NoGrant` | Gate: no grant for this identity | "Access ended" page / 403 | Yes |
 | `GrantPending` | Gate: Sam hasn't approved yet | Waiting page / 403 | Yes |
 | `GrantRevoked` / `GrantExpired` | Gate | "Access ended" page / 403 | Yes |
+| `LaunchPatientMismatch` | Share code used from a launch for another patient's chart | The form says so; the code stays unused | Yes |
 | `ScopeDenied` | Gate: an app asked for more than its grant's scope, or a clinician tried to write | 403 | Yes |
 
 ---

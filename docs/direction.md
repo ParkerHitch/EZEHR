@@ -102,12 +102,12 @@ changed.
 
 ## Known gaps against the current goal
 
-Places where today's system doesn't match how organizations work, most important first. The first is being fixed
-now.
+Places where today's system doesn't match how organizations work, most important first.
 
-1. **Two doors for one organization.** A clinician signs in to EZEHR directly, so their organization lends them an
-   identity and then isn't involved: it can't refuse an access, its own system doesn't know what the clinician
-   opened, and it learns about its staff from EZEHR's audit. Fix: the organization launch.
+1. **Two doors for one organization.** A clinician signed in to EZEHR directly, so their organization lent them an
+   identity and then wasn't involved. **Built:** the organization launch. What is left of this gap: the
+   organization can't end an access the patient already approved, and the clinician still reads in EZEHR's pages
+   rather than in the organization's system.
 2. **Grants are per person and per visit.** Real care is a team over months. Every nurse and covering doctor needs
    their own share code. A grant to a care team, with the organization naming its members, would follow naturally
    from the launch.

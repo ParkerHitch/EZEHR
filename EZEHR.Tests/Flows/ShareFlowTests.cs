@@ -161,24 +161,66 @@ public class ShareFlowTests : IAsyncLifetime
         return client;
     }
 
-    /// <summary>Fills in and submits the Redeem form, antiforgery token included.</summary>
-    private static async Task<HttpResponseMessage> RedeemAsync(HttpClient browser, string code)
+    /// <summary>
+    /// Riverside's system makes a launch for Dr. Rivera from the chart with this patient id, and Dr. Rivera's
+    /// browser opens the link. Returns where the launch page sends the browser: the share-code form.
+    /// </summary>
+    private async Task<string> LaunchAsync(
+        HttpClient browser,
+        string providerPatientId = "RPC-1107"
+    )
     {
-        string form = await browser.GetStringAsync("/Clinician/Redeem");
-        string token = Regex
+        Party riverside = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri("riverside"))!;
+        CreateClinicianLaunchResult launch = await WithAsync(services =>
+            services
+                .GetRequiredService<LaunchManager>()
+                .CreateClinicianLaunchAsync(
+                    new VerifiedCaller(riverside, null),
+                    Guid.Parse(TestClinicianAuthHandler.RiveraObjectId),
+                    providerPatientId,
+                    "ENC-2026-11-14-01"
+                )
+        );
+        HttpResponseMessage opened = await browser.GetAsync(
+            new Uri(launch.LaunchUrl!).PathAndQuery
+        );
+        Assert.Equal(HttpStatusCode.Redirect, opened.StatusCode);
+        string redeemPath = opened.Headers.Location!.OriginalString;
+        Assert.StartsWith("/Clinician/Redeem?launchId=", redeemPath);
+        return redeemPath;
+    }
+
+    /// <summary>
+    /// Posts a clinician form, antiforgery token included. A failed attempt redirects back to the form with the
+    /// error, so this follows that one redirect and returns the form as the clinician then sees it.
+    /// </summary>
+    private static async Task<HttpResponseMessage> PostFormAsync(
+        HttpClient browser,
+        string formPath,
+        Dictionary<string, string> fields
+    )
+    {
+        string form = await browser.GetStringAsync(formPath);
+        fields["__RequestVerificationToken"] = Regex
             .Match(form, "name=\"__RequestVerificationToken\" type=\"hidden\" value=\"([^\"]+)\"")
             .Groups[1]
             .Value;
-        return await browser.PostAsync(
-            "/Clinician/Redeem",
-            new FormUrlEncodedContent(
-                new Dictionary<string, string>
-                {
-                    ["Code"] = code,
-                    ["__RequestVerificationToken"] = token,
-                }
-            )
+        HttpResponseMessage response = await browser.PostAsync(
+            formPath,
+            new FormUrlEncodedContent(fields)
         );
+        string? location = response.Headers.Location?.OriginalString;
+        if (location is not null && location.Contains("error=", StringComparison.Ordinal))
+        {
+            return await browser.GetAsync(location);
+        }
+        return response;
+    }
+
+    /// <summary>Opens a launch from Sam's chart, then fills in and submits the share-code form.</summary>
+    private async Task<HttpResponseMessage> RedeemAsync(HttpClient browser, string code)
+    {
+        return await PostFormAsync(browser, await LaunchAsync(browser), new() { ["Code"] = code });
     }
 
     private async Task<ShareOffer> CreateOfferAsync()
@@ -215,28 +257,21 @@ public class ShareFlowTests : IAsyncLifetime
         return $"/Clinician/Record?patientId={_sam}";
     }
 
-    /// <summary>Fills in and submits the Emergency form, antiforgery token included.</summary>
-    private static async Task<HttpResponseMessage> OpenEmergencyAccessAsync(
+    /// <summary>
+    /// Opens a launch from a chart EZEHR can't match to anyone, as in an emergency room, then fills in and submits
+    /// the emergency form reached from the share-code form.
+    /// </summary>
+    private async Task<HttpResponseMessage> OpenEmergencyAccessAsync(
         HttpClient browser,
         string code,
         string reason
     )
     {
-        string form = await browser.GetStringAsync("/Clinician/Emergency");
-        string token = Regex
-            .Match(form, "name=\"__RequestVerificationToken\" type=\"hidden\" value=\"([^\"]+)\"")
-            .Groups[1]
-            .Value;
-        return await browser.PostAsync(
-            "/Clinician/Emergency",
-            new FormUrlEncodedContent(
-                new Dictionary<string, string>
-                {
-                    ["Code"] = code,
-                    ["Reason"] = reason,
-                    ["__RequestVerificationToken"] = token,
-                }
-            )
+        string redeemPath = await LaunchAsync(browser, "RPC-ER-0042");
+        return await PostFormAsync(
+            browser,
+            redeemPath.Replace("/Clinician/Redeem", "/Clinician/Emergency"),
+            new() { ["Code"] = code, ["Reason"] = reason }
         );
     }
 
@@ -294,6 +329,98 @@ public class ShareFlowTests : IAsyncLifetime
             $"/Clinician/Record?handler=Status&patientId={_sam}"
         );
         Assert.Equal("/Clinician/AccessEnded", poll.Headers.GetValues("HX-Redirect").Single());
+    }
+
+    [Fact]
+    public async Task Without_a_launch_there_is_no_share_code_form()
+    {
+        HttpClient browser = ClinicianBrowser();
+
+        HttpResponseMessage redeem = await browser.GetAsync("/Clinician/Redeem");
+        HttpResponseMessage emergency = await browser.GetAsync(
+            $"/Clinician/Emergency?launchId={Guid.NewGuid()}"
+        );
+        string index = WebUtility.HtmlDecode(await browser.GetStringAsync("/Clinician/Index"));
+
+        Assert.Equal("/Clinician", redeem.Headers.Location!.OriginalString);
+        Assert.Equal("/Clinician", emergency.Headers.Location!.OriginalString);
+        Assert.Contains(Copy.OpenFromChart, index);
+        Assert.DoesNotContain("Enter a share code", index);
+    }
+
+    [Fact]
+    public async Task Launch_link_opens_the_share_code_form_for_the_clinician_it_names()
+    {
+        HttpClient browser = ClinicianBrowser();
+
+        string form = WebUtility.HtmlDecode(
+            await browser.GetStringAsync(await LaunchAsync(browser))
+        );
+
+        Assert.Contains("Opened from chart RPC-1107 · visit ENC-2026-11-14-01", form);
+    }
+
+    [Fact]
+    public async Task Launch_link_made_for_another_clinician_or_opened_signed_out_goes_nowhere()
+    {
+        Party riverside = OrgDirectory.Demo.FindByUri(OrgDirectory.ProviderUri("riverside"))!;
+        CreateClinicianLaunchResult forSomeoneElse = await WithAsync(services =>
+            services
+                .GetRequiredService<LaunchManager>()
+                .CreateClinicianLaunchAsync(
+                    new VerifiedCaller(riverside, null),
+                    Guid.NewGuid(),
+                    "RPC-1107",
+                    "ENC-2026-11-14-01"
+                )
+        );
+        string launchPath = new Uri(forSomeoneElse.LaunchUrl!).PathAndQuery;
+        HttpClient signedOut = _clinicianApp.CreateClient(
+            new WebApplicationFactoryClientOptions
+            {
+                BaseAddress = new Uri("https://localhost"),
+                AllowAutoRedirect = false,
+            }
+        );
+
+        HttpResponseMessage wrongClinician = await ClinicianBrowser().GetAsync(launchPath);
+        HttpResponseMessage notSignedIn = await signedOut.GetAsync(launchPath);
+
+        Assert.Equal(HttpStatusCode.OK, wrongClinician.StatusCode);
+        Assert.Contains(
+            Copy.LaunchForAnotherClinician,
+            WebUtility.HtmlDecode(await wrongClinician.Content.ReadAsStringAsync())
+        );
+        // Not signed in: sent to sign in, never to the form.
+        Assert.Equal(HttpStatusCode.Redirect, notSignedIn.StatusCode);
+        Assert.DoesNotContain("/Clinician/Redeem", notSignedIn.Headers.Location!.OriginalString);
+    }
+
+    [Fact]
+    public async Task Share_code_from_the_wrong_chart_is_refused_and_still_works_from_the_right_one()
+    {
+        HttpClient browser = ClinicianBrowser();
+        ShareOffer offer = await CreateOfferAsync();
+
+        HttpResponseMessage wrongChart = await PostFormAsync(
+            browser,
+            await LaunchAsync(browser, "RPC-9999"),
+            new() { ["Code"] = offer.Code }
+        );
+        HttpResponseMessage rightChart = await RedeemAsync(browser, offer.Code);
+
+        Assert.Equal(HttpStatusCode.OK, wrongChart.StatusCode);
+        Assert.Contains(
+            Copy.ShareCodeNotForLaunchedPatient,
+            WebUtility.HtmlDecode(await wrongChart.Content.ReadAsStringAsync())
+        );
+        Assert.Equal(
+            $"/Clinician/Wait?patientId={_sam}",
+            rightChart.Headers.Location!.OriginalString
+        );
+        IReadOnlyList<AuditEvent> activity = await ActivityAsync();
+        Assert.Equal(DenyReason.LaunchPatientMismatch, activity[^2].Reason);
+        Assert.True(activity[^1].Granted);
     }
 
     [Fact]

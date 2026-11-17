@@ -24,7 +24,8 @@ public sealed class AuditManager(Db db, TimeProvider time)
         string action,
         string? claimedPurpose,
         bool granted,
-        DenyReason? reason
+        DenyReason? reason,
+        string? encounterId = null
     )
     {
         await using SqlConnection connection = await db.OpenAsync();
@@ -36,7 +37,8 @@ public sealed class AuditManager(Db db, TimeProvider time)
             action,
             claimedPurpose,
             granted,
-            reason
+            reason,
+            encounterId
         );
     }
 
@@ -49,7 +51,8 @@ public sealed class AuditManager(Db db, TimeProvider time)
         string action,
         string? claimedPurpose,
         bool granted,
-        DenyReason? reason
+        DenyReason? reason,
+        string? encounterId = null
     )
     {
         DateTimeOffset at = time.GetUtcNow();
@@ -88,15 +91,17 @@ public sealed class AuditManager(Db db, TimeProvider time)
             action,
             purpose,
             granted,
-            reason
+            reason,
+            encounterId
         );
         long storedId = await connection.ExecuteScalarAsync<long>(
             """
             INSERT INTO audit_events(patient_id, at, actor_kind, actor_uri, actor_name, actor_org,
-                                     actor_org_uri, action, claimed_purpose, granted, reason, chain_hash)
+                                     actor_org_uri, action, claimed_purpose, granted, reason, chain_hash,
+                                     encounter_id)
             OUTPUT inserted.id
             VALUES (@patientId, @at, @kind, @uri, @name, @org, @orgUri, @action, @purpose, @granted,
-                    @reason, @chainHash)
+                    @reason, @chainHash, @encounterId)
             """,
             new
             {
@@ -112,6 +117,7 @@ public sealed class AuditManager(Db db, TimeProvider time)
                 granted,
                 reason = reason?.ToString(),
                 chainHash,
+                encounterId,
             },
             activeTransaction
         );
@@ -128,7 +134,8 @@ public sealed class AuditManager(Db db, TimeProvider time)
             purpose,
             granted,
             reason,
-            chainHash
+            chainHash,
+            encounterId
         );
     }
 
@@ -144,7 +151,7 @@ public sealed class AuditManager(Db db, TimeProvider time)
             SELECT id AS Id, patient_id AS PatientId, at AS At, actor_kind AS ActorKind,
                    actor_uri AS ActorUri, actor_name AS ActorName, actor_org AS ActorOrg, actor_org_uri AS ActorOrgUri,
                    action AS Action, claimed_purpose AS ClaimedPurpose, granted AS Granted,
-                   reason AS Reason, chain_hash AS ChainHash
+                   reason AS Reason, chain_hash AS ChainHash, encounter_id AS EncounterId
             FROM audit_events
             WHERE patient_id = @patientId AND id > @afterId
             ORDER BY id
@@ -173,7 +180,8 @@ public sealed class AuditManager(Db db, TimeProvider time)
         string? ClaimedPurpose,
         bool Granted,
         string? Reason,
-        string? ChainHash
+        string? ChainHash,
+        string? EncounterId
     )
     {
         public AuditEvent ToAuditEvent()
@@ -198,7 +206,8 @@ public sealed class AuditManager(Db db, TimeProvider time)
                 ClaimedPurpose,
                 Granted,
                 reason,
-                ChainHash
+                ChainHash,
+                EncounterId
             );
         }
     }

@@ -55,6 +55,35 @@ public static class Copy
 
     public const string ShareCodeUnknown = "We don't recognize that code. Check it and try again.";
 
+    public const string ShareCodeNotForLaunchedPatient =
+        "That code isn't for the patient whose chart you opened EZEHR from. If this is the right patient, ask them to connect your organization to their EZEHR record first.";
+
+    /// <summary>What a signed-in clinician sees with no launch: there is nothing to do here without one.</summary>
+    public const string OpenFromChart =
+        "To see a patient's record, open EZEHR from that patient's chart in your organization's system.";
+
+    public const string LaunchUnusable =
+        "This link can't be used any more. Open EZEHR again from the patient's chart.";
+
+    public const string LaunchForAnotherClinician =
+        "This link was made for a different clinician. Open EZEHR from the chart while signed in as yourself.";
+
+    /// <summary>What the clinician sees when a launch link can't be opened.</summary>
+    public static string LaunchFailed(LaunchError error)
+    {
+        return error switch
+        {
+            LaunchError.LaunchForAnotherClinician => LaunchForAnotherClinician,
+            _ => LaunchUnusable,
+        };
+    }
+
+    /// <summary>Above the share-code form: which chart and visit the clinician's organization launched them from.</summary>
+    public static string LaunchedFrom(string providerPatientId, string encounterId)
+    {
+        return $"Opened from chart {providerPatientId} · visit {encounterId}";
+    }
+
     public const string WaitingForApproval = "Waiting for the patient to approve on their phone…";
 
     public const string EmergencyAccessOffHint =
@@ -124,6 +153,7 @@ public static class Copy
         {
             GrantError.OfferUsed => ShareCodeUsed,
             GrantError.OfferExpired => ShareCodeExpired,
+            GrantError.OfferNotForLaunchedPatient => ShareCodeNotForLaunchedPatient,
             _ => ShareCodeUnknown,
         };
     }
@@ -288,6 +318,7 @@ public static class Copy
             DenyReason.GrantPending => "tried before you approved",
             DenyReason.ShiftEnded => "tried after their shift ended",
             DenyReason.ScopeDenied => "asked for more than you allowed",
+            DenyReason.LaunchPatientMismatch => "asked from another patient's chart",
             _ => "had no access",
         };
     }

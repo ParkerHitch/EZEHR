@@ -24,6 +24,7 @@ builder.Services.AddSingleton<Db>();
 builder.Services.AddScoped<OrganizationManager>();
 builder.Services.AddScoped<CallerManager>();
 builder.Services.AddScoped<AuditManager>();
+builder.Services.AddScoped<LaunchManager>();
 builder.Services.AddScoped<GrantManager>();
 builder.Services.AddScoped<AccessManager>();
 builder.Services.AddScoped<InviteManager>();
@@ -204,6 +205,8 @@ builder.Services.AddRazorPages(pages =>
     pages.Conventions.AuthorizeFolder("/Clinician", CallerManager.ClinicianScheme);
     pages.Conventions.AllowAnonymousToPage("/Clinician/Index");
     pages.Conventions.AllowAnonymousToPage("/Clinician/AccessEnded");
+    // A launch link is where an organization's system sends its clinician: the page signs them in first.
+    pages.Conventions.AllowAnonymousToPage("/Clinician/Launch");
 });
 
 WebApplication app = builder.Build();

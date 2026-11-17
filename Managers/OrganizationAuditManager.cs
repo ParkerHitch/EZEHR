@@ -30,7 +30,8 @@ public sealed class OrganizationAuditManager(Db db)
                 SELECT TOP (@take) a.id AS Id, a.at AS At, a.patient_id AS PatientId,
                        link.provider_patient_id AS ProviderPatientId, a.actor_kind AS ActorKind,
                        a.actor_uri AS ActorUri, a.actor_name AS ActorName, a.action AS Action,
-                       a.claimed_purpose AS ClaimedPurpose, a.granted AS Granted, a.reason AS Reason
+                       a.claimed_purpose AS ClaimedPurpose, a.granted AS Granted, a.reason AS Reason,
+                       a.encounter_id AS EncounterId
                 FROM audit_events a
                 OUTER APPLY (SELECT TOP 1 l.provider_patient_id FROM provider_links l
                              WHERE l.patient_id = a.patient_id AND l.provider_uri = @organizationUri
@@ -128,7 +129,8 @@ public sealed class OrganizationAuditManager(Db db)
         string Action,
         string? ClaimedPurpose,
         bool Granted,
-        string? Reason
+        string? Reason,
+        string? EncounterId
     )
     {
         public OrganizationAuditEvent ToOrganizationAuditEvent()
@@ -145,7 +147,8 @@ public sealed class OrganizationAuditManager(Db db)
                 Action,
                 ClaimedPurpose,
                 Granted,
-                reason
+                reason,
+                EncounterId
             );
         }
     }

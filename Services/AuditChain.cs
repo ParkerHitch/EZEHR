@@ -34,27 +34,33 @@ public static class AuditChain
         string action,
         string? claimedPurpose,
         bool granted,
-        DenyReason? reason
+        DenyReason? reason,
+        string? encounterId = null
     )
     {
         // A JSON array, so no value can run into the next one and two different events can't hash the same text.
-        string canonical = JsonSerializer.Serialize(
-            new object?[]
-            {
-                previousHash,
-                patientId.ToString("D"),
-                at.UtcTicks,
-                actor?.Kind.ToString(),
-                actor?.SubjectUri,
-                actor?.DisplayName,
-                actor?.OrgName,
-                actor?.OrgUri,
-                action,
-                claimedPurpose,
-                granted,
-                reason?.ToString(),
-            }
-        );
+        // The encounter is a thirteenth element only when there is one, so events from before encounters were
+        // recorded keep the fingerprints they already have.
+        List<object?> values =
+        [
+            previousHash,
+            patientId.ToString("D"),
+            at.UtcTicks,
+            actor?.Kind.ToString(),
+            actor?.SubjectUri,
+            actor?.DisplayName,
+            actor?.OrgName,
+            actor?.OrgUri,
+            action,
+            claimedPurpose,
+            granted,
+            reason?.ToString(),
+        ];
+        if (encounterId is not null)
+        {
+            values.Add(encounterId);
+        }
+        string canonical = JsonSerializer.Serialize(values);
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
@@ -83,7 +89,8 @@ public static class AuditChain
                 auditEvent.Action,
                 auditEvent.ClaimedPurpose,
                 auditEvent.Granted,
-                auditEvent.Reason
+                auditEvent.Reason,
+                auditEvent.EncounterId
             );
             if (auditEvent.ChainHash != expectedHash)
             {
