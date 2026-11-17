@@ -48,7 +48,9 @@ Approve. Emergency access is spec stretch goal 2, the ER scenario.
 - Pages: `/Clinician/Emergency` (code, reason, a warning about who will see it); the patient's Access page gets the
   Emergency access section and shows an open emergency grant highlighted with its reason; Activity highlights the
   line "Emergency access: Dr. Rivera, Riverside Primary Care, opened your record without your approval. Reason
-  given: …".
+  given: …". While emergency access is open, the patient's Record page shows a red alert
+  with the same who, until when and why, and a link to the Access page; it appears and clears on the page's
+  2-second poll.
 - The provider's organization audit already returns every event by its clinicians, so `OpenEmergencyAccess` and its
   reason appear there with no change. `ezehr-tools provider audit` prints the reason.
 

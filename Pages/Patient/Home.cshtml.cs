@@ -12,7 +12,7 @@ namespace EZEHR.Pages.Patient;
 /// </summary>
 public sealed class HomeModel(CallerManager callerManager, RecordManager recordManager) : PageModel
 {
-    public PatientHome Home { get; private set; } = new("", new Timeline([], []), "");
+    public PatientHome Home { get; private set; } = new("", new Timeline([], []), "", []);
 
     public async Task<IActionResult> OnGetAsync()
     {

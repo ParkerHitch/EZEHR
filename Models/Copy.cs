@@ -72,6 +72,9 @@ public static class Copy
         return $"Emergency access: {name}, {org} · until {time} · reason given: {reason}";
     }
 
+    /// <summary>The link under the home page's emergency access alert.</summary>
+    public const string EmergencyAccessReview = "See it, or end it, on the Access page";
+
     /// <summary>Marks an ended emergency grant on the Access page: "Dr. Rivera, Riverside Primary Care (emergency access)".</summary>
     public static string EmergencyAccessWho(string who)
     {

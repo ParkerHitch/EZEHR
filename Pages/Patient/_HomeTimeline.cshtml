@@ -1,6 +1,14 @@
-@model EZEHR.Models.PatientHome
+@using EZEHR.Models
+@model PatientHome
 
 <div hx-get="@Url.Page("/Patient/Home", "Timeline", new { version = Model.RecordVersion })"
      hx-trigger="every 2s" hx-swap="outerHTML">
+    @foreach (string alert in Model.EmergencyAlerts)
+    {
+        <div class="alert alert-danger mb-3" role="alert">
+            <p class="mb-1">@alert</p>
+            <a asp-page="/Patient/Grants">@Copy.EmergencyAccessReview</a>
+        </div>
+    }
     <partial name="_Timeline" model="Model.Timeline"/>
 </div>
