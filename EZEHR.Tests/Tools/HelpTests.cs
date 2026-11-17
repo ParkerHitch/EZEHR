@@ -8,7 +8,16 @@ namespace EZEHR.Tests.Tools;
 [Collection(ToolConsoleCollection.Name)]
 public sealed class HelpTests
 {
-    public static readonly string[] Groups = ["env", "org", "patient", "db", "certs", "platform"];
+    public static readonly string[] Groups =
+    [
+        "env",
+        "org",
+        "patient",
+        "db",
+        "certs",
+        "platform",
+        "provider",
+    ];
 
     public static TheoryData<string[]> LeafCommands
     {
@@ -31,6 +40,11 @@ public sealed class HelpTests
                 new[] { "platform", "register-app" },
                 new[] { "platform", "onboard-provider" },
                 new[] { "platform", "onboard-app" },
+                new[] { "provider", "invite" },
+                new[] { "provider", "push" },
+                new[] { "provider", "launch" },
+                new[] { "provider", "audit" },
+                new[] { "provider", "clinicians" },
             };
         }
     }

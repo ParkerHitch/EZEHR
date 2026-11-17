@@ -41,8 +41,6 @@ internal static class Program
     {
         switch (args.FirstOrDefault())
         {
-            case "provider":
-                return await ProviderCommand.RunAsync(args[1..]);
             case "kidney-check":
                 return await KidneyCheckCommand.RunAsync(args[1..]);
             case "medication-check":

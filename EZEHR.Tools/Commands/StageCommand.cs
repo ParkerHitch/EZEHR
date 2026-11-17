@@ -190,7 +190,7 @@ public static class StageCommand
                 async () =>
                 {
                     using HttpClient client = ProviderClient(slug);
-                    return await ProviderCommand.InviteAsync(client, providerPatientId) == 0;
+                    return await ProviderCalls.InviteAsync(client, providerPatientId);
                 }
             );
         }
@@ -200,7 +200,13 @@ public static class StageCommand
             return new Step(actor, action, async () =>
             {
                 using HttpClient client = ProviderClient(slug);
-                return await ProviderCommand.PushAsync(client, slug, providerPatientId) == 0;
+                return await ProviderCalls.PushAsync(
+                    client,
+                    PfxFile.Load(ToolPaths.Pki($"{slug}.pfx")),
+                    providerPatientId,
+                    ResourceFile.LoadSeed(slug),
+                    corruptSignature: false
+                );
             });
         }
 
@@ -362,12 +368,12 @@ public static class StageCommand
                         return false;
                     }
                     using HttpClient client = ProviderClient("riverside");
-                    return await ProviderCommand.LaunchAsync(
-                            client,
-                            "RPC-1107",
-                            clinicianObjectId,
-                            $"visit-{DateTime.Now:yyyyMMdd}"
-                        ) == 0;
+                    return await ProviderCalls.LaunchAsync(
+                        client,
+                        "RPC-1107",
+                        clinicianObjectId,
+                        $"visit-{DateTime.Now:yyyyMMdd}"
+                    );
                 }
             ),
             // The visit: Dr. Rivera opens that link and signs in; the share code, approval and reads happen on the
@@ -395,7 +401,17 @@ public static class StageCommand
                 async () =>
                 {
                     using HttpClient client = ProviderClient("riverside");
-                    return await ProviderCommand.AuditAsync(client, null, "RPC-1107") == 0;
+                    return await ProviderCalls.ReadAuditAsync(
+                        client,
+                        new OrganizationAuditQuery(
+                            null,
+                            null,
+                            "RPC-1107",
+                            null,
+                            null,
+                            ProviderCalls.DefaultAuditLimit
+                        )
+                    );
                 }
             ),
         ];

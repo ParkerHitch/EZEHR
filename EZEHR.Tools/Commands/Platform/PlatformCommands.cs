@@ -3,6 +3,7 @@ using EZEHR.Models;
 using EZEHR.Services;
 using EZEHR.Tools.Calls;
 using EZEHR.Tools.Cli;
+using EZEHR.Tools.Net;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -164,7 +165,11 @@ public sealed class PlatformOnboardProviderCommand : AsyncCommand<OnboardProvide
             return 0;
         }
         AnsiConsole.Console.WriteLine();
-        return await ProviderCommand.RunAsync(["invite", settings.Slug, settings.InviteChart]);
+        using HttpClient client = NetworkClient.Create(
+            settings.BaseUrl,
+            IdentityReference.Parse(settings.Slug).RequirePfx()
+        );
+        return await ProviderCalls.InviteAsync(client, settings.InviteChart) ? 0 : 1;
     }
 }
 

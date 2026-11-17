@@ -5,6 +5,7 @@ using EZEHR.Tools.Commands.Database;
 using EZEHR.Tools.Commands.Org;
 using EZEHR.Tools.Commands.Patient;
 using EZEHR.Tools.Commands.Platform;
+using EZEHR.Tools.Commands.Provider;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -132,6 +133,52 @@ public static class ToolApp
                     "--description",
                     "\"Looks at your sleep study results.\""
                 );
+        });
+        config.AddBranch("provider", provider =>
+        {
+            provider.SetDescription(
+                "A provider's EHR system, presenting .pki/<provider>.pfx: invites, pushes, launches, audits"
+            );
+            provider
+                .AddCommand<ProviderInviteCommand>("invite")
+                .WithDescription("Ask for an enrollment invite for a chart, with a QR code")
+                .WithExample("provider", "invite", "lakeside", "LUC-20417");
+            provider
+                .AddCommand<ProviderPushCommand>("push")
+                .WithDescription("Push a chart's records, each one signed")
+                .WithExample("provider", "push", "lakeside", "LUC-20417")
+                .WithExample("provider", "push", "lakeside", "LUC-20417", "--file", "lab.json")
+                .WithExample("provider", "push", "lakeside", "LUC-20417", "--sign-as", "maple")
+                .WithExample("provider", "push", "lakeside", "LUC-20417", "--corrupt-signature");
+            provider
+                .AddCommand<ProviderLaunchCommand>("launch")
+                .WithDescription("Open EZEHR for one of the provider's clinicians, from a chart")
+                .WithExample(
+                    "provider",
+                    "launch",
+                    "riverside",
+                    "RPC-1107",
+                    "--clinician",
+                    "00000000-0000-0000-0000-000000000000"
+                );
+            provider
+                .AddCommand<ProviderAuditCommand>("audit")
+                .WithDescription("Read the provider's own audit trail, oldest first")
+                .WithExample("provider", "audit", "riverside")
+                .WithExample("provider", "audit", "riverside", "--chart", "RPC-1107")
+                .WithExample(
+                    "provider",
+                    "audit",
+                    "lakeside",
+                    "--since",
+                    "2026-11-17",
+                    "--limit",
+                    "20"
+                );
+            provider
+                .AddCommand<ProviderCliniciansCommand>("clinicians")
+                .WithDescription("List the clinicians who have acted for the provider")
+                .WithExample("provider", "clinicians", "riverside");
         });
         config.AddBranch("patient", patient =>
         {
