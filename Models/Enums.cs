@@ -53,6 +53,11 @@ public enum DenyReason
 
     /// <summary>A verified caller of the wrong kind, such as an app creating an invite.</summary>
     WrongPartyKind,
+
+    /// <summary>
+    /// A clinician used a patient's share code from a launch their organization made for a different patient's chart.
+    /// </summary>
+    LaunchPatientMismatch,
 }
 
 /// <summary>What a caller asked to do with a patient's record. Named after the network endpoints, and logged as-is.</summary>
@@ -78,6 +83,18 @@ public enum GrantError
 
     /// <summary>Emergency access needs a stated reason; the patient and the clinician's organization both see it.</summary>
     EmergencyReasonMissing,
+
+    /// <summary>
+    /// The clinician has no open launch with this id: their organization's system didn't open EZEHR for them, or
+    /// the launch has run out. Without one a clinician can't ask for anyone's record.
+    /// </summary>
+    LaunchNotOpen,
+
+    /// <summary>
+    /// The share code is good, but its patient isn't the one whose chart the clinician's organization launched from
+    /// (or hasn't connected that organization). The code stays unused.
+    /// </summary>
+    OfferNotForLaunchedPatient,
 }
 
 /// <summary>Why the platform couldn't register an organization.</summary>
@@ -88,6 +105,20 @@ public enum OrganizationError
 
     /// <summary>An app asked to declare the Full scope, which is for clinicians only.</summary>
     AppScopeNotAllowed,
+}
+
+/// <summary>Why an organization's launch couldn't be made or opened.</summary>
+public enum LaunchError
+{
+    /// <summary>The provider has no Entra tenant in the organizations table, so it has no clinicians to launch.</summary>
+    ProviderHasNoClinicians,
+    LaunchUnknown,
+
+    /// <summary>Not opened within its few minutes, or opened and since run out.</summary>
+    LaunchExpired,
+
+    /// <summary>The signed-in clinician isn't the one the organization made the launch for.</summary>
+    LaunchForAnotherClinician,
 }
 
 public enum InviteError

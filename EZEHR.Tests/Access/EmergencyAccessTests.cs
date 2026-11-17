@@ -45,6 +45,17 @@ public class EmergencyAccessTests : IAsyncLifetime
         await _database.DisposeAsync();
     }
 
+    /// <summary>The clinician asks from a launch their organization made, from a chart EZEHR can't match to anyone.</summary>
+    private async Task<GrantResult> OpenEmergencyAsync(
+        string emergencyCode,
+        string? reason,
+        Party clinician
+    )
+    {
+        Guid launchId = await TestLaunches.OpenAsync(_database.Db, _clock, clinician, null);
+        return await Grants.OpenEmergencyAccessAsync(emergencyCode, reason, clinician, launchId);
+    }
+
     private async Task<AccessDecision> ReadAsync()
     {
         return await _services.Access.AuthorizeAsync(
@@ -59,8 +70,8 @@ public class EmergencyAccessTests : IAsyncLifetime
     public async Task Emergency_access_is_off_until_the_patient_turns_it_on()
     {
         AccessOverview overview = await Grants.ListAccessAsync(_sam);
-        GrantResult blank = await Grants.OpenEmergencyAccessAsync("", Reason, Rivera);
-        GrantResult guessed = await Grants.OpenEmergencyAccessAsync("ABCD-EFGH", Reason, Rivera);
+        GrantResult blank = await OpenEmergencyAsync("", Reason, Rivera);
+        GrantResult guessed = await OpenEmergencyAsync("ABCD-EFGH", Reason, Rivera);
 
         Assert.Null(overview.EmergencyCode);
         Assert.Equal(GrantError.EmergencyCodeUnknown, blank.Error);
@@ -74,7 +85,7 @@ public class EmergencyAccessTests : IAsyncLifetime
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
 
-        GrantResult opened = await Grants.OpenEmergencyAccessAsync(
+        GrantResult opened = await OpenEmergencyAsync(
             GrantManager.FormatCode(code).ToLowerInvariant(),
             $"  {Reason}  ",
             Rivera
@@ -103,8 +114,8 @@ public class EmergencyAccessTests : IAsyncLifetime
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
 
-        GrantResult missing = await Grants.OpenEmergencyAccessAsync(code, null, Rivera);
-        GrantResult blank = await Grants.OpenEmergencyAccessAsync(code, "   ", Rivera);
+        GrantResult missing = await OpenEmergencyAsync(code, null, Rivera);
+        GrantResult blank = await OpenEmergencyAsync(code, "   ", Rivera);
 
         Assert.Equal(GrantError.EmergencyReasonMissing, missing.Error);
         Assert.Equal(GrantError.EmergencyReasonMissing, blank.Error);
@@ -117,7 +128,7 @@ public class EmergencyAccessTests : IAsyncLifetime
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
 
-        GrantResult opened = await Grants.OpenEmergencyAccessAsync(
+        GrantResult opened = await OpenEmergencyAsync(
             code,
             new string('x', GrantManager.MaxEmergencyReasonLength + 50),
             Rivera
@@ -138,7 +149,7 @@ public class EmergencyAccessTests : IAsyncLifetime
         );
         Assert.Equal(
             GrantError.EmergencyCodeUnknown,
-            (await Grants.OpenEmergencyAccessAsync(first, Reason, Rivera)).Error
+            (await OpenEmergencyAsync(first, Reason, Rivera)).Error
         );
 
         await Grants.TurnOffEmergencyAccessAsync(_sam);
@@ -146,7 +157,7 @@ public class EmergencyAccessTests : IAsyncLifetime
         Assert.Null((await Grants.ListAccessAsync(_sam)).EmergencyCode);
         Assert.Equal(
             GrantError.EmergencyCodeUnknown,
-            (await Grants.OpenEmergencyAccessAsync(second, Reason, Rivera)).Error
+            (await OpenEmergencyAsync(second, Reason, Rivera)).Error
         );
     }
 
@@ -154,7 +165,7 @@ public class EmergencyAccessTests : IAsyncLifetime
     public async Task Emergency_access_ends_after_an_hour()
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
-        await Grants.OpenEmergencyAccessAsync(code, Reason, Rivera);
+        await OpenEmergencyAsync(code, Reason, Rivera);
 
         _clock.Advance(TimeSpan.FromMinutes(59));
         Assert.True((await ReadAsync()).Allowed);
@@ -169,7 +180,7 @@ public class EmergencyAccessTests : IAsyncLifetime
     public async Task The_patient_can_revoke_emergency_access()
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
-        GrantResult opened = await Grants.OpenEmergencyAccessAsync(code, Reason, Rivera);
+        GrantResult opened = await OpenEmergencyAsync(code, Reason, Rivera);
 
         await Grants.RevokeAsync(_sam, opened.Grant!.Id);
         AccessDecision after = await ReadAsync();
@@ -182,7 +193,7 @@ public class EmergencyAccessTests : IAsyncLifetime
     public async Task Turning_emergency_access_off_leaves_open_access_to_run_out()
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
-        await Grants.OpenEmergencyAccessAsync(code, Reason, Rivera);
+        await OpenEmergencyAsync(code, Reason, Rivera);
 
         await Grants.TurnOffEmergencyAccessAsync(_sam);
 
@@ -193,7 +204,7 @@ public class EmergencyAccessTests : IAsyncLifetime
     public async Task The_patient_sees_who_opened_it_and_why()
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
-        GrantResult opened = await Grants.OpenEmergencyAccessAsync(code, Reason, Rivera);
+        GrantResult opened = await OpenEmergencyAsync(code, Reason, Rivera);
         await ReadAsync();
 
         AccessOverview overview = await Grants.ListAccessAsync(_sam);
@@ -228,7 +239,7 @@ public class EmergencyAccessTests : IAsyncLifetime
     public async Task The_clinicians_organization_sees_the_emergency_access_and_its_reason()
     {
         string code = await Grants.TurnOnEmergencyAccessAsync(_sam);
-        await Grants.OpenEmergencyAccessAsync(code, Reason, Rivera);
+        await OpenEmergencyAsync(code, Reason, Rivera);
         Party riverside = new(
             PartyKind.Provider,
             "urn:provider:riverside",

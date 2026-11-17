@@ -87,6 +87,22 @@ public sealed record RegisterAppResult(
     Organization? Organization
 );
 
+/// <summary>Allowed is the caller check; Error is set when an allowed provider's launch couldn't be made.</summary>
+public sealed record CreateClinicianLaunchResult(
+    bool Allowed,
+    DenyReason? Reason,
+    LaunchError? Error,
+    string? LaunchCode,
+    string? LaunchUrl
+);
+
+/// <summary>Launch is set when the clinician's launch is open, Error when it can't be opened.</summary>
+public sealed record OpenClinicianLaunchResult(
+    bool Succeeded,
+    ClinicianLaunch? Launch,
+    LaunchError? Error
+);
+
 public sealed record ListOrganizationCliniciansResult(
     bool Allowed,
     DenyReason? Reason,

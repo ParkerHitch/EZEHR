@@ -17,7 +17,8 @@ public sealed record OrganizationAuditFilter(
 
 /// <summary>
 /// One access attempt by someone the organization vouches for. ProviderPatientId is the organization's own id for
-/// the patient, when the patient is linked to it.
+/// the patient, when the patient is linked to it. EncounterId is the organization's own visit id from the launch the
+/// attempt was made under.
 /// </summary>
 public sealed record OrganizationAuditEvent(
     long Id,
@@ -30,7 +31,8 @@ public sealed record OrganizationAuditEvent(
     string Action,
     string? ClaimedPurpose,
     bool Granted,
-    DenyReason? Reason
+    DenyReason? Reason,
+    string? EncounterId = null
 );
 
 /// <summary>A clinician seen acting for the organization. DisplayName is the name on their most recent event.</summary>

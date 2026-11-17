@@ -20,6 +20,7 @@ public static class ProviderCommand
     public const string Usage = """
           provider invite <provider> <providerPatientId>
           provider push <provider> <providerPatientId>
+          provider launch <provider> <providerPatientId> --clinician <Entra object id> [--encounter <id>]
           provider audit <provider> [--clinician <uri>] [--patient <providerPatientId>]
           provider clinicians <provider>
             <provider>: lakeside, northwind, maple, riverside, or one onboarded with `certs issue --provider`
@@ -43,6 +44,26 @@ public static class ProviderCommand
             }
             return await CliniciansAsync(auditClient);
         }
+        if (args.Length >= 3 && args[0] == "launch" && IsProvider(args[1]))
+        {
+            if (!Guid.TryParse(CommandLine.Option(args, "--clinician"), out Guid clinicianObjectId))
+            {
+                Console.Error.WriteLine(
+                    "--clinician takes the clinician's object id in the provider's Entra tenant (Entra admin center, Users)"
+                );
+                return 1;
+            }
+            using HttpClient launchClient = NetworkClient.Create(
+                NetworkClient.BaseUrl,
+                ToolPaths.Pki($"{args[1]}.pfx")
+            );
+            return await LaunchAsync(
+                launchClient,
+                args[2],
+                clinicianObjectId,
+                CommandLine.Option(args, "--encounter") ?? $"visit-{DateTime.Now:yyyyMMdd-HHmm}"
+            );
+        }
         if (args.Length != 3 || !IsProvider(args[1]))
         {
             Console.Error.WriteLine($"usage:\n{Usage}");
@@ -64,6 +85,53 @@ public static class ProviderCommand
         }
         Console.Error.WriteLine($"usage:\n{Usage}");
         return 1;
+    }
+
+    /// <summary>
+    /// What the provider's own system does when a clinician clicks "open EZEHR" in a patient's chart: asks EZEHR for
+    /// a launch for that clinician, chart and visit, and prints the link the clinician's browser would be sent to.
+    /// </summary>
+    public static async Task<int> LaunchAsync(
+        HttpClient client,
+        string providerPatientId,
+        Guid clinicianObjectId,
+        string encounterId
+    )
+    {
+        const string path = "api/network/create-clinician-launch";
+        NetworkLog.Request(
+            "POST",
+            path,
+            $"for its clinician {clinicianObjectId}, chart {providerPatientId}, visit {encounterId}"
+        );
+        using HttpResponseMessage response = await NetworkClient.PostJsonAsync(
+            client,
+            path,
+            new CreateClinicianLaunchRequest(clinicianObjectId, providerPatientId, encounterId)
+        );
+        if (response.StatusCode != HttpStatusCode.Created)
+        {
+            await NetworkLog.FailedAsync(response);
+            if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                Console.WriteLine(
+                    "  This provider has no Entra tenant in EZEHR's organizations table, so it has no clinicians to launch."
+                );
+            }
+            return 1;
+        }
+        CreateClinicianLaunchResponse launch = (
+            await response.Content.ReadFromJsonAsync<CreateClinicianLaunchResponse>(
+                NetworkClient.Json
+            )
+        )!;
+        NetworkLog.Succeeded(
+            response,
+            $"a launch link for that clinician only, to open within {LaunchManager.LaunchOpenWindow.TotalMinutes:0} minutes"
+        );
+        Console.WriteLine();
+        Console.WriteLine($"  {launch.LaunchUrl}");
+        return 0;
     }
 
     /// <summary>Prints the invite link with a QR code of it, for the patient's phone to scan.</summary>
@@ -203,13 +271,16 @@ public static class ProviderCommand
             {
                 string outcome = auditEvent.Granted ? "allowed" : $"refused {auditEvent.Reason}";
                 string patient = auditEvent.ProviderPatientId ?? auditEvent.PatientId.ToString();
+                string visit = auditEvent.EncounterId is null
+                    ? ""
+                    : $"  visit {auditEvent.EncounterId}";
                 // Emergency access was opened without the patient's approval, so the reason given is what to review.
                 string emergencyReason =
                     auditEvent.Action == GrantManager.OpenEmergencyAccessAction
                         ? $"  reason: {auditEvent.ClaimedPurpose}"
                         : "";
                 Console.WriteLine(
-                    $"    {auditEvent.At:yyyy-MM-dd HH:mm}  {auditEvent.ActorName, -20}  {auditEvent.Action, -19}  {outcome}  patient {patient}{emergencyReason}"
+                    $"    {auditEvent.At:yyyy-MM-dd HH:mm}  {auditEvent.ActorName, -20}  {auditEvent.Action, -19}  {outcome}  patient {patient}{visit}{emergencyReason}"
                 );
             }
             if (page.NextAfterId is not long nextAfterId)

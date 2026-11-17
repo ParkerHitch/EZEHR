@@ -86,6 +86,7 @@ public sealed class Db(IConfiguration configuration)
         await using SqlCommand command = new(
             """
             DELETE FROM dbo.audit_events;
+            DELETE FROM dbo.clinician_launches;
             DELETE FROM dbo.grants;
             DELETE FROM dbo.share_offers;
             DELETE FROM dbo.entries;
@@ -154,6 +155,14 @@ public sealed class Db(IConfiguration configuration)
         """
             IF COL_LENGTH(N'dbo.audit_events', N'chain_hash') IS NULL
             ALTER TABLE dbo.audit_events ADD chain_hash CHAR(64) NULL;
+            """,
+        """
+            IF COL_LENGTH(N'dbo.grants', N'encounter_id') IS NULL
+            ALTER TABLE dbo.grants ADD encounter_id NVARCHAR(100) NULL;
+            """,
+        """
+            IF COL_LENGTH(N'dbo.audit_events', N'encounter_id') IS NULL
+            ALTER TABLE dbo.audit_events ADD encounter_id NVARCHAR(100) NULL;
             """,
     ];
 
@@ -268,5 +277,18 @@ public sealed class Db(IConfiguration configuration)
             entra_tenant_id UNIQUEIDENTIFIER NULL,
             CONSTRAINT ck_organizations_tenant_provider CHECK (entra_tenant_id IS NULL OR kind = N'Provider'),
             INDEX uq_organizations_tenant UNIQUE (entra_tenant_id) WHERE entra_tenant_id IS NOT NULL);
+
+        IF OBJECT_ID(N'dbo.clinician_launches') IS NULL
+        CREATE TABLE dbo.clinician_launches(
+            id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+            code NVARCHAR(16) NOT NULL CONSTRAINT uq_clinician_launches_code UNIQUE,
+            provider_uri NVARCHAR(200) COLLATE Latin1_General_100_BIN2 NOT NULL,
+            clinician_uri NVARCHAR(200) COLLATE Latin1_General_100_BIN2 NOT NULL,
+            provider_patient_id NVARCHAR(100) COLLATE Latin1_General_100_BIN2 NOT NULL,
+            encounter_id NVARCHAR(100) NOT NULL,
+            created_at DATETIMEOFFSET NOT NULL,
+            open_by DATETIMEOFFSET NOT NULL,
+            opened_at DATETIMEOFFSET NULL,
+            ends_at DATETIMEOFFSET NULL);
         """;
 }

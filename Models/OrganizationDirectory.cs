@@ -46,6 +46,16 @@ public sealed class OrganizationDirectory(IEnumerable<Organization> organization
             .ToList();
     }
 
+    /// <summary>The Entra tenant a provider's clinicians sign in through, or null when it has none (or isn't a provider).</summary>
+    public Guid? FindTenantOfProvider(string providerUri)
+    {
+        return _organizations
+            .FirstOrDefault(candidate =>
+                candidate.Kind == PartyKind.Provider && candidate.Uri == providerUri
+            )
+            ?.EntraTenantId;
+    }
+
     /// <summary>The provider whose clinicians sign in through this Entra tenant, or null when none does.</summary>
     public Party? FindProviderByTenant(Guid tenantId)
     {

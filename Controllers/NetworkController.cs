@@ -21,7 +21,8 @@ public sealed class NetworkController(
     InviteManager inviteManager,
     RecordManager recordManager,
     OrganizationAuditManager organizationAuditManager,
-    OrganizationManager organizationManager
+    OrganizationManager organizationManager,
+    LaunchManager launchManager
 ) : ControllerBase
 {
     /// <summary>Calls a minute per client address, set up in Program.cs.</summary>
@@ -113,6 +114,37 @@ public sealed class NetworkController(
         return StatusCode(
             StatusCodes.Status201Created,
             new CreateEnrollmentInviteResponse(result.InviteCode!, result.EnrollmentUrl!)
+        );
+    }
+
+    /// <summary>
+    /// A provider's system opens EZEHR for one of its own clinicians, from one patient's chart, for one visit. The
+    /// clinician can only ask for a record through the link this returns.
+    /// </summary>
+    [HttpPost("create-clinician-launch")]
+    public async Task<IActionResult> CreateClinicianLaunchAsync(
+        CreateClinicianLaunchRequest request
+    )
+    {
+        X509Certificate2? certificate = await clientCertificateService.GetAsync(HttpContext);
+        Caller caller = await callerManager.FromCertificateAsync(certificate);
+        CreateClinicianLaunchResult result = await launchManager.CreateClinicianLaunchAsync(
+            caller,
+            request.ClinicianObjectId!.Value,
+            request.ProviderPatientId,
+            request.EncounterId
+        );
+        if (!result.Allowed)
+        {
+            return DenialResult(result.Reason);
+        }
+        if (result.Error is LaunchError error)
+        {
+            return Conflict(new ErrorResponse(error.ToString()));
+        }
+        return StatusCode(
+            StatusCodes.Status201Created,
+            new CreateClinicianLaunchResponse(result.LaunchCode!, result.LaunchUrl!)
         );
     }
 

@@ -33,7 +33,9 @@ public sealed class AccessManager(
             action.ToString(),
             claimedPurpose ?? (underEmergencyAccess ? GrantManager.EmergencyPurpose : null),
             decision.Allowed,
-            decision.Reason
+            decision.Reason,
+            // The visit the grant was asked for under, so the clinician's organization can tie each read to it.
+            decision.Grant?.EncounterId
         );
         return decision;
     }

@@ -68,6 +68,13 @@ public class AccessTests : IAsyncLifetime
         await _database.DisposeAsync();
     }
 
+    /// <summary>The clinician enters a code from a launch their organization made from Sam's chart.</summary>
+    private async Task<GrantResult> RedeemAsync(string code, Party clinician)
+    {
+        Guid launchId = await TestLaunches.OpenAsync(_database.Db, _clock, clinician, _sam);
+        return await Grants.RedeemShareCodeAsync(code, clinician, launchId);
+    }
+
     private VerifiedCaller Clinician(Party party)
     {
         return new VerifiedCaller(party, _clock.GetUtcNow());
@@ -81,7 +88,7 @@ public class AccessTests : IAsyncLifetime
     private async Task<Grant> ActiveGrantAsync(ShareDuration duration = ShareDuration.OneHour)
     {
         ShareOffer offer = await Grants.CreateShareOfferAsync(_sam, duration);
-        GrantResult pending = await Grants.RedeemShareCodeAsync(offer.Code, Rivera);
+        GrantResult pending = await RedeemAsync(offer.Code, Rivera);
         GrantResult active = await Grants.ApproveOrDenyAsync(
             _sam,
             pending.Grant!.Id,
@@ -121,7 +128,7 @@ public class AccessTests : IAsyncLifetime
     public async Task Pending_denied()
     {
         ShareOffer offer = await Grants.CreateShareOfferAsync(_sam, ShareDuration.OneHour);
-        await Grants.RedeemShareCodeAsync(offer.Code, Rivera);
+        await RedeemAsync(offer.Code, Rivera);
         Assert.Equal(
             DenyReason.GrantPending,
             (await ReadFullRecordAsync(Clinician(Rivera))).Reason
@@ -273,7 +280,7 @@ public class AccessTests : IAsyncLifetime
     public async Task Denied_request_is_refused()
     {
         ShareOffer offer = await Grants.CreateShareOfferAsync(_sam, ShareDuration.OneHour);
-        GrantResult pending = await Grants.RedeemShareCodeAsync(offer.Code, Rivera);
+        GrantResult pending = await RedeemAsync(offer.Code, Rivera);
         GrantResult denied = await Grants.ApproveOrDenyAsync(
             _sam,
             pending.Grant!.Id,
@@ -303,12 +310,12 @@ public class AccessTests : IAsyncLifetime
         Assert.Equal(8, offer.Code.Length);
         Assert.Equal(Start.AddMinutes(10), offer.OfferExpiresAt);
         // Typed as "abcd-efgh".
-        GrantResult first = await Grants.RedeemShareCodeAsync(
+        GrantResult first = await RedeemAsync(
             GrantManager.FormatCode(offer.Code).ToLowerInvariant(),
             Rivera
         );
         Assert.True(first.Succeeded);
-        GrantResult second = await Grants.RedeemShareCodeAsync(offer.Code, Rivera);
+        GrantResult second = await RedeemAsync(offer.Code, Rivera);
         Assert.Equal(new GrantResult(false, null, GrantError.OfferUsed), second);
         IReadOnlyList<Grant> grants = await Grants.ListForPatientAsync(_sam);
         Assert.Equal(GrantStatus.Pending, Assert.Single(grants).Status);
@@ -318,8 +325,11 @@ public class AccessTests : IAsyncLifetime
     public async Task Concurrent_redeems_create_one_grant()
     {
         ShareOffer offer = await Grants.CreateShareOfferAsync(_sam, ShareDuration.OneHour);
+        Guid launchId = await TestLaunches.OpenAsync(_database.Db, _clock, Rivera, _sam);
         GrantResult[] results = await Task.WhenAll(
-            Enumerable.Range(0, 8).Select(_ => Grants.RedeemShareCodeAsync(offer.Code, Rivera))
+            Enumerable
+                .Range(0, 8)
+                .Select(_ => Grants.RedeemShareCodeAsync(offer.Code, Rivera, launchId))
         );
         Assert.Single(results, result => result.Succeeded);
         Assert.All(results.Where(result => !result.Succeeded), result =>
@@ -333,14 +343,8 @@ public class AccessTests : IAsyncLifetime
     {
         ShareOffer offer = await Grants.CreateShareOfferAsync(_sam, ShareDuration.OneHour);
         _clock.Advance(TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(1));
-        Assert.Equal(
-            GrantError.OfferExpired,
-            (await Grants.RedeemShareCodeAsync(offer.Code, Rivera)).Error
-        );
-        Assert.Equal(
-            GrantError.OfferUnknown,
-            (await Grants.RedeemShareCodeAsync("ZZZZZZZZ", Rivera)).Error
-        );
+        Assert.Equal(GrantError.OfferExpired, (await RedeemAsync(offer.Code, Rivera)).Error);
+        Assert.Equal(GrantError.OfferUnknown, (await RedeemAsync("ZZZZZZZZ", Rivera)).Error);
         Assert.Empty(await Grants.ListForPatientAsync(_sam));
     }
 
@@ -348,7 +352,7 @@ public class AccessTests : IAsyncLifetime
     public async Task Redeem_logs_one_event_naming_the_clinician()
     {
         ShareOffer offer = await Grants.CreateShareOfferAsync(_sam, ShareDuration.OneHour);
-        await Grants.RedeemShareCodeAsync(offer.Code, Rivera);
+        await RedeemAsync(offer.Code, Rivera);
         AuditEvent logged = Assert.Single(await Audit.ListForPatientAsync(_sam));
         Assert.Equal("RedeemShareCode", logged.Action);
         Assert.Equal(Rivera, logged.Actor);
@@ -453,7 +457,7 @@ public class AccessTests : IAsyncLifetime
     public async Task Decide_rejects_other_patients_and_non_pending()
     {
         ShareOffer offer = await Grants.CreateShareOfferAsync(_sam, ShareDuration.OneHour);
-        Guid grantId = (await Grants.RedeemShareCodeAsync(offer.Code, Rivera)).Grant!.Id;
+        Guid grantId = (await RedeemAsync(offer.Code, Rivera)).Grant!.Id;
         Assert.Equal(
             GrantError.GrantUnknown,
             (await Grants.ApproveOrDenyAsync(Guid.NewGuid(), grantId, true)).Error

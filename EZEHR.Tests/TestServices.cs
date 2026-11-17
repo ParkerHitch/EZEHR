@@ -19,7 +19,8 @@ public sealed class TestServices
         Audit = new AuditManager(db, clock);
         Organizations = new OrganizationManager(db, NullLogger<OrganizationManager>.Instance);
         Invites = new InviteManager(db, Organizations, clock, options);
-        Grants = new GrantManager(db, Audit, Invites, Organizations, clock, options);
+        Launches = new LaunchManager(db, Organizations, clock, options);
+        Grants = new GrantManager(db, Audit, Invites, Organizations, Launches, clock, options);
         Access = new AccessManager(Grants, Audit, clock);
         OrganizationAudit = new OrganizationAuditManager(db);
         Records = new RecordManager(
@@ -38,6 +39,8 @@ public sealed class TestServices
     public AuditManager Audit { get; }
 
     public GrantManager Grants { get; }
+
+    public LaunchManager Launches { get; }
 
     public AccessManager Access { get; }
 

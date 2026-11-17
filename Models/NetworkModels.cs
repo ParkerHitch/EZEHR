@@ -35,6 +35,18 @@ public sealed record RegisterAppResponse(string Uri, string CertificateCommonNam
 
 public sealed record CreateEnrollmentInviteResponse(string InviteCode, string EnrollmentUrl);
 
+/// <summary>
+/// ClinicianObjectId is the clinician's object id in the provider's Entra tenant. ProviderPatientId and EncounterId
+/// are the provider's own ids for the chart and the visit the clinician is opening EZEHR from.
+/// </summary>
+public sealed record CreateClinicianLaunchRequest(
+    [Required] Guid? ClinicianObjectId,
+    [Required, StringLength(100, MinimumLength = 1)] string ProviderPatientId,
+    [Required, StringLength(100, MinimumLength = 1)] string EncounterId
+);
+
+public sealed record CreateClinicianLaunchResponse(string LaunchCode, string LaunchUrl);
+
 /// <summary>Replaced counts records the provider corrected: same resource id, changed content.</summary>
 public sealed record PushSignedRecordsResponse(int Stored, int AlreadyStored, int Replaced);
 

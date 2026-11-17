@@ -35,6 +35,9 @@ public static class StageCommand
         ConsoleColor Color
     );
 
+    /// <summary>Dr. Rivera's object id in Riverside's Entra tenant, which Riverside's system names in its launch.</summary>
+    public const string ClinicianObjectIdVariable = "EZEHR_CLINICIAN_OBJECT_ID";
+
     private sealed record Step(Actor Actor, string Action, Func<Task<bool>> RunAsync);
 
     public static async Task<int> RunAsync(string[] args)
@@ -330,7 +333,35 @@ public static class StageCommand
             ),
             // Sam checks in at Riverside, which needs its own link to write the visit later.
             Invite(riverside, "riverside", "RPC-1107"),
-            // The visit: sign-in, share code, approval and reads happen on the phone and the clinician page.
+            // Dr. Rivera clicks "open EZEHR" in Sam's chart: Riverside's system makes the launch.
+            new Step(
+                riverside,
+                "opens EZEHR for Dr. Rivera from Sam's chart (RPC-1107), for today's visit",
+                async () =>
+                {
+                    if (
+                        !Guid.TryParse(
+                            Environment.GetEnvironmentVariable(ClinicianObjectIdVariable),
+                            out Guid clinicianObjectId
+                        )
+                    )
+                    {
+                        Console.WriteLine(
+                            $"  Set {ClinicianObjectIdVariable} to Dr. Rivera's object id in Riverside's Entra tenant, or run: ezehr-tools provider launch riverside RPC-1107 --clinician <object id>"
+                        );
+                        return false;
+                    }
+                    using HttpClient client = ProviderClient("riverside");
+                    return await ProviderCommand.LaunchAsync(
+                            client,
+                            "RPC-1107",
+                            clinicianObjectId,
+                            $"visit-{DateTime.Now:yyyyMMdd}"
+                        ) == 0;
+                }
+            ),
+            // The visit: Dr. Rivera opens that link and signs in; the share code, approval and reads happen on the
+            // phone and the clinician page.
             Push(
                 riverside,
                 "riverside",
