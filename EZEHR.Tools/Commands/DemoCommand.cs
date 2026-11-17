@@ -1,5 +1,6 @@
 using Dapper;
 using EZEHR.Data;
+using EZEHR.Managers;
 using EZEHR.Models;
 using EZEHR.Services;
 using EZEHR.Tools.Net;
@@ -104,6 +105,15 @@ public static class DemoCommand
             FROM audit_events WHERE patient_id = @samId ORDER BY id DESC
             """,
             new { samId }
+        );
+        AuditChainCheck chain = await new AuditManager(
+            OpenDatabase()!,
+            TimeProvider.System
+        ).VerifyChainAsync(samId.Value);
+        Console.WriteLine(
+            chain.Intact
+                ? $"audit log:        intact, {chain.EventCount} events, head {chain.HeadHash}"
+                : $"audit log:        BROKEN at event {chain.FirstBrokenId} of {chain.EventCount}"
         );
         Console.WriteLine("latest activity (newest first):");
         foreach (string line in activity)

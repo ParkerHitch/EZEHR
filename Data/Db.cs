@@ -151,6 +151,10 @@ public sealed class Db(IConfiguration configuration)
             SET app_description = N'Looks for slow changes in your kidney lab results that no single provider would see.'
             WHERE uri = N'urn:app:kidney-check' AND app_description IS NULL;
             """,
+        """
+            IF COL_LENGTH(N'dbo.audit_events', N'chain_hash') IS NULL
+            ALTER TABLE dbo.audit_events ADD chain_hash CHAR(64) NULL;
+            """,
     ];
 
     // Identifier columns use a binary collation, because SQL Server's default collation is case-insensitive

@@ -220,6 +220,23 @@ public static class Copy
 
     public const string ShareExpired = "This code has expired. Make a new one.";
 
+    public const string AuditLogChanged =
+        "Warning: this log no longer matches its fingerprints. Something changed it outside EZEHR.";
+
+    public const string AuditLogHint =
+        "Each event is fingerprinted together with the one before it, so none can be changed or removed without breaking the chain. Note the fingerprint to check it later.";
+
+    /// <summary>
+    /// "Log verified ✓ · 12 events · fingerprint 3f9a 21bc 77d0 e1a4". Older is how many events predate
+    /// fingerprints, which nothing vouches for.
+    /// </summary>
+    public static string AuditLogVerified(int count, string fingerprint, int older)
+    {
+        string events = count == 1 ? "1 event" : $"{count} events";
+        string line = $"Log verified ✓ · {events} · fingerprint {fingerprint}";
+        return older == 0 ? line : $"{line} · {older} older not covered";
+    }
+
     /// <summary>One line of the patient's activity, in plain language.</summary>
     public static string ActivityLine(AuditEvent auditEvent)
     {
