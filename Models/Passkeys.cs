@@ -39,5 +39,13 @@ public sealed record CreateRegistrationOptionsResult(
     EnrollmentError? Error
 );
 
-/// <summary>An invite looked at without being used, so the page can name the provider that sent it.</summary>
-public sealed record InviteCheck(bool Usable, string? ProviderName, EnrollmentError? Error);
+/// <summary>
+/// An invite looked at without being used, so the page can name the provider that sent it. Apps is every app a new
+/// patient can turn on while enrolling, all off; empty when the invite can't be used.
+/// </summary>
+public sealed record InviteCheck(
+    bool Usable,
+    string? ProviderName,
+    EnrollmentError? Error,
+    IReadOnlyList<AppLine> Apps
+);

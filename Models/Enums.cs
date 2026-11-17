@@ -10,11 +10,14 @@ public enum PartyKind
 /// <summary>
 /// Full: clinicians read everything, and write nothing (their organization's system writes, signed by it).
 /// LabsAndNotes: apps read lab Observations and write notes.
+/// MedicationsLabsAndNotes: the same, plus the medication list.
+/// An app declares its scope in the organizations table; a grant keeps the scope the patient agreed to.
 /// </summary>
 public enum GrantScope
 {
     Full,
     LabsAndNotes,
+    MedicationsLabsAndNotes,
 }
 
 public enum GrantStatus
@@ -57,6 +60,7 @@ public enum AccessAction
 {
     ReadFullRecord,
     ReadEgfrLabs,
+    ReadMedications,
     WriteSignedNote,
 }
 
@@ -68,6 +72,12 @@ public enum GrantError
     OfferExpired,
     GrantUnknown,
     GrantNotPending,
+
+    /// <summary>No patient has this emergency code. A patient who turned emergency access off has none.</summary>
+    EmergencyCodeUnknown,
+
+    /// <summary>Emergency access needs a stated reason; the patient and the clinician's organization both see it.</summary>
+    EmergencyReasonMissing,
 }
 
 /// <summary>Why the platform couldn't register an organization.</summary>
@@ -75,6 +85,9 @@ public enum OrganizationError
 {
     /// <summary>Its URI or certificate CN already has a row.</summary>
     OrganizationExists,
+
+    /// <summary>An app asked to declare the Full scope, which is for clinicians only.</summary>
+    AppScopeNotAllowed,
 }
 
 public enum InviteError

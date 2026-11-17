@@ -40,7 +40,7 @@
    - **EZCA certificates** for every organization and app, used for mutual TLS and record signatures
    - encryption at rest with keys in Azure Key Vault
    - one server-side access check
-3. **The platform's app model:** an example app that reads only what the patient granted, with that grant visible and revocable.
+3. **The platform's app model:** an example app that reads only what the patient granted, with that grant visible and revocable. *(Updated 2026-11-17: apps are now rows in the `organizations` table with a declared scope, the Access page lists all of them, and a second example app, Medication Check, has a wider scope. See `2026-11-17-app-platform-design.md`.)*
 4. **Usable:** a patient or clinician never sees a password, a key, or a certificate dialog.
 5. A design that holds up in Q&A with identity and PKI experts (see section 10).
 6. **A small openness feature:** "Export my whole record" downloads a FHIR bundle.
@@ -113,7 +113,7 @@ The patient is **Sam**. Sam's care is split across three providers on three diff
 
 **Stretch goals, in priority order:**
 1. Conditional Access requiring phishing-resistant sign-in for the clinician app (needs the P2 trial; about 30 minutes).
-2. Break-glass emergency access (ER scenario).
+2. Break-glass emergency access (ER scenario). **Built 2026-11-17:** see `2026-11-17-emergency-access-design.md`. The patient opts in and gets an emergency code; a verified clinician who enters it with a reason gets one hour of access with no approval, and the patient and the clinician's organization both see it.
 3. An EZCA certificate on the security key's smart-card slot, used to sign in to Entra (certificate-based authentication). This is Keytos's real product flow, but setup is heavy.
 4. Recovery after a lost phone using a verifiable credential (Entra Verified ID).
 
@@ -268,5 +268,5 @@ The full, flow-by-flow breakdown with diagrams is in `docs/auth-flows.md`.
 - The polling mechanism (htmx or a few lines of script).
 - Visual design. Mockups can come later.
 - Seed data content, and the broker tool's details.
-- Whether the audit log is hash-chained (nice to have).
+- Whether the audit log is hash-chained (nice to have). **Built 2026-11-17:** a SHA-256 chain per patient, checked on every load of the Activity page. See `2026-11-17-audit-hash-chain-design.md` for what it does and doesn't prove.
 - How the two team members split the work.

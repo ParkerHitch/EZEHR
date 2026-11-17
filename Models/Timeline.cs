@@ -22,8 +22,16 @@ public sealed record Timeline(
     int UnverifiedCount = 0
 );
 
-/// <summary>What the patient's home page shows.</summary>
-public sealed record PatientHome(string PatientName, Timeline Timeline, string RecordVersion);
+/// <summary>
+/// What the patient's home page shows. EmergencyAlerts has one line for each emergency access open right now:
+/// who, until when, and the reason they gave.
+/// </summary>
+public sealed record PatientHome(
+    string PatientName,
+    Timeline Timeline,
+    string RecordVersion,
+    IReadOnlyList<string> EmergencyAlerts
+);
 
 /// <summary>A share offer as the Share page shows it, and what became of it.</summary>
 public sealed record ShareStatus(
@@ -36,21 +44,54 @@ public sealed record ShareStatus(
     string? Until
 );
 
-/// <summary>One line of the patient's Access page.</summary>
-public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke);
+/// <summary>One line of the patient's Access page. Emergency lines (opened without an approval) stand out.</summary>
+public sealed record AccessLine(Guid GrantId, string Text, bool CanRevoke, bool Emergency = false);
 
 /// <summary>A provider that can add records for the patient (a provider link). It can't read the record.</summary>
 public sealed record ConnectedProviderLine(string ProviderUri, string Text);
 
 /// <summary>
-/// The Access page: who can see the record (grants), which providers can add to it (links), and Kidney Check's
-/// current grant, or null when it's off (then the page offers to turn it on).
+/// One app on the Access page. What is what it may read, in words ("lab results only"). Grant is the patient's
+/// current grant for it, or null when it's off (then the page offers to turn it on).
+/// </summary>
+public sealed record AppLine(
+    string AppUri,
+    string Name,
+    string? Description,
+    string What,
+    AccessLine? Grant
+);
+
+/// <summary>
+/// The Access page: who can see the record (grants), which providers can add to it (links), and every app on the
+/// network, on or off. EmergencyCode is the patient's emergency code as XXXX-XXXX, or null when emergency
+/// access is off.
 /// </summary>
 public sealed record AccessOverview(
     IReadOnlyList<AccessLine> Lines,
     IReadOnlyList<ConnectedProviderLine> ConnectedProviders,
-    AccessLine? KidneyCheck
+    IReadOnlyList<AppLine> Apps,
+    string? EmergencyCode = null
 );
 
-/// <summary>One line of the patient's Activity page. Blocked lines show in red.</summary>
-public sealed record ActivityLine(long Id, string Text, string Time, bool Blocked);
+/// <summary>
+/// One line of the patient's Activity page. Blocked lines show in red; a clinician opening the record with
+/// emergency access shows as a warning.
+/// </summary>
+public sealed record ActivityLine(
+    long Id,
+    string Text,
+    string Time,
+    bool Blocked,
+    bool Emergency = false
+);
+
+/// <summary>
+/// The Activity page: the lines, newest first, and what checking the log's hash chain found, in words. ChainStatus
+/// is null while there is nothing to check.
+/// </summary>
+public sealed record PatientActivity(
+    IReadOnlyList<ActivityLine> Lines,
+    bool ChainIntact,
+    string? ChainStatus
+);

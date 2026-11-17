@@ -41,7 +41,9 @@ public sealed class RecordModel(
             result.Grant!.ExpiresAt!.Value,
             TimeZoneInfo.FindSystemTimeZoneById(options.Value.TimeZone)
         );
-        Header = Copy.ClinicianRecordHeader(result.PatientName ?? "", until);
+        Header = result.Grant.EmergencyReason is null
+            ? Copy.ClinicianRecordHeader(result.PatientName ?? "", until)
+            : Copy.ClinicianEmergencyRecordHeader(result.PatientName ?? "", until);
         Timeline = TimelineBuilder.Build(result.Entries) with
         {
             UnverifiedCount = result.UnverifiedCount,

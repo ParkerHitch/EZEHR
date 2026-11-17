@@ -3,15 +3,36 @@ namespace EZEHR.Models;
 /// <summary>Every user-facing string the spec fixes. Change copy here only.</summary>
 public static class Copy
 {
-    public const string KidneyOptIn =
-        "Allow the Kidney Check app to read your lab results. It looks for slow changes no single provider would see. You can turn it off any time.";
+    /// <summary>
+    /// One app's checkbox on the enrollment page: "Allow Kidney Check. Looks for slow changes… It can read: lab
+    /// results only. You can turn it off any time."
+    /// </summary>
+    public static string AppOptIn(string app, string? description, string what)
+    {
+        string about = description is null ? "" : $" {description}";
+        return $"Allow {app}.{about} It can read: {what}. You can turn it off any time.";
+    }
 
     public const string SomethingWentWrong =
         "We couldn't finish that. Please go back and try again.";
 
-    public const string TurnOnKidneyCheck = "Turn on Kidney Check";
+    public static string TurnOnApp(string app)
+    {
+        return $"Turn on {app}";
+    }
 
-    public const string TurnOffKidneyCheck = "Turn off Kidney Check";
+    public static string TurnOffApp(string app)
+    {
+        return $"Turn off {app}";
+    }
+
+    public const string NoApps = "No apps are available yet.";
+
+    /// <summary>What turning an app on would allow, under its description on the Access page.</summary>
+    public static string AppOffer(string what)
+    {
+        return $"If you turn it on, it can read: {what}. It can add notes to your record. You can turn it off any time.";
+    }
 
     public const string AppsHint =
         "Apps see only what you allow, and every time one reads your record it shows in Activity.";
@@ -35,6 +56,56 @@ public static class Copy
     public const string ShareCodeUnknown = "We don't recognize that code. Check it and try again.";
 
     public const string WaitingForApproval = "Waiting for the patient to approve on their phone…";
+
+    public const string EmergencyAccessOffHint =
+        "If you turn this on, you get an emergency code to keep where emergency staff will find it. A verified clinician who enters it can open your record for 1 hour without waiting for your approval. They must give a reason, and you see who, when and why.";
+
+    public const string EmergencyAccessOnHint =
+        "Keep this code where emergency staff will find it, like your phone's medical ID or a card in your wallet. A verified clinician who enters it can open your record for 1 hour without waiting for your approval. They must give a reason, and you see who, when and why.";
+
+    public const string TurnOnEmergencyAccess = "Turn on emergency access";
+
+    public const string TurnOffEmergencyAccess = "Turn off emergency access";
+
+    public const string NewEmergencyCode = "Make a new code";
+
+    public const string EmergencyAccessWarning =
+        "Emergency access opens the record for 1 hour without the patient's approval. The patient and your organization will see your name, the time and the reason you give.";
+
+    public const string EmergencyCodeUnknown =
+        "We don't recognize that emergency code. Check it and try again.";
+
+    public const string EmergencyReasonMissing = "Give a reason for emergency access.";
+
+    /// <summary>What the clinician sees when emergency access can't be opened.</summary>
+    public static string EmergencyAccessFailed(GrantError error)
+    {
+        return error switch
+        {
+            GrantError.EmergencyReasonMissing => EmergencyReasonMissing,
+            _ => EmergencyCodeUnknown,
+        };
+    }
+
+    /// <summary>An open emergency grant on the patient's Access page.</summary>
+    public static string EmergencyAccessUntil(string name, string org, string time, string reason)
+    {
+        return $"Emergency access: {name}, {org} · until {time} · reason given: {reason}";
+    }
+
+    /// <summary>The link under the home page's emergency access alert.</summary>
+    public const string EmergencyAccessReview = "See it, or end it, on the Access page";
+
+    /// <summary>Marks an ended emergency grant on the Access page: "Dr. Rivera, Riverside Primary Care (emergency access)".</summary>
+    public static string EmergencyAccessWho(string who)
+    {
+        return $"{who} (emergency access)";
+    }
+
+    public static string ClinicianEmergencyRecordHeader(string patient, string time)
+    {
+        return $"{patient} · emergency access until {time}";
+    }
 
     public static string ClinicianSignedIn(string name, string org, string time)
     {
@@ -95,8 +166,15 @@ public static class Copy
         };
     }
 
-    /// <summary>What the Kidney Check grant covers, as the Access page says it.</summary>
-    public const string AppGrantWhat = "lab results only";
+    /// <summary>What an app's scope covers, as the Access page says it.</summary>
+    public static string AppScopeWhat(GrantScope scope)
+    {
+        return scope switch
+        {
+            GrantScope.MedicationsLabsAndNotes => "medications and lab results only",
+            _ => "lab results only",
+        };
+    }
 
     /// <summary>AppGrantLine without its trailing "Revoke", which the page shows as the button.</summary>
     public static string AppGrantSummary(string app, string what, string date)
@@ -152,6 +230,23 @@ public static class Copy
 
     public const string ShareExpired = "This code has expired. Make a new one.";
 
+    public const string AuditLogChanged =
+        "Warning: this log no longer matches its fingerprints. Something changed it outside EZEHR.";
+
+    public const string AuditLogHint =
+        "Each event is fingerprinted together with the one before it, so none can be changed or removed without breaking the chain. Note the fingerprint to check it later.";
+
+    /// <summary>
+    /// "Log verified ✓ · 12 events · fingerprint 3f9a 21bc 77d0 e1a4". Older is how many events predate
+    /// fingerprints, which nothing vouches for.
+    /// </summary>
+    public static string AuditLogVerified(int count, string fingerprint, int older)
+    {
+        string events = count == 1 ? "1 event" : $"{count} events";
+        string line = $"Log verified ✓ · {events} · fingerprint {fingerprint}";
+        return older == 0 ? line : $"{line} · {older} older not covered";
+    }
+
     /// <summary>One line of the patient's activity, in plain language.</summary>
     public static string ActivityLine(AuditEvent auditEvent)
     {
@@ -170,8 +265,13 @@ public static class Copy
         }
         return auditEvent.Action switch
         {
+            "OpenEmergencyAccess" =>
+                $"Emergency access: {who} opened your record without your approval. Reason given: {auditEvent.ClaimedPurpose}",
+            "ReadFullRecord" when auditEvent.ClaimedPurpose == "emergency" =>
+                $"{who} viewed your record (emergency access)",
             "ReadFullRecord" => $"{who} viewed your record",
             "ReadEgfrLabs" => $"{who} read your lab results",
+            "ReadMedications" => $"{who} read your medications",
             "WriteSignedNote" => $"{who} added a note to your record",
             "PushSignedRecords" => $"{actor.OrgName} added records",
             "RedeemShareCode" => $"{who} asked to see your record",
@@ -223,6 +323,11 @@ public static class Copy
     public static string AppGrantLine(string app, string what, string date)
     {
         return $"{app} · {what} · you allowed this {date} · Revoke";
+    }
+
+    public static string MedicationNote(string medication, int percent)
+    {
+        return $"You take {medication}, and your kidney function (eGFR) has dropped {percent}%. Medicines like {medication} can be hard on the kidneys. Consider asking a doctor to review it.";
     }
 
     public static string KidneyNote(int percent, int providers)

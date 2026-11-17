@@ -11,7 +11,7 @@ namespace EZEHR.Managers;
 
 /// <summary>
 /// Patient accounts: enrollment from a provider invite with a new passkey, linking more providers' invites,
-/// and passkey sign-in. Nothing is shared at enrollment except the Kidney Check grant, and only on opt-in.
+/// and passkey sign-in. Nothing is shared at enrollment except grants for the apps the patient ticks.
 /// </summary>
 public sealed class EnrollmentManager(
     Db db,
@@ -31,9 +31,20 @@ public sealed class EnrollmentManager(
         InviteResult invite = await inviteManager.CheckInviteAsync(inviteCode);
         if (!invite.Succeeded)
         {
-            return new InviteCheck(false, null, ToEnrollmentError(invite.Error!.Value));
+            return new InviteCheck(false, null, ToEnrollmentError(invite.Error!.Value), []);
         }
-        return new InviteCheck(true, await ProviderNameAsync(invite.Link!), null);
+        OrganizationDirectory directory = await organizationManager.LoadDirectoryAsync();
+        List<AppLine> apps = directory
+            .ListApps()
+            .Select(app => new AppLine(
+                app.Uri,
+                app.DisplayName,
+                app.AppDescription,
+                Copy.AppScopeWhat(app.GrantedAppScope()),
+                null
+            ))
+            .ToList();
+        return new InviteCheck(true, await ProviderNameAsync(invite.Link!), null, apps);
     }
 
     /// <summary>Step 1 of enrollment: a WebAuthn challenge, only for an invite that can still be used.</summary>
@@ -71,10 +82,11 @@ public sealed class EnrollmentManager(
     /// <summary>
     /// Step 2 of enrollment. Verifies the new passkey, then in one transaction claims the invite, creates the
     /// patient with a freshly wrapped data key, and stores the passkey's public key. A used invite creates nothing.
+    /// Then turns on each app the patient ticked; a URI that isn't an app on the network is ignored.
     /// </summary>
     public async Task<EnrollmentResult> CompleteRegistrationAsync(
         string inviteCode,
-        bool kidneyCheckOptIn,
+        IReadOnlyList<string> appUris,
         AuthenticatorAttestationRawResponse attestation,
         CredentialCreateOptions originalOptions
     )
@@ -139,9 +151,9 @@ public sealed class EnrollmentManager(
         );
         await transaction.CommitAsync();
 
-        if (kidneyCheckOptIn)
+        foreach (string appUri in appUris.Distinct())
         {
-            await grantManager.TurnOnKidneyCheckAsync(patientId);
+            await grantManager.TurnOnAppAsync(patientId, appUri);
         }
         return new EnrollmentResult(true, patientId, null);
     }

@@ -89,7 +89,7 @@ public class PatientPagesTests : IAsyncLifetime
                     },
                     clientExtensionResults = new { },
                 },
-                kidneyCheckOptIn = true,
+                appUris = new[] { "urn:app:kidney-check" },
             }
         );
         Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
@@ -225,10 +225,10 @@ public class PatientPagesTests : IAsyncLifetime
             .Match(on, "name=\"grantId\" value=\"([0-9a-f-]+)\"")
             .Groups[1]
             .Value;
-        Assert.Contains(Copy.TurnOffKidneyCheck, on);
+        Assert.Contains(Copy.TurnOffApp("Kidney Check"), on);
         Assert.Contains(">On<", on);
         Assert.Contains("No clinicians.", on);
-        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, on);
+        Assert.DoesNotContain(Copy.TurnOnApp("Kidney Check"), on);
 
         await PostFormAsync(
             "/Patient/Grants",
@@ -236,21 +236,169 @@ public class PatientPagesTests : IAsyncLifetime
             new() { ["grantId"] = kidneyGrantId }
         );
         string off = await ReadAsync("/Patient/Grants");
-        Assert.Contains(Copy.TurnOnKidneyCheck, off);
-        Assert.Contains(Copy.KidneyOptIn, off);
-        Assert.Contains(">Off<", off);
+        Assert.Contains(Copy.TurnOnApp("Kidney Check"), off);
+        Assert.Contains(Copy.AppOffer("lab results only"), off);
+        Assert.DoesNotContain(">On<", off);
 
         HttpResponseMessage turnedOn = await PostFormAsync(
             "/Patient/Grants",
-            "/Patient/Grants?handler=TurnOnKidneyCheck",
-            []
+            "/Patient/Grants?handler=TurnOnApp",
+            new() { ["appUri"] = OrgDirectory.KidneyCheckUri }
         );
 
         Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
         string access = await ReadAsync("/Patient/Grants");
         Assert.Contains("Kidney Check · lab results only · you allowed this", access);
-        Assert.Contains(Copy.TurnOffKidneyCheck, access);
-        Assert.DoesNotContain(Copy.TurnOnKidneyCheck, access);
+        Assert.Contains(Copy.TurnOffApp("Kidney Check"), access);
+        Assert.DoesNotContain(Copy.TurnOnApp("Kidney Check"), access);
+    }
+
+    [Fact]
+    public async Task Apps_section_lists_every_app_and_turns_a_second_one_on_with_its_own_scope()
+    {
+        string before = await ReadAsync("/Patient/Grants");
+        Assert.Contains("Medication Check", before);
+        Assert.Contains(Copy.TurnOnApp("Medication Check"), before);
+        Assert.Contains(Copy.AppOffer("medications and lab results only"), before);
+
+        HttpResponseMessage turnedOn = await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOnApp",
+            new() { ["appUri"] = OrgDirectory.MedicationCheckUri }
+        );
+
+        Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
+        string after = await ReadAsync("/Patient/Grants");
+        Assert.Contains(
+            "Medication Check · medications and lab results only · you allowed this",
+            after
+        );
+        Assert.Contains(Copy.TurnOffApp("Medication Check"), after);
+        Assert.Contains(Copy.TurnOffApp("Kidney Check"), after);
+        Assert.Contains("No clinicians.", after);
+    }
+
+    [Fact]
+    public async Task Turning_on_something_that_is_not_an_app_grants_nothing()
+    {
+        await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOnApp",
+            new() { ["appUri"] = OrgDirectory.ProviderUri("riverside") }
+        );
+
+        IReadOnlyList<Grant> grants = await _app.WithAsync(async services =>
+        {
+            GrantManager grantManager = services.GetRequiredService<GrantManager>();
+            Guid sam = (
+                await services
+                    .GetRequiredService<InviteManager>()
+                    .FindLinkedPatientAsync(OrgDirectory.ProviderUri("lakeside"), "LUC-20417")
+            )!.Value;
+            return await grantManager.ListForPatientAsync(sam);
+        });
+        Assert.DoesNotContain(grants, grant => grant.Grantee.Kind != PartyKind.App);
+        Assert.Single(grants);
+    }
+
+    [Fact]
+    public async Task Emergency_access_section_turns_on_shows_the_code_and_turns_off()
+    {
+        string off = await ReadAsync("/Patient/Grants");
+        Assert.Contains(Copy.EmergencyAccessOffHint, off);
+        Assert.Contains(Copy.TurnOnEmergencyAccess, off);
+
+        HttpResponseMessage turnedOn = await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOnEmergencyAccess",
+            []
+        );
+
+        Assert.Equal(HttpStatusCode.Redirect, turnedOn.StatusCode);
+        string on = await ReadAsync("/Patient/Grants");
+        Match code = Regex.Match(on, "font-monospace\">([A-Z0-9]{4}-[A-Z0-9]{4})<");
+        Assert.True(code.Success, "no emergency code on the Access page");
+        Assert.Contains(Copy.EmergencyAccessOnHint, on);
+        string homeBefore = await ReadAsync("/Patient/Home");
+        Assert.DoesNotContain("Emergency access:", homeBefore);
+        GrantResult opened = await _app.WithAsync(services =>
+            services
+                .GetRequiredService<GrantManager>()
+                .OpenEmergencyAccessAsync(code.Groups[1].Value, "Unresponsive", Rivera)
+        );
+        Assert.True(opened.Succeeded);
+        string access = await ReadAsync("/Patient/Grants");
+        Assert.Contains("Emergency access: Dr. Rivera, Riverside Primary Care · until", access);
+        string activity = await ReadAsync("/Patient/Activity");
+        Assert.Contains(
+            "opened your record without your approval. Reason given: Unresponsive",
+            activity
+        );
+        Assert.Contains("list-group-item-warning", activity);
+        // The open home page learns about it on its next poll, and loses the alert once it's revoked.
+        HttpResponseMessage homePoll = await _phone.GetAsync(TimelinePollPath(homeBefore));
+        string homeAlert = WebUtility.HtmlDecode(await homePoll.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, homePoll.StatusCode);
+        Assert.Contains("Emergency access: Dr. Rivera, Riverside Primary Care · until", homeAlert);
+        Assert.Contains("reason given: Unresponsive", homeAlert);
+        Assert.Contains(Copy.EmergencyAccessReview, homeAlert);
+        await _app.WithAsync(services =>
+            services
+                .GetRequiredService<GrantManager>()
+                .RevokeAsync(opened.Grant!.PatientId, opened.Grant.Id)
+        );
+        HttpResponseMessage afterRevoke = await _phone.GetAsync(TimelinePollPath(homeAlert));
+        Assert.Equal(HttpStatusCode.OK, afterRevoke.StatusCode);
+        Assert.DoesNotContain(
+            "Emergency access:",
+            WebUtility.HtmlDecode(await afterRevoke.Content.ReadAsStringAsync())
+        );
+
+        await PostFormAsync(
+            "/Patient/Grants",
+            "/Patient/Grants?handler=TurnOffEmergencyAccess",
+            []
+        );
+
+        string offAgain = await ReadAsync("/Patient/Grants");
+        Assert.Contains(Copy.TurnOnEmergencyAccess, offAgain);
+        Assert.DoesNotContain(code.Groups[1].Value, offAgain);
+    }
+
+    [Fact]
+    public async Task Activity_page_shows_the_log_is_verified()
+    {
+        Assert.DoesNotContain("Log verified", await ReadAsync("/Patient/Activity"));
+        await _app.WithAsync(services =>
+            services
+                .GetRequiredService<RecordManager>()
+                .ReadFullRecordAsync(
+                    Guid.NewGuid(),
+                    new UnverifiedCaller(DenyReason.NoCertificate),
+                    "treatment"
+                )
+        );
+        Party kidneyCheck = OrgDirectory.Demo.FindByUri(OrgDirectory.KidneyCheckUri)!;
+        Guid sam = (
+            await _app.WithAsync(services =>
+                services
+                    .GetRequiredService<InviteManager>()
+                    .FindLinkedPatientAsync(OrgDirectory.ProviderUri("lakeside"), "LUC-20417")
+            )
+        )!.Value;
+        await _app.WithAsync(services =>
+            services
+                .GetRequiredService<RecordManager>()
+                .ReadEgfrLabsAsync(sam, new VerifiedCaller(kidneyCheck, null))
+        );
+
+        string page = await ReadAsync("/Patient/Activity");
+        string poll = await ReadAsync("/Patient/Activity?handler=List");
+
+        Assert.Matches("Log verified ✓ · 1 event · fingerprint [0-9a-f]{4}( [0-9a-f]{4}){3}", page);
+        Assert.Contains(Copy.AuditLogHint, page);
+        Assert.Contains("Kidney Check read your lab results", poll);
+        Assert.Contains("Log verified ✓", poll);
     }
 
     [Fact]

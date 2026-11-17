@@ -33,6 +33,12 @@ public sealed record ReadEgfrLabsResult(
     IReadOnlyList<SignedEntry> EgfrLabs
 );
 
+public sealed record ReadMedicationsResult(
+    bool Allowed,
+    DenyReason? Reason,
+    IReadOnlyList<SignedEntry> Medications
+);
+
 /// <summary>
 /// Grant is the grant the access check decided on (pending, ended or active); PatientName is set when allowed.
 /// UnverifiedCount is how many stored entries failed verification and aren't in Entries.
@@ -67,6 +73,14 @@ public sealed record ReadOrganizationAuditResult(
 
 /// <summary>Allowed is the platform check; Error is set when an allowed request couldn't be stored.</summary>
 public sealed record RegisterProviderResult(
+    bool Allowed,
+    DenyReason? Reason,
+    OrganizationError? Error,
+    Organization? Organization
+);
+
+/// <summary>Allowed is the platform check; Error is set when an allowed request couldn't be stored.</summary>
+public sealed record RegisterAppResult(
     bool Allowed,
     DenyReason? Reason,
     OrganizationError? Error,

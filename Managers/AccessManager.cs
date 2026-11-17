@@ -24,11 +24,14 @@ public sealed class AccessManager(
     {
         AccessDecision decision = await DecideAccessAsync(patientId, action, caller);
         Party? actor = caller is VerifiedCaller verified ? verified.Party : null;
+        // A read made under emergency access says so in the log, so the patient and the clinician's organization
+        // can tell it from a read the patient approved.
+        bool underEmergencyAccess = decision is { Allowed: true, Grant.EmergencyReason: not null };
         await auditManager.AppendAsync(
             patientId,
             actor,
             action.ToString(),
-            claimedPurpose,
+            claimedPurpose ?? (underEmergencyAccess ? GrantManager.EmergencyPurpose : null),
             decision.Allowed,
             decision.Reason
         );
@@ -127,9 +130,16 @@ public sealed class AccessManager(
     {
         return scope switch
         {
-            GrantScope.Full => action is AccessAction.ReadFullRecord or AccessAction.ReadEgfrLabs,
+            GrantScope.Full => action
+                is AccessAction.ReadFullRecord
+                    or AccessAction.ReadEgfrLabs
+                    or AccessAction.ReadMedications,
             GrantScope.LabsAndNotes => action
                 is AccessAction.ReadEgfrLabs
+                    or AccessAction.WriteSignedNote,
+            GrantScope.MedicationsLabsAndNotes => action
+                is AccessAction.ReadEgfrLabs
+                    or AccessAction.ReadMedications
                     or AccessAction.WriteSignedNote,
             _ => false,
         };

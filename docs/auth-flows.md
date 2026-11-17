@@ -133,16 +133,11 @@ With the local test CA (the default now), the laptop is the CA: `certs issue` si
 
 ### 4b-2. The organizations table
 
-`organizations` is the one list of who each organization is: `uri` (its identity on the platform), `kind` (`Provider` or `App`), `display_name`, `certificate_cn` (the CN on its EZCA certificate, compared without case), and `entra_tenant_id` (providers only; a tenant belongs to at most one provider). The server reads it on every request that needs it, so an edit takes effect immediately.
+`organizations` is the one list of who each organization is: `uri` (its identity on the platform), `kind` (`Provider` or `App`), `display_name`, `certificate_cn` (the CN on its EZCA certificate, compared without case), `entra_tenant_id` (providers only; a tenant belongs to at most one provider), and for apps `app_scope` (the most a patient can allow it: `LabsAndNotes` or `MedicationsLabsAndNotes`) and `app_description` (what the patient reads before turning it on). The server reads it on every request that needs it, so an edit takes effect immediately.
 
-- A new database starts with the five demo organizations: the app seeds them when the table is empty. Once the table has any rows the app never touches it, so a sysadmin's edits and deletions survive restarts, and `ezehr-tools demo reset` leaves the table alone.
+- A new database starts with the six demo organizations (four providers, Kidney Check and Medication Check): the app seeds them when the table is empty. Once the table has any rows the app never touches it, so a sysadmin's edits and deletions survive restarts, and `ezehr-tools demo reset` leaves the table alone.
 - **Cutting off an organization** (for example, a leaked key): delete its row. EZEHR doesn't check certificate revocation, so this is the kill switch, and it takes effect on the next request. Its certificate is then refused at the network door, its clinicians can't sign in, and records it signed no longer verify, so they drop out of every view until the row is restored.
-- **Adding a provider** goes through `POST /api/network/register-provider` (Flow 11). Only the platform operator can call it, using the platform certificate. `ezehr-tools certs issue --provider` registers the name on EZCA, issues the certificate and calls the endpoint in one run. Apps and Entra tenants are still added by hand:
-
-  ```sql
-  INSERT INTO organizations(uri, kind, display_name, certificate_cn)
-  VALUES ('urn:app:example', 'App', N'Example App', 'example.apps.ezehr');
-  ```
+- **Adding a provider** goes through `POST /api/network/register-provider` (Flow 11). Only the platform operator can call it, using the platform certificate. `ezehr-tools certs issue --provider` registers the name on EZCA, issues the certificate and calls the endpoint in one run. **Adding an app** goes through `POST /api/network/register-app` the same way: `ezehr-tools certs issue --app <slug> --name "<name>" --scope <scope> --description "<text>"`. A registered app has no access to anyone: each patient sees it on their Access page, off, and decides. Entra tenants are still set by hand (4b).
 - The tools have no database. Their directory is the demo list in `OrgDirectory`, plus every provider `certs issue --provider` onboarded, which is saved in `.pki/organizations.json` (`ToolOrganizations`).
 
 **Deployment note (moving off `App:TrustedTenants`):** before deploying, copy the tenant id out of the App Service setting `App__TrustedTenants__…` (the id is in the setting's name, with underscores where the hyphens go). Once the deployed app has started and seeded the table, run the `UPDATE` above against prod, then delete the old setting. Dr. Rivera is refused between the deploy and the `UPDATE`.
@@ -191,7 +186,7 @@ sequenceDiagram
   Ph->>Web: register/options with the invite code
   Web-->>Ph: WebAuthn challenge
   Ph->>Ph: Face ID or fingerprint, phone creates the passkey
-  Ph->>Web: register/verify with attestation and kidneyCheckOptIn
+  Ph->>Web: register/verify with attestation and the apps Sam ticked
   Web->>Web: Fido2 verifies, invite marked used
   Web->>KV: wrap a new data key for Sam
   Web->>Web: save patient, passkey public key, provider link, app grant if opted in
@@ -350,6 +345,8 @@ sequenceDiagram
 
 If the app tries `GET /patients/ID/read-full-record` (everything), the gate answers `ScopeDenied`. If Sam revokes the grant, the next call gets `GrantRevoked`.
 
+**More than one app.** Apps are rows in `organizations`, and each declares a scope. Sam's Access page lists every app with what it does and what it could read, each off until Sam turns it on. **Medication Check** is the second example: its scope, `MedicationsLabsAndNotes`, also allows `GET /patients/ID/read-medications`, and it notes when Sam takes an anti-inflammatory painkiller while eGFR is falling. Kidney Check calling `read-medications` gets `ScopeDenied`, because its grant is `LabsAndNotes`. The design is in `docs/superpowers/specs/2026-11-17-app-platform-design.md`.
+
 ### Flow 8: The data broker is refused (the Particle moment)
 
 ```mermaid
@@ -447,6 +444,35 @@ sequenceDiagram
 
 ---
 
+### Flow 12: Emergency access (break-glass)
+
+For when Sam can't tap Approve. It is **off unless Sam turned it on** from the Access page, which gives Sam an emergency code to keep on the phone's medical ID or a wallet card. The design is in `docs/superpowers/specs/2026-11-17-emergency-access-design.md`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Dr as Dr. Rivera's laptop
+  participant CP as Clinician pages
+  participant G as Access gate
+  participant Ph as Sam's phone
+  Note over Ph: earlier, Sam turned emergency access on and got a code
+  Dr->>CP: /Clinician/Emergency with the emergency code and a reason
+  CP->>CP: clinician check (tenant, role), as for a share code
+  CP->>CP: find the patient by code, create an Active grant for 1 hour, log OpenEmergencyAccess with the reason
+  CP-->>Dr: redirect to the record
+  Dr->>CP: open the record
+  CP->>G: ReadFullRecord
+  G-->>CP: allowed, logged with purpose "emergency"
+  Ph->>Ph: Activity and Access show who, until when, and the reason, with Revoke
+```
+
+- **Still proven:** who the clinician is and which organization vouches for them. The emergency code replaces only Sam's live approval, never the sign-in.
+- **What Sam sees:** a highlighted Activity line, "Emergency access: Dr. Rivera, Riverside Primary Care, opened your record without your approval. Reason given: …", and the grant on the Access page with a Revoke button.
+- **What Riverside sees:** the same `OpenEmergencyAccess` event and its reason in its organization audit (Flow 10).
+- **A wrong code** names no patient, so there is nobody to log it to.
+
+---
+
 ## 6. How the components fit together
 
 ```mermaid
@@ -522,6 +548,7 @@ flowchart TB
 | Record signature (JWS) | This exact record was written by Lakeside (or the app; or Riverside, for a note authored by Dr. Rivera), and hasn't changed since | That its medical content is correct |
 | Grant | Sam agreed: this party, this scope, until this time | Anything after it's revoked or expired |
 | Audit event | That an attempt happened, by whom, with what outcome and claimed purpose, and which organization vouched for the actor | Nothing beyond that; it's evidence, not prevention |
+| Audit hash chain (each event's SHA-256 fingerprint covers the patient's previous event; the Activity page rechecks it on every load) | That no event was changed, removed from the middle or slipped in behind the app's back | That nobody rewrote the whole chain or cut off its newest events; only a fingerprint noted earlier shows that (see `docs/superpowers/specs/2026-11-17-audit-hash-chain-design.md`) |
 | Key Vault envelope encryption | Data at rest is unreadable without EZEHR's managed identity calling Key Vault | That EZEHR itself can't read it (it can, behind the gate; see the spec's honest limits) |
 
 ---
@@ -537,7 +564,7 @@ flowchart TB
 | `NoGrant` | Gate: no grant for this identity | "Access ended" page / 403 | Yes |
 | `GrantPending` | Gate: Sam hasn't approved yet | Waiting page / 403 | Yes |
 | `GrantRevoked` / `GrantExpired` | Gate | "Access ended" page / 403 | Yes |
-| `ScopeDenied` | Gate: an app asked for more than lab results, or a clinician tried to write | 403 | Yes |
+| `ScopeDenied` | Gate: an app asked for more than its grant's scope, or a clinician tried to write | 403 | Yes |
 
 ---
 

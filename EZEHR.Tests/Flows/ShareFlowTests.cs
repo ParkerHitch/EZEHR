@@ -215,6 +215,99 @@ public class ShareFlowTests : IAsyncLifetime
         return $"/Clinician/Record?patientId={_sam}";
     }
 
+    /// <summary>Fills in and submits the Emergency form, antiforgery token included.</summary>
+    private static async Task<HttpResponseMessage> OpenEmergencyAccessAsync(
+        HttpClient browser,
+        string code,
+        string reason
+    )
+    {
+        string form = await browser.GetStringAsync("/Clinician/Emergency");
+        string token = Regex
+            .Match(form, "name=\"__RequestVerificationToken\" type=\"hidden\" value=\"([^\"]+)\"")
+            .Groups[1]
+            .Value;
+        return await browser.PostAsync(
+            "/Clinician/Emergency",
+            new FormUrlEncodedContent(
+                new Dictionary<string, string>
+                {
+                    ["Code"] = code,
+                    ["Reason"] = reason,
+                    ["__RequestVerificationToken"] = token,
+                }
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Emergency_access_opens_the_record_without_approval_and_can_be_revoked()
+    {
+        HttpClient browser = ClinicianBrowser();
+        string code = await WithAsync(services =>
+            services.GetRequiredService<GrantManager>().TurnOnEmergencyAccessAsync(_sam)
+        );
+
+        HttpResponseMessage wrong = await OpenEmergencyAccessAsync(
+            browser,
+            "ZZZZ-ZZZZ",
+            "Unresponsive after a car crash"
+        );
+        Assert.Equal(HttpStatusCode.OK, wrong.StatusCode);
+        Assert.Contains(
+            Copy.EmergencyCodeUnknown,
+            WebUtility.HtmlDecode(await wrong.Content.ReadAsStringAsync())
+        );
+        HttpResponseMessage noCode = await OpenEmergencyAccessAsync(browser, "", "Unresponsive");
+        Assert.Equal(HttpStatusCode.OK, noCode.StatusCode);
+        Assert.Contains(
+            Copy.EmergencyCodeUnknown,
+            WebUtility.HtmlDecode(await noCode.Content.ReadAsStringAsync())
+        );
+        HttpResponseMessage noReason = await OpenEmergencyAccessAsync(browser, code, " ");
+        Assert.Contains(
+            Copy.EmergencyReasonMissing,
+            WebUtility.HtmlDecode(await noReason.Content.ReadAsStringAsync())
+        );
+
+        HttpResponseMessage opened = await OpenEmergencyAccessAsync(
+            browser,
+            GrantManager.FormatCode(code),
+            "Unresponsive after a car crash"
+        );
+
+        Assert.Equal(HttpStatusCode.Redirect, opened.StatusCode);
+        Assert.Equal(RecordPath(), opened.Headers.Location!.OriginalString);
+        string record = WebUtility.HtmlDecode(await browser.GetStringAsync(RecordPath()));
+        Assert.Contains("Sam Taylor · emergency access until", record);
+        Assert.Contains(KidneyNoteText, record);
+        IReadOnlyList<AuditEvent> activity = await ActivityAsync();
+        Assert.Equal(GrantManager.OpenEmergencyAccessAction, activity[^2].Action);
+        Assert.Equal("Unresponsive after a car crash", activity[^2].ClaimedPurpose);
+        Assert.Equal(GrantManager.EmergencyPurpose, activity[^1].ClaimedPurpose);
+
+        Grant grant = await ClinicianGrantAsync();
+        await WithAsync(services =>
+            services.GetRequiredService<GrantManager>().RevokeAsync(_sam, grant.Id)
+        );
+        HttpResponseMessage poll = await browser.GetAsync(
+            $"/Clinician/Record?handler=Status&patientId={_sam}"
+        );
+        Assert.Equal("/Clinician/AccessEnded", poll.Headers.GetValues("HX-Redirect").Single());
+    }
+
+    [Fact]
+    public async Task Empty_share_code_shows_the_unknown_code_message()
+    {
+        HttpResponseMessage redeemed = await RedeemAsync(ClinicianBrowser(), "");
+
+        Assert.Equal(HttpStatusCode.OK, redeemed.StatusCode);
+        Assert.Contains(
+            Copy.ShareCodeUnknown,
+            WebUtility.HtmlDecode(await redeemed.Content.ReadAsStringAsync())
+        );
+    }
+
     [Fact]
     public async Task Denied_request_ends_without_a_blocked_read()
     {
