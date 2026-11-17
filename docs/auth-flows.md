@@ -137,8 +137,8 @@ With the local test CA (the default now), the laptop is the CA: `certs issue` si
 
 - A new database starts with the six demo organizations (four providers, Kidney Check and Medication Check): the app seeds them when the table is empty. Once the table has any rows the app never touches it, so a sysadmin's edits and deletions survive restarts, and `ezehr-tools demo reset` leaves the table alone.
 - **Cutting off an organization** (for example, a leaked key): delete its row. EZEHR doesn't check certificate revocation, so this is the kill switch, and it takes effect on the next request. Its certificate is then refused at the network door, its clinicians can't sign in, and records it signed no longer verify, so they drop out of every view until the row is restored.
-- **Adding a provider** goes through `POST /api/network/register-provider` (Flow 11). Only the platform operator can call it, using the platform certificate. `ezehr-tools certs issue --provider` registers the name on EZCA, issues the certificate and calls the endpoint in one run. **Adding an app** goes through `POST /api/network/register-app` the same way: `ezehr-tools certs issue --app <slug> --name "<name>" --scope <scope> --description "<text>"`. A registered app has no access to anyone: each patient sees it on their Access page, off, and decides. Entra tenants are still set by hand (4b).
-- The tools have no database. Their directory is the demo list in `OrgDirectory`, plus every provider `certs issue --provider` onboarded, which is saved in `.pki/organizations.json` (`ToolOrganizations`).
+- **Adding a provider** goes through `POST /api/network/register-provider` (Flow 11). Only the platform operator can call it, using the platform certificate. `ezehr-tools platform onboard-provider` registers the name on EZCA, issues the certificate and calls the endpoint in one run (`certs provider` and `platform register-provider` are the two halves on their own). **Adding an app** goes through `POST /api/network/register-app` the same way: `ezehr-tools platform onboard-app <slug> --name "<name>" --scope <scope> --description "<text>"`. A registered app has no access to anyone: each patient sees it on their Access page, off, and decides. Entra tenants are still set by hand (4b).
+- The tools have no database. Their directory is the demo list in `OrgDirectory`, plus every provider or app `platform register-provider`, `register-app` or `onboard-*` added, which is saved in `.pki/organizations.json` (`ToolOrganizations`).
 
 **Deployment note (moving off `App:TrustedTenants`):** before deploying, copy the tenant id out of the App Service setting `App__TrustedTenants__…` (the id is in the setting's name, with underscores where the hyphens go). Once the deployed app has started and seeded the table, run the `UPDATE` above against prod, then delete the old setting. Dr. Rivera is refused between the deploy and the `UPDATE`.
 
@@ -408,14 +408,14 @@ sequenceDiagram
 - **What it sees:** every attempt by someone it vouches for: its clinicians' reads and share-code redemptions, granted or refused, and its own system's calls (pushes, invites). Each audit row records the actor's organization (`actor_org_uri`) when the event happens, so a clinician who later leaves stays in the history of the organization they acted for.
 - **What it never sees:** anything done by another organization, its clinicians, an app, or an unverified caller, even for the same patient.
 - **How patients appear:** by EZEHR patient id, plus the provider's own patient id when the patient is linked to it (`provider_links`). No names.
-- **Filters:** `clinicianUri`, `patientId`, `providerPatientId`, `since` (inclusive), `until` (exclusive), and paging by `afterId` with `limit` (1 to 500, default 100). `ezehr-tools provider audit <slug>` and `provider clinicians <slug>` call both endpoints.
+- **Filters:** `clinicianUri`, `patientId`, `providerPatientId`, `since` (inclusive), `until` (exclusive), and paging by `afterId` with `limit` (1 to 500, default 100). `ezehr-tools provider audit <slug>` (with `--clinician`, `--chart`, `--patient`, `--since`, `--until` and `--limit`) and `provider clinicians <slug>` call both endpoints.
 
 ### Flow 11: The platform onboards a new provider
 
 A provider that has never existed, Harbor Clinic, joins on camera. No Entra tenant is involved, because Harbor's system only invites patients and pushes records. One command on the operator's laptop does all of it:
 
 ```
-ezehr-tools certs issue --provider harbor --name "Harbor Clinic" --invite HBR-001
+ezehr-tools platform onboard-provider harbor --name "Harbor Clinic" --invite HBR-001
 ```
 
 That uses the local test CA, so the two EZCA steps below happen on the laptop instead. With `--ca ezca` it goes through EZCA as drawn.
@@ -439,7 +439,7 @@ sequenceDiagram
   Net-->>Op: invite link for HBR-001
 ```
 
-- **The platform certificate** is an ordinary certificate from the network's CA (CN `platform.ezehr`, from `certs issue --platform`). What makes it special is that the server pins its SHA-256 thumbprint in `App__PlatformCertificateThumbprint` (an App Service setting; on the NUC, `nuc-setup.sh` takes it from `appsettings.Development.json`). The platform isn't a `Party`: `CallerManager.FromPlatformCertificate` turns it into a `PlatformCaller`, which only `register-provider` accepts. Its CN has no row in `organizations`, so the network door refuses it everywhere else. If the setting is unset, nobody can register.
+- **The platform certificate** is an ordinary certificate from the network's CA (CN `platform.ezehr`, from `ezehr-tools certs platform`). What makes it special is that the server pins its SHA-256 thumbprint in `App__PlatformCertificateThumbprint` (an App Service setting; on the NUC, `nuc-setup.sh` takes it from `appsettings.Development.json`). The platform isn't a `Party`: `CallerManager.FromPlatformCertificate` turns it into a `PlatformCaller`, which only `register-provider` accepts. Its CN has no row in `organizations`, so the network door refuses it everywhere else. If the setting is unset, nobody can register.
 - **The slug** is one lowercase DNS label. The server builds `urn:provider:{slug}` and `{slug}.providers.ezehr` from it. An existing URI or CN gets 409 and the row stays unchanged, so running the command again is safe. Deleting the row is still the kill switch.
 - Registration isn't written to `audit_events`, because those rows belong to a patient. It's logged instead.
 

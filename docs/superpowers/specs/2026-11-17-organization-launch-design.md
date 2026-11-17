@@ -96,7 +96,7 @@ provider's patient id, the provider's encounter id, and its times.
 
 ### Tools
 
-- `ezehr-tools provider launch <provider> <providerPatientId> --clinician <Entra object id> [--encounter <id>]`
+- `ezehr-tools provider launch <provider> <chart> --clinician <Entra object id> [--encounter <id>]`
   prints the link.
 - `stage` has a new step before the visit: Riverside's system opens EZEHR for Dr. Rivera from Sam's chart. It reads
   Dr. Rivera's object id from `EZEHR_CLINICIAN_OBJECT_ID`.

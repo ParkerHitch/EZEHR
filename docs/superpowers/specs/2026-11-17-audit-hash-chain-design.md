@@ -43,7 +43,7 @@ as a nice-to-have (section 11). This builds it.
 - **Verifying.** `AuditChain.Verify` recomputes the chain oldest first and reports the first event that doesn't
   match. Events written before this change have no hash; they may only come first, and are counted as not covered.
 - **Showing it.** The Activity page reads the whole log anyway, so each load verifies it: "Log verified ✓ · 12
-  events · fingerprint 3f9a 21bc 77d0 e1a4", or a red warning. `ezehr-tools demo status` prints the same check.
+  events · fingerprint 3f9a 21bc 77d0 e1a4", or a red warning. `ezehr-tools patient status <patient>` prints the same check.
 
 ## Honest limits
 
