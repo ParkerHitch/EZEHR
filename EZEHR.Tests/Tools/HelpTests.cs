@@ -48,6 +48,9 @@ public sealed class HelpTests
                 new[] { "network", "read" },
                 new[] { "app", "kidney-check" },
                 new[] { "app", "medication-check" },
+                new[] { "demo", "reset" },
+                new[] { "demo", "tamper" },
+                new[] { "demo", "stage" },
             };
         }
     }

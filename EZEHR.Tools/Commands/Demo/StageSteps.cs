@@ -7,7 +7,7 @@ using EZEHR.Tools.Cli;
 using EZEHR.Tools.Net;
 using Spectre.Console;
 
-namespace EZEHR.Tools.Commands;
+namespace EZEHR.Tools.Commands.Demo;
 
 /// <summary>
 /// The demo's network calls, in order, one per key press. Each step names the system making the call and the
@@ -15,14 +15,8 @@ namespace EZEHR.Tools.Commands;
 /// (the local test CA by default, EZCA with --ca ezca) or to /api/network; the only thing done behind the scenes is
 /// finding Sam's EZEHR patient id in the database.
 /// </summary>
-public static class StageCommand
+public static class StageSteps
 {
-    public const string Usage = """
-          stage [--from <step>] [--ca local|ezca] [--ca-id <id>] [--template-id <id>]
-                                  the demo's network calls in order, one per key press
-          stage --list            the steps, numbered
-        """;
-
     /// <summary>What the data broker claims when it asks for Sam's whole record.</summary>
     public const string BrokerClaimedPurpose = "treatment";
 
@@ -47,60 +41,34 @@ public static class StageCommand
 
     private sealed record Step(Actor Actor, string Action, Func<Task<bool>> RunAsync);
 
-    public static async Task<int> RunAsync(string[] args)
+    /// <summary>How many steps there are, for validating --from without building a run.</summary>
+    public static int Count
     {
-        if (
-            string.IsNullOrWhiteSpace(
-                Environment.GetEnvironmentVariable(AppOptions.ConnectionStringKey)
-            )
-        )
+        get { return BuildSteps(new CertificateAuthoritySettings()).Count; }
+    }
+
+    /// <summary>The steps, numbered, without calling anything.</summary>
+    public static void List()
+    {
+        List<Step> steps = BuildSteps(new CertificateAuthoritySettings());
+        for (int index = 0; index < steps.Count; index++)
         {
-            Console.Error.WriteLine(
-                $"{AppOptions.ConnectionStringKey} isn't set (it's how the stage finds Sam's patient id). For the deployed site: source scripts/azure.env"
+            AnsiConsole.Console.WriteLine(
+                $"{index + 1, 3}. {steps[index].Actor.Name}: {steps[index].Action}"
             );
-            return 1;
         }
-        string authority = CommandLine.Option(args, "--ca") ?? "local";
-        if (authority is not ("local" or "ezca"))
-        {
-            Console.Error.WriteLine("--ca must be local or ezca");
-            return 1;
-        }
-        List<Step> steps = BuildSteps(
-            authority,
-            CommandLine.Option(args, "--ca-id"),
-            CommandLine.Option(args, "--template-id")
-        );
+    }
 
-        if (args.Contains("--list"))
-        {
-            for (int index = 0; index < steps.Count; index++)
-            {
-                Console.WriteLine(
-                    $"{index + 1, 3}. {steps[index].Actor.Name}: {steps[index].Action}"
-                );
-            }
-            return 0;
-        }
-        string? fromOption = CommandLine.Option(args, "--from");
-        int firstStep = 1;
-        if (
-            fromOption is not null
-            && (
-                !int.TryParse(fromOption, out firstStep) || firstStep < 1 || firstStep > steps.Count
-            )
-        )
-        {
-            Console.Error.WriteLine($"--from takes a step number from 1 to {steps.Count}.");
-            return 1;
-        }
-
-        Console.WriteLine($"EZEHR network: {NetworkClient.BaseUrl}");
+    public static async Task<int> RunAsync(CertificateAuthoritySettings settings, int firstStep)
+    {
+        List<Step> steps = BuildSteps(settings);
+        IAnsiConsole console = AnsiConsole.Console;
+        console.WriteLine($"EZEHR network: {NetworkClient.BaseUrl}");
         for (int index = firstStep - 1; index < steps.Count; index++)
         {
             Step step = steps[index];
             PrintBanner(index + 1, steps.Count, step);
-            char start = WaitForKey("Enter: send   s: skip   q: quit", "\rsq");
+            char start = StageKeys.Wait("Enter: send   s: skip   q: quit", "\rsq");
             if (start == 'q')
             {
                 return 0;
@@ -111,7 +79,7 @@ public static class StageCommand
             }
             while (!await RunStepAsync(step))
             {
-                char choice = WaitForKey("r: retry   s: skip   q: quit", "rsq");
+                char choice = StageKeys.Wait("r: retry   s: skip   q: quit", "rsq");
                 if (choice == 'q')
                 {
                     return 1;
@@ -120,15 +88,15 @@ public static class StageCommand
                 {
                     break;
                 }
-                Console.WriteLine();
+                console.WriteLine();
             }
         }
-        Console.WriteLine();
-        Console.WriteLine("That was every step.");
+        console.WriteLine();
+        console.WriteLine("That was every step.");
         return 0;
     }
 
-    private static List<Step> BuildSteps(string authority, string? caId, string? templateId)
+    private static List<Step> BuildSteps(CertificateAuthoritySettings authoritySettings)
     {
         Actor northwind = Provider("northwind", ConsoleColor.Blue);
         Actor lakeside = Provider("lakeside", ConsoleColor.Cyan);
@@ -246,18 +214,13 @@ public static class StageCommand
             // Northwind joins the network.
             new Step(
                 northwindJoining,
-                authority == "ezca"
+                authoritySettings.Authority == "ezca"
                     ? "gets its certificate from EZCA (portal.ezca.io)"
                     : "gets its certificate from the local test CA (stands in for EZCA)",
                 async () =>
                 {
                     await CertificateIssuance.IssueOrganizationAsync(
-                        new CertificateAuthoritySettings
-                        {
-                            Authority = authority,
-                            CaId = caId,
-                            TemplateId = templateId,
-                        },
+                        authoritySettings,
                         OrgDirectory.ProviderCommonName(JoiningProviderSlug)
                     );
                     return true;
@@ -308,8 +271,8 @@ public static class StageCommand
                     }
                     if (kidneyResult is null)
                     {
-                        Console.Error.WriteLine(
-                            "  Kidney Check hasn't read the labs in this run: skip this, or quit and start again from its read step (stage --list)."
+                        AnsiConsole.Console.WriteLine(
+                            "  Kidney Check hasn't read the labs in this run: skip this, or quit and start again from its read step (demo stage --list)."
                         );
                         return false;
                     }
@@ -378,7 +341,7 @@ public static class StageCommand
                         )
                     )
                     {
-                        Console.WriteLine(
+                        AnsiConsole.Console.WriteLine(
                             $"  Set {ClinicianObjectIdVariable} to Dr. Rivera's object id in Riverside's Entra tenant, or run: ezehr-tools provider launch riverside RPC-1107 --clinician <object id>"
                         );
                         return false;
@@ -477,12 +440,12 @@ public static class StageCommand
         }
         if (outcome.DenyReason != nameof(DenyReason.ScopeDenied))
         {
-            Console.Error.WriteLine(
+            AnsiConsole.Console.WriteLine(
                 $"  Expected ScopeDenied: is {KidneyCheckApp.AppName} still turned on for Sam?"
             );
             return false;
         }
-        Console.WriteLine(
+        AnsiConsole.Console.WriteLine(
             $"  Refused: Sam allowed {KidneyCheckApp.AppName} lab results only. Sam's Activity shows the attempt."
         );
         return true;
@@ -491,7 +454,7 @@ public static class StageCommand
     private static void PrintBanner(int number, int count, Step step)
     {
         string label = $"━━ {number}/{count} ";
-        Console.WriteLine();
+        AnsiConsole.Console.WriteLine();
         NetworkLog.WriteInColor(
             Color.FromConsoleColor(step.Actor.Color),
             label + new string('━', BannerWidth - label.Length)
@@ -500,38 +463,9 @@ public static class StageCommand
             Color.FromConsoleColor(step.Actor.Color),
             $"  {step.Actor.Name.ToUpperInvariant()} · {step.Actor.Role}"
         );
-        Console.WriteLine($"  certificate: {step.Actor.Certificate()}");
-        Console.WriteLine($"  {step.Actor.Name} {step.Action}");
-        Console.WriteLine();
-    }
-
-    /// <summary>Shows the prompt, waits for one of the allowed keys, then erases the prompt so it isn't recorded.</summary>
-    private static char WaitForKey(string prompt, string allowedKeys)
-    {
-        if (Console.IsInputRedirected)
-        {
-            // One key per line, for scripted rehearsals; a key this prompt doesn't take is ignored.
-            while (Console.ReadLine() is string line)
-            {
-                char typed = line.Length == 0 ? '\r' : char.ToLowerInvariant(line[0]);
-                if (allowedKeys.Contains(typed))
-                {
-                    return typed;
-                }
-            }
-            return 'q';
-        }
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.Write($"  {prompt}");
-        Console.ResetColor();
-        char key;
-        do
-        {
-            ConsoleKeyInfo pressed = Console.ReadKey(intercept: true);
-            key = pressed.Key == ConsoleKey.Enter ? '\r' : char.ToLowerInvariant(pressed.KeyChar);
-        } while (!allowedKeys.Contains(key));
-        Console.Write("\r" + new string(' ', prompt.Length + 2) + "\r");
-        return key;
+        AnsiConsole.Console.WriteLine($"  certificate: {step.Actor.Certificate()}");
+        AnsiConsole.Console.WriteLine($"  {step.Actor.Name} {step.Action}");
+        AnsiConsole.Console.WriteLine();
     }
 
     /// <summary>A network failure mid-demo shouldn't end the run: it's reported, and the step can be retried.</summary>

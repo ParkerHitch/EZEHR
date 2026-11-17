@@ -1,5 +1,3 @@
-using EZEHR.Tools.Commands;
-using EZEHR.Tools.Net;
 using Spectre.Console;
 
 namespace EZEHR.Tools;
@@ -25,28 +23,6 @@ internal static class Program
                 ? columns
                 : RedirectedWidth;
         }
-        try
-        {
-            return await RunLegacyOrToolAppAsync(args);
-        }
-        catch (ToolException exception)
-        {
-            NetworkLog.WriteInColor(Color.Red, exception.Message);
-            return ToolApp.FailedExitCode;
-        }
-    }
-
-    /// <summary>Commands not yet moved to ToolApp run as before, until each is ported.</summary>
-    private static async Task<int> RunLegacyOrToolAppAsync(string[] args)
-    {
-        switch (args.FirstOrDefault())
-        {
-            case "stage":
-                return await StageCommand.RunAsync(args[1..]);
-            case "demo":
-                return await DemoCommand.RunAsync(args[1..]);
-            default:
-                return await ToolApp.RunAsync(args);
-        }
+        return await ToolApp.RunAsync(args);
     }
 }

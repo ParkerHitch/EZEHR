@@ -3,6 +3,7 @@ using EZEHR.Tools.Commands;
 using EZEHR.Tools.Commands.App;
 using EZEHR.Tools.Commands.Certs;
 using EZEHR.Tools.Commands.Database;
+using EZEHR.Tools.Commands.Demo;
 using EZEHR.Tools.Commands.Network;
 using EZEHR.Tools.Commands.Org;
 using EZEHR.Tools.Commands.Patient;
@@ -42,6 +43,23 @@ public static class ToolApp
                 return Report(exception);
             }
         );
+
+        // The root's own examples, so its help shows a tour instead of the first five leaves' examples.
+        config.AddExample("env");
+        config.AddExample("org", "list");
+        config.AddExample("patient", "find", "lakeside:LUC-20417");
+        config.AddExample(
+            "network",
+            "read",
+            "sam",
+            "medications",
+            "--as",
+            "kidney-check",
+            "--expect",
+            "ScopeDenied"
+        );
+        config.AddExample("provider", "push", "lakeside", "LUC-20417", "--sign-as", "maple");
+        config.AddExample("demo", "stage", "--list");
 
         config
             .AddCommand<EnvCommand>("env")
@@ -261,6 +279,24 @@ public static class ToolApp
             db.AddCommand<DbQueryCommand>("query")
                 .WithDescription("Run SQL and print the rows as a table")
                 .WithExample("db", "query", "\"SELECT id, action, granted FROM audit_events\"");
+        });
+        config.AddBranch("demo", demo =>
+        {
+            demo.SetDescription(
+                "The recorded demo: reset the database, tamper with the log, and run the stage"
+            );
+            demo.AddCommand<DemoResetCommand>("reset")
+                .WithDescription("Empty the database and take the joining organizations off")
+                .WithExample("demo", "reset")
+                .WithExample("demo", "reset", "--yes");
+            demo.AddCommand<DemoTamperCommand>("tamper")
+                .WithDescription("Edit one of Sam's audit events in place; run again to undo")
+                .WithExample("demo", "tamper");
+            demo.AddCommand<DemoStageCommand>("stage")
+                .WithDescription("Run the demo's network calls in order, one per key press")
+                .WithExample("demo", "stage")
+                .WithExample("demo", "stage", "--list")
+                .WithExample("demo", "stage", "--from", "12", "--ca", "ezca");
         });
     }
 
