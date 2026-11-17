@@ -1,7 +1,10 @@
+using EZEHR.Tools.Cli;
 using EZEHR.Tools.Commands;
+using EZEHR.Tools.Commands.Certs;
 using EZEHR.Tools.Commands.Database;
 using EZEHR.Tools.Commands.Org;
 using EZEHR.Tools.Commands.Patient;
+using EZEHR.Tools.Commands.Platform;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -49,6 +52,87 @@ public static class ToolApp
                 .WithDescription("List each organization with its certificate and seed records")
                 .WithExample("org", "list");
         });
+        config.AddBranch("certs", certs =>
+        {
+            certs.SetDescription("Issue certificates into .pki/: the CA only, EZEHR isn't called");
+            certs
+                .AddCommand<CertsIssueCommand>("issue")
+                .WithDescription("Issue every demo organization's certificate, plus trust files")
+                .WithExample("certs", "issue")
+                .WithExample("certs", "issue", "--ca", "ezca", "--key", "rsa");
+            certs
+                .AddCommand<CertsPlatformCommand>("platform")
+                .WithDescription("Issue the platform operator's certificate, and print its pin")
+                .WithExample("certs", "platform");
+            certs
+                .AddCommand<CertsProviderCommand>("provider")
+                .WithDescription("Issue a new provider's certificate, not yet admitted to EZEHR")
+                .WithExample("certs", "provider", "harbor");
+            certs
+                .AddCommand<CertsAppCommand>("app")
+                .WithDescription("Issue a new app's certificate, not yet admitted to EZEHR")
+                .WithExample("certs", "app", "sleep-check");
+            certs
+                .AddCommand<CertsBrokerCommand>("broker")
+                .WithDescription("Make the data broker's self-signed certificate")
+                .WithExample("certs", "broker");
+        });
+        config.AddBranch("platform", platform =>
+        {
+            platform.SetDescription(
+                "The platform operator, with .pki/platform.pfx: admits providers and apps"
+            );
+            platform
+                .AddCommand<PlatformRegisterProviderCommand>("register-provider")
+                .WithDescription("Admit a provider whose certificate is already issued")
+                .WithExample(
+                    "platform",
+                    "register-provider",
+                    "harbor",
+                    "--name",
+                    "\"Harbor Clinic\""
+                );
+            platform
+                .AddCommand<PlatformRegisterAppCommand>("register-app")
+                .WithDescription("Admit an app whose certificate is already issued")
+                .WithExample(
+                    "platform",
+                    "register-app",
+                    "sleep-check",
+                    "--name",
+                    "\"Sleep Check\"",
+                    "--scope",
+                    "LabsAndNotes",
+                    "--description",
+                    "\"Looks at your sleep study results.\""
+                );
+            platform
+                .AddCommand<PlatformOnboardProviderCommand>("onboard-provider")
+                .WithDescription("Issue a provider's certificate and admit it, then invite")
+                .WithExample(
+                    "platform",
+                    "onboard-provider",
+                    "harbor",
+                    "--name",
+                    "\"Harbor Clinic\"",
+                    "--invite",
+                    "HBR-001"
+                );
+            platform
+                .AddCommand<PlatformOnboardAppCommand>("onboard-app")
+                .WithDescription("Issue an app's certificate and admit it")
+                .WithExample(
+                    "platform",
+                    "onboard-app",
+                    "sleep-check",
+                    "--name",
+                    "\"Sleep Check\"",
+                    "--scope",
+                    "LabsAndNotes",
+                    "--description",
+                    "\"Looks at your sleep study results.\""
+                );
+        });
         config.AddBranch("patient", patient =>
         {
             patient.SetDescription(
@@ -76,7 +160,7 @@ public static class ToolApp
             );
             db.AddCommand<DbQueryCommand>("query")
                 .WithDescription("Run SQL and print the rows as a table")
-                .WithExample("db", "query", "SELECT id, action, granted FROM audit_events");
+                .WithExample("db", "query", "\"SELECT id, action, granted FROM audit_events\"");
         });
     }
 

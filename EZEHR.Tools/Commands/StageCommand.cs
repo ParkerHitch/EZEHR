@@ -1,6 +1,7 @@
 using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 using EZEHR.Services;
+using EZEHR.Tools.Calls;
 using EZEHR.Tools.Cli;
 using EZEHR.Tools.Net;
 using Spectre.Console;
@@ -168,7 +169,7 @@ public static class StageCommand
         Actor brokerWithOwnCertificate = brokerWithoutCertificate with
         {
             Certificate = () =>
-                $"{CertsCommand.BrokerCommonName}, self-signed: it made the certificate itself, the network's CA didn't issue it",
+                $"{CertificateIssuance.BrokerCommonName}, self-signed: it made the certificate itself, the network's CA didn't issue it",
         };
         string northwindName = northwind.Name;
 
@@ -227,13 +228,16 @@ public static class StageCommand
                     : "gets its certificate from the local test CA (stands in for EZCA)",
                 async () =>
                 {
-                    return await CertsCommand.IssueProviderCertificateAsync(
-                            authority,
-                            JoiningProviderSlug,
-                            "ec",
-                            caId,
-                            templateId
-                        ) == 0;
+                    await CertificateIssuance.IssueOrganizationAsync(
+                        new CertificateAuthoritySettings
+                        {
+                            Authority = authority,
+                            CaId = caId,
+                            TemplateId = templateId,
+                        },
+                        OrgDirectory.ProviderCommonName(JoiningProviderSlug)
+                    );
+                    return true;
                 }
             ),
             new Step(
@@ -241,10 +245,12 @@ public static class StageCommand
                 $"adds {northwindName} to the network: its name and its certificate's CN",
                 async () =>
                 {
-                    return await CertsCommand.RegisterProviderAsync(
-                            JoiningProviderSlug,
-                            northwindName
-                        ) == 0;
+                    await PlatformCalls.RegisterProviderAsync(
+                        NetworkClient.BaseUrl,
+                        JoiningProviderSlug,
+                        northwindName
+                    );
+                    return true;
                 }
             ),
             // Sam's providers invite Sam. Sam enrolls with Northwind's, then adds the others.
@@ -312,12 +318,14 @@ public static class StageCommand
                 $"adds {joiningApp.DisplayName} to the network: a second app, whose scope also covers medications",
                 async () =>
                 {
-                    return await CertsCommand.RegisterAppAsync(
-                            JoiningAppSlug,
-                            joiningApp.DisplayName,
-                            joiningApp.AppScope!.Value,
-                            joiningApp.AppDescription!
-                        ) == 0;
+                    await PlatformCalls.RegisterAppAsync(
+                        NetworkClient.BaseUrl,
+                        JoiningAppSlug,
+                        joiningApp.DisplayName,
+                        joiningApp.AppScope!.Value,
+                        joiningApp.AppDescription!
+                    );
+                    return true;
                 }
             ),
             new Step(

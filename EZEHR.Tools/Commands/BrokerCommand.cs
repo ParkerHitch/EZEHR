@@ -1,3 +1,4 @@
+using EZEHR.Tools.Calls;
 using EZEHR.Tools.Net;
 
 namespace EZEHR.Tools.Commands;
@@ -41,7 +42,7 @@ public static class BrokerCommand
             "GET",
             path,
             withSelfSignedCertificate
-                ? $"certificate: self-signed CN={CertsCommand.BrokerCommonName}"
+                ? $"certificate: self-signed CN={CertificateIssuance.BrokerCommonName}"
                 : "certificate: none"
         );
         using HttpResponseMessage response = await client.GetAsync(path);
