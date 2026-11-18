@@ -4,6 +4,8 @@ For what we're building and why, see the spec (`docs/superpowers/specs/2026-11-1
 the build plan (`docs/superpowers/plans/2026-11-13-verified-health-record.md`) and
 `docs/auth-flows.md`.
 
+For manual testing, `docs/tools.md` covers the `ezehr-tools` CLI (`dotnet run --project EZEHR.Tools -- --help`).
+
 The hackathon is over. `docs/direction.md` says what the goal is now (a system that matches how healthcare
 organizations really work), what it is not (real-world EHR integration), and the known gaps against that goal. Read
 it before proposing new work; where it disagrees with the hackathon spec, it wins.

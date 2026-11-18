@@ -1,11 +1,23 @@
 namespace EZEHR.Tools;
 
-/// <summary>Where the tools read and write: .pki/ at the repo root (git-ignored), and the seed data shipped with the tool.</summary>
+/// <summary>
+/// Where the tools read and write: .pki/ at the repo root (git-ignored), or EZEHR_PKI_DIRECTORY when set, and the
+/// seed data shipped with the tool.
+/// </summary>
 public static class ToolPaths
 {
+    public const string PkiDirectoryVariable = "EZEHR_PKI_DIRECTORY";
+
     public static string PkiDirectory
     {
-        get { return Path.Combine(FindRepoRoot(), ".pki"); }
+        get
+        {
+            string? configured = Environment.GetEnvironmentVariable(PkiDirectoryVariable);
+            return string.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(FindRepoRoot(), ".pki")
+                // Absolute now: the trust-file loader resolves relative paths against bin/, not here.
+                : Path.GetFullPath(configured);
+        }
     }
 
     public static string SeedDirectory

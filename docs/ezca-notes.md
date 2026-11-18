@@ -19,7 +19,7 @@ What the EZCA setup on Nov 14 showed. The tenant is `mwpg089outlook.onmicrosoft.
   - `pathlen:0`, and issued certificates last up to 400 days.
 - Domains registered on the issuing CA, each with `ezca-admin` as owner and certificate administrator: `lakeside`, `northwind`, `maple` and `riverside` (each `.providers.ezehr`), and `kidney-check.apps.ezehr`.
 
-## Issuance (`ezehr-tools certs issue --ca ezca --key ec`)
+## Issuance (`ezehr-tools certs issue --ca ezca --key ec`; `certs provider|app|platform` take the same options)
 
 - **EC P-256 CSRs are accepted**, so no RSA fallback is needed.
 - Each leaf certificate has the requested CN, a DNS SAN with the same name, only the clientAuth EKU, and 365 days of validity.

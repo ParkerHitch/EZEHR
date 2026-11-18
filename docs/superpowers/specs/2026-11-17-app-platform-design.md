@@ -50,16 +50,16 @@ with a second example app that has a different scope.
   that isn't an app on the network is ignored.
 - **Network.** `GET /api/network/patients/{id}/read-medications`, and `POST /api/network/register-app` (platform
   certificate only; slug, name, scope, description; `Full` is refused with 400; an existing row gets 409).
-- **Tools.** `ezehr-tools certs issue --app <slug> --name … --scope … --description …` issues the app's certificate
-  and registers it. `ezehr-tools medication-check run <patientId>` is the second example app: it reads medications
+- **Tools.** `ezehr-tools platform onboard-app <slug> --name … --scope … --description …` issues the app's certificate
+  and registers it. `ezehr-tools app medication-check <patient>` is the second example app: it reads medications
   and eGFR labs, verifies every signature itself, and when an anti-inflammatory painkiller is active and eGFR has
   dropped more than 25% it writes one signed note. Like Kidney Check's rule, it is deliberately not clinical advice.
 
 ## In the demo
 
-Added 2026-11-17: `stage` step 11 has Kidney Check ask for medications and get `403 ScopeDenied`. Step 12 has the
+Added 2026-11-17: `demo stage` step 11 has Kidney Check ask for medications and get `403 ScopeDenied`. Step 12 has the
 platform register Medication Check (`demo reset` deletes its row, as it does Northwind's). Sam then turns it on from
-Access → Apps, and step 13 runs it. See `docs/components/13-tools-and-demo.md`.
+Access → Apps, and step 13 runs it. See `docs/tools.md`.
 
 ## Deploying to a database that already has organizations
 
@@ -67,7 +67,7 @@ The seed only fills an empty table, so an existing database doesn't get Medicati
 with the platform certificate:
 
 ```
-ezehr-tools certs issue --app medication-check --name "Medication Check" \
+ezehr-tools platform register-app medication-check --name "Medication Check" \
   --scope MedicationsLabsAndNotes \
   --description "Looks at your medications next to your kidney lab results, and tells you when a medicine may need a second look."
 ```

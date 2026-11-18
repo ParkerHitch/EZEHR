@@ -18,7 +18,19 @@ public static class ToolOrganizations
 
     public static OrganizationDirectory Load()
     {
-        return new OrganizationDirectory([.. OrgDirectory.DemoOrganizations, .. Onboarded()]);
+        return new OrganizationDirectory(All());
+    }
+
+    /// <summary>The demo organizations, then every onboarded one.</summary>
+    public static IReadOnlyList<Organization> All()
+    {
+        return [.. OrgDirectory.DemoOrganizations, .. Onboarded()];
+    }
+
+    /// <summary>"lakeside" for urn:provider:lakeside: the name its .pfx and seed files go by.</summary>
+    public static string Slug(Organization organization)
+    {
+        return organization.Uri[(organization.Uri.LastIndexOf(':') + 1)..];
     }
 
     /// <summary>Remembers an onboarded organization, replacing any earlier entry with the same URI.</summary>

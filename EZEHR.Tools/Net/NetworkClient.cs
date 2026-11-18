@@ -54,7 +54,7 @@ public static class NetworkClient
             handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
         }
 
-        HttpClient client = new(handler)
+        HttpClient client = new(new UnreachableServerHandler(baseUrl.TrimEnd('/'), handler))
         {
             BaseAddress = baseAddress,
             DefaultRequestVersion = HttpVersion.Version11,
@@ -77,6 +77,26 @@ public static class NetworkClient
             "application/json"
         );
         return client.PostAsync(path, content);
+    }
+
+    /// <summary>A server that doesn't answer is one line naming it, not a stack trace.</summary>
+    private sealed class UnreachableServerHandler(string baseUrl, HttpMessageHandler inner)
+        : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            try
+            {
+                return await base.SendAsync(request, cancellationToken);
+            }
+            catch (HttpRequestException exception)
+            {
+                throw new ToolException($"couldn't reach EZEHR at {baseUrl}: {exception.Message}");
+            }
+        }
     }
 
     /// <summary>"401 Unauthorized {body}", for failures the tools print as-is.</summary>

@@ -12,7 +12,7 @@
 # passes raw TCP from the internet (and the tailnet) to it without decrypting, because the network door needs each
 # organization's client certificate on the TLS connection, which a TLS-terminating proxy would end. So every caller
 # reaches Kestrel from 127.0.0.1. SQL Server listens on 127.0.0.1 only; `tailscale serve --tcp` passes tailnet port
-# 1433 to it, for the laptop's tools (demo reset, demo status, stage's lookup of Sam), and never the internet.
+# 1433 to it, for the laptop's tools (demo reset, patient status, demo stage's lookup of Sam), and never the internet.
 # Needs: the .NET 11 SDK, docker, and HTTPS and Funnel enabled on the tailnet (the first funnel run prints a link
 # to turn it on).
 set -euo pipefail

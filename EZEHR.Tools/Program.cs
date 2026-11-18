@@ -1,40 +1,32 @@
-using EZEHR.Tools.Commands;
+using Spectre.Console;
 
-// ezehr-tools: laptop-side commands (certs, provider, kidney-check, medication-check, broker, stage, demo reset|status).
-const string Usage =
-    "usage: ezehr-tools <certs|provider|kidney-check|medication-check|broker|stage|demo> ...";
+namespace EZEHR.Tools;
 
-if (args.Length == 0)
+/// <summary>
+/// ezehr-tools: laptop-side commands. An explicit class rather than top-level statements, whose generated Program
+/// would be public and clash with the web app's Program in the test project.
+/// </summary>
+internal static class Program
 {
-    Console.Error.WriteLine(Usage);
-    Console.Error.WriteLine(CertsCommand.Usage);
-    Console.Error.WriteLine(ProviderCommand.Usage);
-    Console.Error.WriteLine(KidneyCheckCommand.Usage);
-    Console.Error.WriteLine(MedicationCheckCommand.Usage);
-    Console.Error.WriteLine(BrokerCommand.Usage);
-    Console.Error.WriteLine(StageCommand.Usage);
-    Console.Error.WriteLine(DemoCommand.Usage);
-    return 1;
-}
+    /// <summary>
+    /// Piped output shouldn't wrap at all, so scripts and grep see whole lines; tables only take the width they need.
+    /// COLUMNS overrides it.
+    /// </summary>
+    private const int RedirectedWidth = 1000;
 
-switch (args[0])
-{
-    case "certs":
-        return await CertsCommand.RunAsync(args[1..]);
-    case "provider":
-        return await ProviderCommand.RunAsync(args[1..]);
-    case "kidney-check":
-        return await KidneyCheckCommand.RunAsync(args[1..]);
-    case "medication-check":
-        return await MedicationCheckCommand.RunAsync(args[1..]);
-    case "broker":
-        return await BrokerCommand.RunAsync(args[1..]);
-    case "stage":
-        return await StageCommand.RunAsync(args[1..]);
-    case "demo":
-        return await DemoCommand.RunAsync(args[1..]);
-    default:
-        Console.Error.WriteLine($"unknown command: {args[0]}");
-        Console.Error.WriteLine(Usage);
-        return 1;
+    public static async Task<int> Main(string[] args)
+    {
+        // Piped output reports whatever width .NET guesses: about zero with no TERM (Spectre then squeezes everything
+        // to "…"), or terminfo's 80 with TERM set, as on CI runners. Neither is a real terminal, so don't wrap.
+        if (Console.IsOutputRedirected || AnsiConsole.Console.Profile.Width < 20)
+        {
+            AnsiConsole.Console.Profile.Width = int.TryParse(
+                Environment.GetEnvironmentVariable("COLUMNS"),
+                out int columns
+            )
+                ? columns
+                : RedirectedWidth;
+        }
+        return await ToolApp.RunAsync(args);
+    }
 }

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Temporary helper for running EZEHR locally against a throwaway SQL Server container.
-# Superseded by the `demo` command (Task 15); don't build on it.
+# The local SQL Server container, plus a few shortcuts to ezehr-tools for a local run.
+# Everything the shortcuts do is an ezehr-tools command (`source scripts/local.env` first); see docs/tools.md.
 #
 #   scripts/local.sh up                       SQL container + database + local certs, then run the server
-#   scripts/local.sh reset                    empty the database (restart the server to recreate tables)
+#   scripts/local.sh reset                    drop and recreate the database (restart the server to recreate tables)
 #   scripts/local.sh down                     remove the SQL container
-#   scripts/local.sh invite <provider> <id>   e.g. invite lakeside LUC-20417
+#   scripts/local.sh invite <provider> <id>   ezehr-tools provider invite, e.g. invite lakeside LUC-20417
 #   scripts/local.sh seed                     push maple, northwind and lakeside (Sam must have linked them)
 #   scripts/local.sh riverside                push Riverside's visit documentation
-#   scripts/local.sh kidney                   run Kidney Check for Sam
-#   scripts/local.sh broker                   broker with no certificate, then a self-made one
-#   scripts/local.sh patient                  print Sam's patient id
+#   scripts/local.sh kidney                   ezehr-tools app kidney-check sam
+#   scripts/local.sh broker                   the broker with no certificate, then a self-made one
+#   scripts/local.sh patient                  ezehr-tools patient find sam
 #   scripts/local.sh audit                    show the audit log
-#   scripts/local.sh sql "<query>"            run any query against the local database
+#   scripts/local.sh sql "<query>"            run any query against the local database (or: ezehr-tools db query)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -27,24 +27,8 @@ sql() {
     -d "${2:-ezehr}" -W -Q "SET NOCOUNT ON; $1"
 }
 
-# One value, no headers.
-sql_value() {
-  docker exec "$CONTAINER" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$SA_PASSWORD" \
-    -d ezehr -W -h -1 -Q "SET NOCOUNT ON; $1" | tr -d '[:space:]'
-}
-
 tools() {
   "$DOTNET" run --no-build --project EZEHR.Tools -- "$@"
-}
-
-patient_id() {
-  local id
-  id=$(sql_value "SELECT TOP 1 CAST(patient_id AS NVARCHAR(36)) FROM provider_links WHERE provider_uri = 'urn:provider:lakeside' AND provider_patient_id = 'LUC-20417'")
-  if [[ -z "$id" ]]; then
-    echo "Sam isn't enrolled yet: run 'invite lakeside LUC-20417' and enroll in the browser." >&2
-    exit 1
-  fi
-  echo "$id"
 }
 
 case "${1:-}" in
@@ -84,16 +68,14 @@ case "${1:-}" in
     tools provider push riverside RPC-1107
     ;;
   kidney)
-    id=$(patient_id)
-    tools kidney-check run "$id"
+    tools app kidney-check sam
     ;;
   broker)
-    id=$(patient_id)
-    tools broker request "$id" --cert none
-    tools broker request "$id" --cert self
+    tools network read sam full-record --as none --purpose treatment --expect NoCertificate
+    tools network read sam full-record --as broker --purpose treatment --expect 401
     ;;
   patient)
-    patient_id
+    tools patient find sam
     ;;
   audit)
     sql "SELECT id, at, action, actor_name, granted, reason, claimed_purpose FROM audit_events ORDER BY id"
@@ -102,7 +84,7 @@ case "${1:-}" in
     sql "$2"
     ;;
   *)
-    sed -n '2,17p' "$0"
+    sed -n '2,16p' "$0"
     exit 2
     ;;
 esac

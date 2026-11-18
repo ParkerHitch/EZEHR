@@ -1,0 +1,362 @@
+using Azure.Identity;
+using EZEHR.Tools.Cli;
+using EZEHR.Tools.Commands;
+using EZEHR.Tools.Commands.App;
+using EZEHR.Tools.Commands.Certs;
+using EZEHR.Tools.Commands.Database;
+using EZEHR.Tools.Commands.Demo;
+using EZEHR.Tools.Commands.Network;
+using EZEHR.Tools.Commands.Org;
+using EZEHR.Tools.Commands.Patient;
+using EZEHR.Tools.Commands.Platform;
+using EZEHR.Tools.Commands.Provider;
+using Microsoft.Data.SqlClient;
+using Spectre.Console;
+using Spectre.Console.Cli;
+
+namespace EZEHR.Tools;
+
+/// <summary>
+/// The whole command tree, with every description and example. Exit codes: 0 done, 1 the work failed, 2 the command
+/// line was wrong.
+/// </summary>
+public static class ToolApp
+{
+    public const int FailedExitCode = 1;
+
+    public const int UsageExitCode = 2;
+
+    public static Task<int> RunAsync(string[] args)
+    {
+        CommandApp app = new();
+        app.Configure(Configure);
+        return app.RunAsync(args);
+    }
+
+    public static void Configure(IConfigurator config)
+    {
+        config.SetApplicationName("ezehr-tools");
+        config.ConfigureConsole(AnsiConsole.Console);
+        config.UseStrictParsing();
+        config.ValidateExamples();
+        config.SetExceptionHandler(
+            (exception, _) =>
+            {
+                return Report(exception);
+            }
+        );
+
+        // The root's own examples, so its help shows a tour instead of the first five leaves' examples.
+        config.AddExample("env");
+        config.AddExample("org", "list");
+        config.AddExample("patient", "find", "lakeside:LUC-20417");
+        config.AddExample(
+            "network",
+            "read",
+            "sam",
+            "medications",
+            "--as",
+            "kidney-check",
+            "--expect",
+            "ScopeDenied"
+        );
+        config.AddExample("provider", "push", "lakeside", "LUC-20417", "--sign-as", "maple");
+        config.AddExample("demo", "stage", "--list");
+
+        config
+            .AddCommand<EnvCommand>("env")
+            .WithDescription("Show where the tools point and what they hold")
+            .WithExample("env")
+            .WithExample("env", "--base-url", "https://ezehr.example.com");
+        config.AddBranch("org", org =>
+        {
+            org.SetDescription("The organizations the tools know, from .pki/ and the demo list");
+            org.AddCommand<OrgListCommand>("list")
+                .WithDescription("List each organization with its certificate and seed records")
+                .WithExample("org", "list");
+        });
+        config.AddBranch("certs", certs =>
+        {
+            certs.SetDescription("Issue certificates into .pki/: the CA only, EZEHR isn't called");
+            certs
+                .AddCommand<CertsIssueCommand>("issue")
+                .WithDescription("Issue every demo organization's certificate, plus trust files")
+                .WithExample("certs", "issue")
+                .WithExample("certs", "issue", "--ca", "ezca", "--key", "rsa");
+            certs
+                .AddCommand<CertsPlatformCommand>("platform")
+                .WithDescription("Issue the platform operator's certificate, and print its pin")
+                .WithExample("certs", "platform");
+            certs
+                .AddCommand<CertsProviderCommand>("provider")
+                .WithDescription("Issue a new provider's certificate, not yet admitted to EZEHR")
+                .WithExample("certs", "provider", "harbor");
+            certs
+                .AddCommand<CertsAppCommand>("app")
+                .WithDescription("Issue a new app's certificate, not yet admitted to EZEHR")
+                .WithExample("certs", "app", "sleep-check");
+            certs
+                .AddCommand<CertsBrokerCommand>("broker")
+                .WithDescription("Make the data broker's self-signed certificate")
+                .WithExample("certs", "broker");
+        });
+        config.AddBranch("platform", platform =>
+        {
+            platform.SetDescription(
+                "The platform operator, with .pki/platform.pfx: admits providers and apps"
+            );
+            platform
+                .AddCommand<PlatformRegisterProviderCommand>("register-provider")
+                .WithDescription("Admit a provider whose certificate is already issued")
+                .WithExample(
+                    "platform",
+                    "register-provider",
+                    "harbor",
+                    "--name",
+                    "\"Harbor Clinic\""
+                );
+            platform
+                .AddCommand<PlatformRegisterAppCommand>("register-app")
+                .WithDescription("Admit an app whose certificate is already issued")
+                .WithExample(
+                    "platform",
+                    "register-app",
+                    "sleep-check",
+                    "--name",
+                    "\"Sleep Check\"",
+                    "--scope",
+                    "LabsAndNotes",
+                    "--description",
+                    "\"Looks at your sleep study results.\""
+                );
+            platform
+                .AddCommand<PlatformOnboardProviderCommand>("onboard-provider")
+                .WithDescription("Issue a provider's certificate and admit it, then invite")
+                .WithExample(
+                    "platform",
+                    "onboard-provider",
+                    "harbor",
+                    "--name",
+                    "\"Harbor Clinic\"",
+                    "--invite",
+                    "HBR-001"
+                );
+            platform
+                .AddCommand<PlatformOnboardAppCommand>("onboard-app")
+                .WithDescription("Issue an app's certificate and admit it")
+                .WithExample(
+                    "platform",
+                    "onboard-app",
+                    "sleep-check",
+                    "--name",
+                    "\"Sleep Check\"",
+                    "--scope",
+                    "LabsAndNotes",
+                    "--description",
+                    "\"Looks at your sleep study results.\""
+                );
+        });
+        config.AddBranch("provider", provider =>
+        {
+            provider.SetDescription(
+                "A provider's EHR system, presenting .pki/<provider>.pfx: invites, pushes, launches, audits"
+            );
+            provider
+                .AddCommand<ProviderInviteCommand>("invite")
+                .WithDescription("Ask for an enrollment invite for a chart, with a QR code")
+                .WithExample("provider", "invite", "lakeside", "LUC-20417");
+            provider
+                .AddCommand<ProviderPushCommand>("push")
+                .WithDescription("Push a chart's records, each one signed")
+                .WithExample("provider", "push", "lakeside", "LUC-20417")
+                .WithExample("provider", "push", "lakeside", "LUC-20417", "--file", "lab.json")
+                .WithExample("provider", "push", "lakeside", "LUC-20417", "--sign-as", "maple")
+                .WithExample("provider", "push", "lakeside", "LUC-20417", "--corrupt-signature");
+            provider
+                .AddCommand<ProviderLaunchCommand>("launch")
+                .WithDescription("Open EZEHR for one of the provider's clinicians, from a chart")
+                .WithExample(
+                    "provider",
+                    "launch",
+                    "riverside",
+                    "RPC-1107",
+                    "--clinician",
+                    "00000000-0000-0000-0000-000000000000"
+                );
+            provider
+                .AddCommand<ProviderAuditCommand>("audit")
+                .WithDescription("Read the provider's own audit trail, oldest first")
+                .WithExample("provider", "audit", "riverside")
+                .WithExample("provider", "audit", "riverside", "--chart", "RPC-1107")
+                .WithExample(
+                    "provider",
+                    "audit",
+                    "lakeside",
+                    "--since",
+                    "2026-11-17",
+                    "--limit",
+                    "20"
+                );
+            provider
+                .AddCommand<ProviderCliniciansCommand>("clinicians")
+                .WithDescription("List the clinicians who have acted for the provider")
+                .WithExample("provider", "clinicians", "riverside");
+        });
+        config.AddBranch("app", app =>
+        {
+            app.SetDescription("The example apps, each presenting its own certificate in .pki/");
+            app.AddCommand<AppKidneyCheckCommand>("kidney-check")
+                .WithDescription("Read eGFR labs, check each signature, write a note if flagged")
+                .WithExample("app", "kidney-check", "sam");
+            app.AddCommand<AppMedicationCheckCommand>("medication-check")
+                .WithDescription("Read medications and labs, write a note if a medicine is risky")
+                .WithExample("app", "medication-check", "sam");
+        });
+        config.AddBranch("network", network =>
+        {
+            network.SetDescription(
+                "Raw network calls as any identity, for checking what the network allows and refuses"
+            );
+            network
+                .AddCommand<NetworkReadCommand>("read")
+                .WithDescription(
+                    "Read a patient's record as any identity, optionally checking the outcome"
+                )
+                .WithExample(
+                    "network",
+                    "read",
+                    "sam",
+                    "medications",
+                    "--as",
+                    "kidney-check",
+                    "--expect",
+                    "ScopeDenied"
+                )
+                .WithExample(
+                    "network",
+                    "read",
+                    "sam",
+                    "full-record",
+                    "--as",
+                    "none",
+                    "--purpose",
+                    "treatment",
+                    "--expect",
+                    "NoCertificate"
+                )
+                .WithExample(
+                    "network",
+                    "read",
+                    "lakeside:LUC-20417",
+                    "egfr-labs",
+                    "--as",
+                    "kidney-check"
+                );
+        });
+        config.AddBranch("patient", patient =>
+        {
+            patient.SetDescription(
+                "Backstage: look patients up in the database (AZURE_SQL_CONNECTIONSTRING), never the network"
+            );
+            patient
+                .AddCommand<PatientFindCommand>("find")
+                .WithDescription("Print a patient's EZEHR id, for $(...) in scripts")
+                .WithExample("patient", "find", "lakeside:LUC-20417")
+                .WithExample("patient", "find", "sam");
+            patient
+                .AddCommand<PatientListCommand>("list")
+                .WithDescription("List every enrolled patient with their linked charts")
+                .WithExample("patient", "list");
+            patient
+                .AddCommand<PatientStatusCommand>("status")
+                .WithDescription("Show a record's contents, grants and audit log check")
+                .WithExample("patient", "status", "sam")
+                .WithExample("patient", "status", "riverside:RPC-1107");
+        });
+        config.AddBranch("db", db =>
+        {
+            db.SetDescription(
+                "Backstage: SQL straight against the database (AZURE_SQL_CONNECTIONSTRING)"
+            );
+            db.AddCommand<DbQueryCommand>("query")
+                .WithDescription("Run SQL and print the rows as a table")
+                .WithExample("db", "query", "\"SELECT id, action, granted FROM audit_events\"");
+        });
+        config.AddBranch("demo", demo =>
+        {
+            demo.SetDescription(
+                "The recorded demo: reset the database, tamper with the log, and run the stage"
+            );
+            demo.AddCommand<DemoResetCommand>("reset")
+                .WithDescription("Empty the database and take the joining organizations off")
+                .WithExample("demo", "reset")
+                .WithExample("demo", "reset", "--yes");
+            demo.AddCommand<DemoTamperCommand>("tamper")
+                .WithDescription("Edit one of Sam's audit events in place; run again to undo")
+                .WithExample("demo", "tamper");
+            demo.AddCommand<DemoStageCommand>("stage")
+                .WithDescription("Run the demo's network calls in order, one per key press")
+                .WithExample("demo", "stage")
+                .WithExample("demo", "stage", "--list")
+                .WithExample("demo", "stage", "--from", "12", "--ca", "ezca");
+        });
+    }
+
+    /// <summary>
+    /// Failures a tester causes or meets every day, which deserve one line, not a stack trace: the tools' own, a
+    /// database that refused or doesn't answer, a CA that doesn't answer, an expired az login.
+    /// </summary>
+    public static bool IsExpectedFailure(Exception exception)
+    {
+        return exception
+            is ToolException
+                or SqlException
+                or HttpRequestException
+                or AuthenticationFailedException;
+    }
+
+    public static string DescribeFailure(Exception exception)
+    {
+        return exception switch
+        {
+            SqlException database => $"database {ToolDatabase.Describe()}: {database.Message}",
+            HttpRequestException network =>
+                $"{network.Message} {network.InnerException?.Message}".TrimEnd(),
+            AuthenticationFailedException signIn =>
+                $"sign-in failed (run az login?): {signIn.Message}",
+            _ => exception.Message,
+        };
+    }
+
+    private static int Report(Exception exception)
+    {
+        IAnsiConsole console = AnsiConsole.Console;
+        if (exception is CommandAppException commandLineError)
+        {
+            // A value our own parsers refused (a patient, an identity): their message says what would work.
+            if (commandLineError.InnerException is FormatException formatError)
+            {
+                console.Write(new Text(formatError.Message, new Style(Color.Red)));
+                console.WriteLine();
+            }
+            else if (commandLineError.Pretty is not null)
+            {
+                console.Write(commandLineError.Pretty);
+            }
+            else
+            {
+                console.Write(new Text(commandLineError.Message, new Style(Color.Red)));
+                console.WriteLine();
+            }
+            return UsageExitCode;
+        }
+        if (IsExpectedFailure(exception))
+        {
+            console.Write(new Text(DescribeFailure(exception), new Style(Color.Red)));
+            console.WriteLine();
+            return FailedExitCode;
+        }
+        console.WriteException(exception, ExceptionFormats.ShortenEverything);
+        return FailedExitCode;
+    }
+}

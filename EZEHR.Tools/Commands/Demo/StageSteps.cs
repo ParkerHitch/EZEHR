@@ -1,9 +1,13 @@
 using System.Security.Cryptography.X509Certificates;
 using EZEHR.Models;
 using EZEHR.Services;
+using EZEHR.Tools.Apps;
+using EZEHR.Tools.Calls;
+using EZEHR.Tools.Cli;
 using EZEHR.Tools.Net;
+using Spectre.Console;
 
-namespace EZEHR.Tools.Commands;
+namespace EZEHR.Tools.Commands.Demo;
 
 /// <summary>
 /// The demo's network calls, in order, one per key press. Each step names the system making the call and the
@@ -11,13 +15,10 @@ namespace EZEHR.Tools.Commands;
 /// (the local test CA by default, EZCA with --ca ezca) or to /api/network; the only thing done behind the scenes is
 /// finding Sam's EZEHR patient id in the database.
 /// </summary>
-public static class StageCommand
+public static class StageSteps
 {
-    public const string Usage = """
-          stage [--from <step>] [--ca local|ezca] [--ca-id <id>] [--template-id <id>]
-                                  the demo's network calls in order, one per key press
-          stage --list            the steps, numbered
-        """;
+    /// <summary>What the data broker claims when it asks for Sam's whole record.</summary>
+    public const string BrokerClaimedPurpose = "treatment";
 
     /// <summary>The provider that joins the network on camera. `demo reset` takes it off first.</summary>
     public const string JoiningProviderSlug = "northwind";
@@ -40,60 +41,34 @@ public static class StageCommand
 
     private sealed record Step(Actor Actor, string Action, Func<Task<bool>> RunAsync);
 
-    public static async Task<int> RunAsync(string[] args)
+    /// <summary>How many steps there are, for validating --from without building a run.</summary>
+    public static int Count
     {
-        if (
-            string.IsNullOrWhiteSpace(
-                Environment.GetEnvironmentVariable(AppOptions.ConnectionStringKey)
-            )
-        )
+        get { return BuildSteps(new CertificateAuthoritySettings()).Count; }
+    }
+
+    /// <summary>The steps, numbered, without calling anything.</summary>
+    public static void List()
+    {
+        List<Step> steps = BuildSteps(new CertificateAuthoritySettings());
+        for (int index = 0; index < steps.Count; index++)
         {
-            Console.Error.WriteLine(
-                $"{AppOptions.ConnectionStringKey} isn't set (it's how the stage finds Sam's patient id). For the deployed site: source scripts/azure.env"
+            AnsiConsole.Console.WriteLine(
+                $"{index + 1, 3}. {steps[index].Actor.Name}: {steps[index].Action}"
             );
-            return 1;
         }
-        string authority = CommandLine.Option(args, "--ca") ?? "local";
-        if (authority is not ("local" or "ezca"))
-        {
-            Console.Error.WriteLine("--ca must be local or ezca");
-            return 1;
-        }
-        List<Step> steps = BuildSteps(
-            authority,
-            CommandLine.Option(args, "--ca-id"),
-            CommandLine.Option(args, "--template-id")
-        );
+    }
 
-        if (args.Contains("--list"))
-        {
-            for (int index = 0; index < steps.Count; index++)
-            {
-                Console.WriteLine(
-                    $"{index + 1, 3}. {steps[index].Actor.Name}: {steps[index].Action}"
-                );
-            }
-            return 0;
-        }
-        string? fromOption = CommandLine.Option(args, "--from");
-        int firstStep = 1;
-        if (
-            fromOption is not null
-            && (
-                !int.TryParse(fromOption, out firstStep) || firstStep < 1 || firstStep > steps.Count
-            )
-        )
-        {
-            Console.Error.WriteLine($"--from takes a step number from 1 to {steps.Count}.");
-            return 1;
-        }
-
-        Console.WriteLine($"EZEHR network: {NetworkClient.BaseUrl}");
+    public static async Task<int> RunAsync(CertificateAuthoritySettings settings, int firstStep)
+    {
+        List<Step> steps = BuildSteps(settings);
+        IAnsiConsole console = AnsiConsole.Console;
+        console.WriteLine($"EZEHR network: {settings.BaseUrl}");
         for (int index = firstStep - 1; index < steps.Count; index++)
         {
             Step step = steps[index];
             PrintBanner(index + 1, steps.Count, step);
-            char start = WaitForKey("Enter: send   s: skip   q: quit", "\rsq");
+            char start = StageKeys.Wait("Enter: send   s: skip   q: quit", "\rsq");
             if (start == 'q')
             {
                 return 0;
@@ -104,7 +79,7 @@ public static class StageCommand
             }
             while (!await RunStepAsync(step))
             {
-                char choice = WaitForKey("r: retry   s: skip   q: quit", "rsq");
+                char choice = StageKeys.Wait("r: retry   s: skip   q: quit", "rsq");
                 if (choice == 'q')
                 {
                     return 1;
@@ -113,16 +88,18 @@ public static class StageCommand
                 {
                     break;
                 }
-                Console.WriteLine();
+                console.WriteLine();
             }
         }
-        Console.WriteLine();
-        Console.WriteLine("That was every step.");
+        console.WriteLine();
+        console.WriteLine("That was every step.");
         return 0;
     }
 
-    private static List<Step> BuildSteps(string authority, string? caId, string? templateId)
+    private static List<Step> BuildSteps(CertificateAuthoritySettings authoritySettings)
     {
+        // Every call goes where --base-url (else EZEHR_BASE_URL) says, never anywhere else.
+        string baseUrl = authoritySettings.BaseUrl;
         Actor northwind = Provider("northwind", ConsoleColor.Blue);
         Actor lakeside = Provider("lakeside", ConsoleColor.Cyan);
         Actor maple = Provider("maple", ConsoleColor.DarkYellow);
@@ -139,7 +116,7 @@ public static class StageCommand
             ConsoleColor.Green
         );
         Actor kidneyCheck = new(
-            KidneyCheckCommand.AppName,
+            KidneyCheckApp.AppName,
             "an app Sam allowed to read lab results",
             () => DescribeCertificate("kidney-check.pfx"),
             ConsoleColor.Yellow
@@ -149,7 +126,7 @@ public static class StageCommand
             Role = "the same app, asking for more than Sam allowed",
         };
         Actor medicationCheck = new(
-            MedicationCheckCommand.AppName,
+            MedicationCheckApp.AppName,
             "a new app, allowed to read medications as well as labs once Sam turns it on",
             () => DescribeCertificate("medication-check.pfx"),
             ConsoleColor.DarkGreen
@@ -166,7 +143,7 @@ public static class StageCommand
         Actor brokerWithOwnCertificate = brokerWithoutCertificate with
         {
             Certificate = () =>
-                $"{CertsCommand.BrokerCommonName}, self-signed: it made the certificate itself, the network's CA didn't issue it",
+                $"{CertificateIssuance.BrokerCommonName}, self-signed: it made the certificate itself, the network's CA didn't issue it",
         };
         string northwindName = northwind.Name;
 
@@ -175,7 +152,7 @@ public static class StageCommand
 
         async Task<Guid?> FindSamAsync()
         {
-            samId ??= await DemoCommand.FindSamAsync();
+            samId ??= await PatientReference.Sam.ResolveAsync();
             return samId;
         }
 
@@ -186,8 +163,8 @@ public static class StageCommand
                 $"asks EZEHR for an enrollment invite for its patient {providerPatientId} (Sam)",
                 async () =>
                 {
-                    using HttpClient client = ProviderClient(slug);
-                    return await ProviderCommand.InviteAsync(client, providerPatientId) == 0;
+                    using HttpClient client = ProviderClient(baseUrl, slug);
+                    return await ProviderCalls.InviteAsync(client, providerPatientId);
                 }
             );
         }
@@ -196,8 +173,14 @@ public static class StageCommand
         {
             return new Step(actor, action, async () =>
             {
-                using HttpClient client = ProviderClient(slug);
-                return await ProviderCommand.PushAsync(client, slug, providerPatientId) == 0;
+                using HttpClient client = ProviderClient(baseUrl, slug);
+                return await ProviderCalls.PushAsync(
+                    client,
+                    PfxFile.Load(ToolPaths.Pki($"{slug}.pfx")),
+                    providerPatientId,
+                    ResourceFile.LoadSeed(slug),
+                    corruptSignature: false
+                );
             });
         }
 
@@ -209,7 +192,20 @@ public static class StageCommand
                 {
                     return false;
                 }
-                await BrokerCommand.RequestAsync(patientId, withSelfSignedCertificate);
+                // Refused is the expected answer, so the step works whatever the server says.
+                using HttpClient client = NetworkClient.Create(
+                    baseUrl,
+                    withSelfSignedCertificate ? ToolPaths.Pki("broker.pfx") : null
+                );
+                await RecordReads.ReadAsync(
+                    client,
+                    patientId,
+                    RecordKind.FullRecord,
+                    BrokerClaimedPurpose,
+                    withSelfSignedCertificate
+                        ? $"certificate: self-signed CN={CertificateIssuance.BrokerCommonName}"
+                        : "certificate: none"
+                );
                 return true;
             });
         }
@@ -220,18 +216,16 @@ public static class StageCommand
             // Northwind joins the network.
             new Step(
                 northwindJoining,
-                authority == "ezca"
+                authoritySettings.Authority == "ezca"
                     ? "gets its certificate from EZCA (portal.ezca.io)"
                     : "gets its certificate from the local test CA (stands in for EZCA)",
                 async () =>
                 {
-                    return await CertsCommand.IssueProviderCertificateAsync(
-                            authority,
-                            JoiningProviderSlug,
-                            "ec",
-                            caId,
-                            templateId
-                        ) == 0;
+                    await CertificateIssuance.IssueOrganizationAsync(
+                        authoritySettings,
+                        OrgDirectory.ProviderCommonName(JoiningProviderSlug)
+                    );
+                    return true;
                 }
             ),
             new Step(
@@ -239,10 +233,12 @@ public static class StageCommand
                 $"adds {northwindName} to the network: its name and its certificate's CN",
                 async () =>
                 {
-                    return await CertsCommand.RegisterProviderAsync(
-                            JoiningProviderSlug,
-                            northwindName
-                        ) == 0;
+                    await PlatformCalls.RegisterProviderAsync(
+                        baseUrl,
+                        JoiningProviderSlug,
+                        northwindName
+                    );
+                    return true;
                 }
             ),
             // Sam's providers invite Sam. Sam enrolls with Northwind's, then adds the others.
@@ -261,8 +257,8 @@ public static class StageCommand
                     {
                         return false;
                     }
-                    using HttpClient client = AppClient();
-                    kidneyResult = await KidneyCheckCommand.ReadEgfrLabsAsync(client, patientId);
+                    using HttpClient client = AppClient(baseUrl);
+                    kidneyResult = await KidneyCheckApp.ReadEgfrLabsAsync(client, patientId);
                     return kidneyResult is not null;
                 }
             ),
@@ -277,18 +273,18 @@ public static class StageCommand
                     }
                     if (kidneyResult is null)
                     {
-                        Console.Error.WriteLine(
-                            "  Kidney Check hasn't read the labs in this run: skip this, or quit and start again from its read step (stage --list)."
+                        AnsiConsole.Console.WriteLine(
+                            "  Kidney Check hasn't read the labs in this run: skip this, or quit and start again from its read step (demo stage --list)."
                         );
                         return false;
                     }
-                    using HttpClient client = AppClient();
-                    return await KidneyCheckCommand.WriteSignedNoteAsync(
-                            client,
-                            PfxFile.Load(ToolPaths.Pki("kidney-check.pfx")),
-                            patientId,
-                            kidneyResult
-                        ) == 0;
+                    using HttpClient client = AppClient(baseUrl);
+                    return await KidneyCheckApp.WriteSignedNoteAsync(
+                        client,
+                        PfxFile.Load(ToolPaths.Pki("kidney-check.pfx")),
+                        patientId,
+                        kidneyResult
+                    );
                 }
             ),
             new Step(
@@ -300,7 +296,7 @@ public static class StageCommand
                     {
                         return false;
                     }
-                    using HttpClient client = AppClient();
+                    using HttpClient client = AppClient(baseUrl);
                     return await AskForMedicationsOutsideScopeAsync(client, patientId);
                 }
             ),
@@ -310,12 +306,14 @@ public static class StageCommand
                 $"adds {joiningApp.DisplayName} to the network: a second app, whose scope also covers medications",
                 async () =>
                 {
-                    return await CertsCommand.RegisterAppAsync(
-                            JoiningAppSlug,
-                            joiningApp.DisplayName,
-                            joiningApp.AppScope!.Value,
-                            joiningApp.AppDescription!
-                        ) == 0;
+                    await PlatformCalls.RegisterAppAsync(
+                        baseUrl,
+                        JoiningAppSlug,
+                        joiningApp.DisplayName,
+                        joiningApp.AppScope!.Value,
+                        joiningApp.AppDescription!
+                    );
+                    return true;
                 }
             ),
             new Step(
@@ -327,8 +325,7 @@ public static class StageCommand
                     {
                         return false;
                     }
-                    return await MedicationCheckCommand.RunAsync(["run", patientId.ToString()])
-                        == 0;
+                    return await MedicationCheckApp.RunAsync(baseUrl, patientId);
                 }
             ),
             // Sam checks in at Riverside, which needs its own link to write the visit later.
@@ -346,18 +343,18 @@ public static class StageCommand
                         )
                     )
                     {
-                        Console.WriteLine(
+                        AnsiConsole.Console.WriteLine(
                             $"  Set {ClinicianObjectIdVariable} to Dr. Rivera's object id in Riverside's Entra tenant, or run: ezehr-tools provider launch riverside RPC-1107 --clinician <object id>"
                         );
                         return false;
                     }
-                    using HttpClient client = ProviderClient("riverside");
-                    return await ProviderCommand.LaunchAsync(
-                            client,
-                            "RPC-1107",
-                            clinicianObjectId,
-                            $"visit-{DateTime.Now:yyyyMMdd}"
-                        ) == 0;
+                    using HttpClient client = ProviderClient(baseUrl, "riverside");
+                    return await ProviderCalls.LaunchAsync(
+                        client,
+                        "RPC-1107",
+                        clinicianObjectId,
+                        $"visit-{DateTime.Now:yyyyMMdd}"
+                    );
                 }
             ),
             // The visit: Dr. Rivera opens that link and signs in; the share code, approval and reads happen on the
@@ -371,7 +368,7 @@ public static class StageCommand
             // Sam revokes Dr. Rivera's access; then the broker, then emergency access (browser only).
             Broker(
                 brokerWithoutCertificate,
-                $"asks for Sam's whole record, claiming \"{BrokerCommand.ClaimedPurpose}\"",
+                $"asks for Sam's whole record, claiming \"{BrokerClaimedPurpose}\"",
                 withSelfSignedCertificate: false
             ),
             Broker(
@@ -384,8 +381,18 @@ public static class StageCommand
                 "reads its own audit trail for Sam: what its clinicians and its system did, with the emergency reason",
                 async () =>
                 {
-                    using HttpClient client = ProviderClient("riverside");
-                    return await ProviderCommand.AuditAsync(client, null, "RPC-1107") == 0;
+                    using HttpClient client = ProviderClient(baseUrl, "riverside");
+                    return await ProviderCalls.ReadAuditAsync(
+                        client,
+                        new OrganizationAuditQuery(
+                            null,
+                            null,
+                            "RPC-1107",
+                            null,
+                            null,
+                            ProviderCalls.DefaultAuditLimit
+                        )
+                    );
                 }
             ),
         ];
@@ -397,28 +404,19 @@ public static class StageCommand
         return new Actor(name, "its EHR system", () => DescribeCertificate($"{slug}.pfx"), color);
     }
 
-    /// <summary>"lakeside.providers.ezehr, issued by EZEHR Issuing CA", read from the certificate itself.</summary>
     private static string DescribeCertificate(string pfxFileName)
     {
-        string path = ToolPaths.Pki(pfxFileName);
-        if (!File.Exists(path))
-        {
-            return $"none: {path} is missing";
-        }
-        X509Certificate2 certificate = PfxFile.Load(path).Certificate;
-        string subject = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
-        string issuer = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: true);
-        return $"{subject}, issued by {issuer}";
+        return PfxFile.Describe(ToolPaths.Pki(pfxFileName));
     }
 
-    private static HttpClient ProviderClient(string slug)
+    private static HttpClient ProviderClient(string baseUrl, string slug)
     {
-        return NetworkClient.Create(NetworkClient.BaseUrl, ToolPaths.Pki($"{slug}.pfx"));
+        return NetworkClient.Create(baseUrl, ToolPaths.Pki($"{slug}.pfx"));
     }
 
-    private static HttpClient AppClient()
+    private static HttpClient AppClient(string baseUrl)
     {
-        return NetworkClient.Create(NetworkClient.BaseUrl, ToolPaths.Pki("kidney-check.pfx"));
+        return NetworkClient.Create(baseUrl, ToolPaths.Pki("kidney-check.pfx"));
     }
 
     /// <summary>
@@ -430,31 +428,27 @@ public static class StageCommand
         Guid patientId
     )
     {
-        string path = $"api/network/patients/{patientId}/read-medications";
-        NetworkLog.Request("GET", path, "medications, with a grant for lab results only");
-        using HttpResponseMessage response = await client.GetAsync(path);
-        if (response.IsSuccessStatusCode)
-        {
-            NetworkLog.WriteInColor(
-                ConsoleColor.Red,
-                $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   expected a refusal: the scope isn't enforced"
-            );
-            return false;
-        }
-        string body = await response.Content.ReadAsStringAsync();
-        NetworkLog.WriteInColor(
-            ConsoleColor.Red,
-            $"  ← {(int)response.StatusCode} {response.ReasonPhrase}   {body}".TrimEnd()
+        ReadOutcome outcome = await RecordReads.ReadAsync(
+            client,
+            patientId,
+            RecordKind.Medications,
+            null,
+            "medications, with a grant for lab results only"
         );
-        if (!body.Contains(nameof(DenyReason.ScopeDenied)))
+        if (outcome.Succeeded)
         {
-            Console.Error.WriteLine(
-                $"  Expected ScopeDenied: is {KidneyCheckCommand.AppName} still turned on for Sam?"
+            NetworkLog.WriteInColor(Color.Red, "  expected a refusal: the scope isn't enforced");
+            return false;
+        }
+        if (outcome.DenyReason != nameof(DenyReason.ScopeDenied))
+        {
+            AnsiConsole.Console.WriteLine(
+                $"  Expected ScopeDenied: is {KidneyCheckApp.AppName} still turned on for Sam?"
             );
             return false;
         }
-        Console.WriteLine(
-            $"  Refused: Sam allowed {KidneyCheckCommand.AppName} lab results only. Sam's Activity shows the attempt."
+        AnsiConsole.Console.WriteLine(
+            $"  Refused: Sam allowed {KidneyCheckApp.AppName} lab results only. Sam's Activity shows the attempt."
         );
         return true;
     }
@@ -462,47 +456,18 @@ public static class StageCommand
     private static void PrintBanner(int number, int count, Step step)
     {
         string label = $"━━ {number}/{count} ";
-        Console.WriteLine();
+        AnsiConsole.Console.WriteLine();
         NetworkLog.WriteInColor(
-            step.Actor.Color,
+            Color.FromConsoleColor(step.Actor.Color),
             label + new string('━', BannerWidth - label.Length)
         );
         NetworkLog.WriteInColor(
-            step.Actor.Color,
+            Color.FromConsoleColor(step.Actor.Color),
             $"  {step.Actor.Name.ToUpperInvariant()} · {step.Actor.Role}"
         );
-        Console.WriteLine($"  certificate: {step.Actor.Certificate()}");
-        Console.WriteLine($"  {step.Actor.Name} {step.Action}");
-        Console.WriteLine();
-    }
-
-    /// <summary>Shows the prompt, waits for one of the allowed keys, then erases the prompt so it isn't recorded.</summary>
-    private static char WaitForKey(string prompt, string allowedKeys)
-    {
-        if (Console.IsInputRedirected)
-        {
-            // One key per line, for scripted rehearsals; a key this prompt doesn't take is ignored.
-            while (Console.ReadLine() is string line)
-            {
-                char typed = line.Length == 0 ? '\r' : char.ToLowerInvariant(line[0]);
-                if (allowedKeys.Contains(typed))
-                {
-                    return typed;
-                }
-            }
-            return 'q';
-        }
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.Write($"  {prompt}");
-        Console.ResetColor();
-        char key;
-        do
-        {
-            ConsoleKeyInfo pressed = Console.ReadKey(intercept: true);
-            key = pressed.Key == ConsoleKey.Enter ? '\r' : char.ToLowerInvariant(pressed.KeyChar);
-        } while (!allowedKeys.Contains(key));
-        Console.Write("\r" + new string(' ', prompt.Length + 2) + "\r");
-        return key;
+        AnsiConsole.Console.WriteLine($"  certificate: {step.Actor.Certificate()}");
+        AnsiConsole.Console.WriteLine($"  {step.Actor.Name} {step.Action}");
+        AnsiConsole.Console.WriteLine();
     }
 
     /// <summary>A network failure mid-demo shouldn't end the run: it's reported, and the step can be retried.</summary>
@@ -512,12 +477,9 @@ public static class StageCommand
         {
             return await step.RunAsync();
         }
-        catch (HttpRequestException exception)
+        catch (Exception exception) when (ToolApp.IsExpectedFailure(exception))
         {
-            NetworkLog.WriteInColor(
-                ConsoleColor.Red,
-                $"  couldn't reach EZEHR: {exception.Message}"
-            );
+            NetworkLog.WriteInColor(Color.Red, $"  {ToolApp.DescribeFailure(exception)}");
             return false;
         }
     }
